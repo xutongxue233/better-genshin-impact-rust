@@ -24,7 +24,11 @@ bld/
 Tmp/
 /packages/
 node_modules/
+.pnpm-store/
 github_actions_cache/
+target/
+apps/desktop/node_modules/
+apps/desktop/dist/
 
 *.zip
 

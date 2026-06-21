@@ -1,0 +1,33 @@
+[package]
+name = "bettergi-desktop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+bgi-capture = { path = "../../../crates/bgi-capture" }
+bgi-core = { path = "../../../crates/bgi-core" }
+bgi-hotkey = { path = "../../../crates/bgi-hotkey" }
+bgi-input = { path = "../../../crates/bgi-input" }
+bgi-script = { path = "../../../crates/bgi-script" }
+bgi-script-engine = { path = "../../../crates/bgi-script-engine" }
+bgi-task = { path = "../../../crates/bgi-task" }
+bgi-vision = { path = "../../../crates/bgi-vision" }
+chrono.workspace = true
+image.workspace = true
+lettre.workspace = true
+md5.workspace = true
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "native-tls"] }
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tungstenite.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "bgi-script-engine"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bgi-script = { path = "../bgi-script" }
+bgi-task = { path = "../bgi-task" }
+bgi-vision = { path = "../bgi-vision" }
+boa_engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bgi-capture = { path = "../bgi-capture" }
