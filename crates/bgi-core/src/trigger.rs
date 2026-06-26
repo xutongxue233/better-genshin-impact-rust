@@ -47,9 +47,9 @@ pub fn initial_triggers() -> Vec<TriggerDescriptor> {
             priority: 999,
             default_enabled: true,
             exclusive: false,
-            background: false,
+            background: true,
             supported_game_ui_category: GameUiCategory::Unknown,
-            port_state: TriggerPortState::MetadataOnly,
+            port_state: TriggerPortState::CoreReady,
         },
         TriggerDescriptor {
             key: "AutoPick",
@@ -68,8 +68,8 @@ pub fn initial_triggers() -> Vec<TriggerDescriptor> {
             default_enabled: false,
             exclusive: false,
             background: false,
-            supported_game_ui_category: GameUiCategory::Main,
-            port_state: TriggerPortState::MetadataOnly,
+            supported_game_ui_category: GameUiCategory::Unknown,
+            port_state: TriggerPortState::CoreReady,
         },
         TriggerDescriptor {
             key: "QuickTeleport",
@@ -98,8 +98,8 @@ pub fn initial_triggers() -> Vec<TriggerDescriptor> {
             default_enabled: false,
             exclusive: false,
             background: false,
-            supported_game_ui_category: GameUiCategory::Main,
-            port_state: TriggerPortState::MetadataOnly,
+            supported_game_ui_category: GameUiCategory::Unknown,
+            port_state: TriggerPortState::CoreReady,
         },
         TriggerDescriptor {
             key: "SkillCd",
@@ -108,8 +108,8 @@ pub fn initial_triggers() -> Vec<TriggerDescriptor> {
             default_enabled: false,
             exclusive: false,
             background: false,
-            supported_game_ui_category: GameUiCategory::Main,
-            port_state: TriggerPortState::MetadataOnly,
+            supported_game_ui_category: GameUiCategory::Unknown,
+            port_state: TriggerPortState::CoreReady,
         },
         TriggerDescriptor {
             key: "MapMask",
@@ -118,8 +118,8 @@ pub fn initial_triggers() -> Vec<TriggerDescriptor> {
             default_enabled: false,
             exclusive: false,
             background: false,
-            supported_game_ui_category: GameUiCategory::BigMap,
-            port_state: TriggerPortState::MetadataOnly,
+            supported_game_ui_category: GameUiCategory::Unknown,
+            port_state: TriggerPortState::CoreReady,
         },
     ];
 
@@ -150,5 +150,23 @@ mod tests {
         assert!(triggers
             .windows(2)
             .all(|pair| pair[0].priority >= pair[1].priority));
+        let game_loading = find_trigger("GameLoading").unwrap();
+        assert!(game_loading.background);
+        assert_eq!(game_loading.port_state, TriggerPortState::CoreReady);
+        let auto_eat = find_trigger("AutoEat").unwrap();
+        assert_eq!(auto_eat.supported_game_ui_category, GameUiCategory::Unknown);
+        assert_eq!(auto_eat.port_state, TriggerPortState::CoreReady);
+        let skill_cd = find_trigger("SkillCd").unwrap();
+        assert_eq!(skill_cd.supported_game_ui_category, GameUiCategory::Unknown);
+        assert_eq!(skill_cd.port_state, TriggerPortState::CoreReady);
+        let auto_fish = find_trigger("AutoFish").unwrap();
+        assert_eq!(
+            auto_fish.supported_game_ui_category,
+            GameUiCategory::Unknown
+        );
+        assert_eq!(auto_fish.port_state, TriggerPortState::CoreReady);
+        let map_mask = find_trigger("MapMask").unwrap();
+        assert_eq!(map_mask.supported_game_ui_category, GameUiCategory::Unknown);
+        assert_eq!(map_mask.port_state, TriggerPortState::CoreReady);
     }
 }

@@ -496,6 +496,73 @@
     };
   };
 
+  type IndependentLiveTaskReport = {
+    task_key: string;
+    completed: boolean;
+    state: Record<string, unknown>;
+    executed_steps: unknown[];
+    skipped_steps: unknown[];
+  };
+
+  type AutoCookLiveTaskReport = {
+    task_key: string;
+    status: string;
+    state: {
+      frames_processed?: number;
+      space_press_count?: number;
+      white_confirm_click_count?: number;
+      delay_count?: number;
+      [key: string]: unknown;
+    };
+    events: unknown[];
+  };
+
+  type AutoMusicPerformanceReport = {
+    task_key: string;
+    stop_reason: string;
+    frames_processed: number;
+    held_keys_before_release: string[];
+    events: unknown[];
+  };
+
+  type AutoMusicAlbumReport = {
+    task_key: string;
+    status: string;
+    difficulty_count: number;
+    songs_checked: number;
+    skipped_songs: number;
+    performed_songs: number;
+    events: unknown[];
+  };
+
+  type AutoOpenChestLiveTaskReport = {
+    task_key: string;
+    completed: boolean;
+    status: string;
+    state: {
+      iterations?: number;
+      elapsed_ms?: number;
+      final_result?: string | null;
+      timed_out?: boolean;
+      cancelled?: boolean;
+      [key: string]: unknown;
+    };
+    decisions: unknown[];
+    dispatched_actions: unknown[];
+    cleanup_actions: unknown[];
+    post_loop_actions: unknown[];
+  };
+
+  type DesktopIndependentLiveTaskExecution = {
+    task: string;
+    result:
+      | IndependentLiveTaskReport
+      | AutoCookLiveTaskReport
+      | AutoMusicPerformanceReport
+      | AutoMusicAlbumReport
+      | AutoOpenChestLiveTaskReport;
+  };
+
   type CombatCommandPlan = {
     avatar: string;
     method: string;
@@ -879,6 +946,10 @@
     };
   };
 
+  type UseRedeemCodeExecutionResult = UseRedeemCodePlanResult & {
+    report: IndependentLiveTaskReport;
+  };
+
   type RedeemCodeClipboardState = {
     clipboard_listener_enabled: boolean;
     ignored_hash_count: number;
@@ -1041,6 +1112,7 @@
     pathing_execution: PathingExecution | null;
     shell_result: ShellExecution | null;
     error: string | null;
+    skip_reason: string | null;
   };
 
   type ScriptStopResult = {
@@ -1145,6 +1217,7 @@
   let redeemLiveResult = $state<RedeemCodeLiveResult | null>(null);
   let redeemManualText = $state("");
   let redeemPlanResult = $state<UseRedeemCodePlanResult | null>(null);
+  let redeemExecutionResult = $state<UseRedeemCodeExecutionResult | null>(null);
   let redeemClipboardState = $state<RedeemCodeClipboardState | null>(null);
   let redeemClipboardResult = $state<RedeemCodeClipboardCheckResult | null>(null);
   let redeemFeedNoticeOpen = $state(false);
@@ -1159,6 +1232,8 @@
   let independentShellCommand = $state("");
   let independentShellTimeout = $state(60);
   let independentShellResult = $state<DesktopShellTaskExecution | null>(null);
+  let independentLiveTaskBusy = $state(false);
+  let independentLiveTaskResult = $state<DesktopIndependentLiveTaskExecution | null>(null);
   let independentPathingBusy = $state(false);
   let independentPathingResult = $state<DesktopAutoPathingTaskExecution | null>(null);
   let independentFightBusy = $state(false);
@@ -2004,23 +2079,48 @@
     }
   }
 
+  function redeemPayloadForSource(source: "manual" | "feed" | "live") {
+    return source === "manual"
+      ? { text: redeemManualText }
+      : source === "feed"
+        ? { feedItems: redeemFeedItems?.items ?? [] }
+        : { liveCodes: redeemLiveResult?.data.codes ?? [] };
+  }
+
   async function planRedeemCodes(source: "manual" | "feed" | "live") {
     try {
       redeemFeedBusy = true;
       redeemFeedStatus = "planning redeem";
-      const payload =
-        source === "manual"
-          ? { text: redeemManualText }
-          : source === "feed"
-            ? { feedItems: redeemFeedItems?.items ?? [] }
-            : { liveCodes: redeemLiveResult?.data.codes ?? [] };
       redeemPlanResult = await invoke<UseRedeemCodePlanResult>("redeem_code_auto_redeem_plan", {
-        payload,
+        payload: redeemPayloadForSource(source),
       });
       redeemFeedStatus = `${redeemPlanResult.extracted_codes.length} codes planned`;
       error = null;
     } catch (err) {
       redeemFeedStatus = "failed";
+      error = String(err);
+    } finally {
+      redeemFeedBusy = false;
+    }
+  }
+
+  async function executeRedeemCodes(source: "manual" | "feed" | "live") {
+    try {
+      redeemFeedBusy = true;
+      redeemFeedStatus = "executing redeem";
+      redeemExecutionResult = await invoke<UseRedeemCodeExecutionResult>("redeem_code_auto_redeem_execute", {
+        payload: redeemPayloadForSource(source),
+      });
+      redeemPlanResult = {
+        extracted_codes: redeemExecutionResult.extracted_codes,
+        plan: redeemExecutionResult.plan,
+      };
+      redeemFeedStatus = `${redeemExecutionResult.extracted_codes.length} codes ${
+        redeemExecutionResult.report.completed ? "completed" : "incomplete"
+      }`;
+      error = null;
+    } catch (err) {
+      redeemFeedStatus = "execution failed";
       error = String(err);
     } finally {
       redeemFeedBusy = false;
@@ -2291,14 +2391,117 @@
   }
 
   async function stopIndependentShellTask() {
+    await stopIndependentTask("shell task");
+  }
+
+  async function stopIndependentLiveTask() {
+    await stopIndependentTask("live task");
+  }
+
+  async function stopIndependentTask(fallbackTask: string) {
     try {
       const result = await invoke<ScriptStopResult>("script_stop");
       shellStatus = result.requested
-        ? `stop requested: ${result.runner_state.current_task ?? "shell task"}`
-        : "no running shell task to stop";
+        ? `stop requested: ${result.runner_state.current_task ?? fallbackTask}`
+        : `no running ${fallbackTask} to stop`;
       error = null;
     } catch (err) {
       error = String(err);
+    }
+  }
+
+  type IndependentLiveTaskCommand =
+    | "task_execute_quick_buy"
+    | "task_execute_quick_serenitea_pot"
+    | "task_execute_auto_open_chest"
+    | "task_execute_auto_cook"
+    | "task_execute_auto_music_game_performance"
+    | "task_execute_auto_music_game_album";
+
+  function independentLiveTaskLabel(command: IndependentLiveTaskCommand) {
+    switch (command) {
+      case "task_execute_quick_buy":
+        return "quick buy";
+      case "task_execute_quick_serenitea_pot":
+        return "quick serenitea pot";
+      case "task_execute_auto_open_chest":
+        return "auto open chest";
+      case "task_execute_auto_cook":
+        return "auto cook";
+      case "task_execute_auto_music_game_performance":
+        return "auto music performance";
+      case "task_execute_auto_music_game_album":
+        return "auto music album";
+    }
+  }
+
+  function isAutoCookLiveTaskReport(
+    report:
+      | IndependentLiveTaskReport
+      | AutoCookLiveTaskReport
+      | AutoMusicPerformanceReport
+      | AutoMusicAlbumReport
+      | AutoOpenChestLiveTaskReport,
+  ): report is AutoCookLiveTaskReport {
+    return "status" in report && "state" in report && "events" in report;
+  }
+
+  function isAutoMusicPerformanceReport(
+    report:
+      | IndependentLiveTaskReport
+      | AutoCookLiveTaskReport
+      | AutoMusicPerformanceReport
+      | AutoMusicAlbumReport
+      | AutoOpenChestLiveTaskReport,
+  ): report is AutoMusicPerformanceReport {
+    return "stop_reason" in report && "frames_processed" in report && "held_keys_before_release" in report;
+  }
+
+  function isAutoMusicAlbumReport(
+    report:
+      | IndependentLiveTaskReport
+      | AutoCookLiveTaskReport
+      | AutoMusicPerformanceReport
+      | AutoMusicAlbumReport
+      | AutoOpenChestLiveTaskReport,
+  ): report is AutoMusicAlbumReport {
+    return "difficulty_count" in report && "songs_checked" in report && "performed_songs" in report;
+  }
+
+  function isAutoOpenChestReport(
+    report:
+      | IndependentLiveTaskReport
+      | AutoCookLiveTaskReport
+      | AutoMusicPerformanceReport
+      | AutoMusicAlbumReport
+      | AutoOpenChestLiveTaskReport,
+  ): report is AutoOpenChestLiveTaskReport {
+    return "status" in report && "decisions" in report && "dispatched_actions" in report;
+  }
+
+  async function runIndependentLiveTask(command: IndependentLiveTaskCommand) {
+    const label = independentLiveTaskLabel(command);
+    try {
+      independentLiveTaskBusy = true;
+      shellStatus = `running ${label}`;
+      independentLiveTaskResult = await invoke<DesktopIndependentLiveTaskExecution>(command);
+      if (isAutoCookLiveTaskReport(independentLiveTaskResult.result)) {
+        shellStatus = `${label} ${independentLiveTaskResult.result.status}`;
+      } else if (isAutoMusicPerformanceReport(independentLiveTaskResult.result)) {
+        shellStatus = `${label} ${independentLiveTaskResult.result.stop_reason}`;
+      } else if (isAutoMusicAlbumReport(independentLiveTaskResult.result)) {
+        shellStatus = `${label} ${independentLiveTaskResult.result.status}`;
+      } else if (isAutoOpenChestReport(independentLiveTaskResult.result)) {
+        shellStatus = `${label} ${independentLiveTaskResult.result.status}`;
+      } else {
+        shellStatus = `${label} ${independentLiveTaskResult.result.completed ? "completed" : "incomplete"}`;
+      }
+      error = null;
+    } catch (err) {
+      shellStatus = `${label} failed`;
+      error = String(err);
+    } finally {
+      independentLiveTaskBusy = false;
     }
   }
 
@@ -2813,6 +3016,89 @@
     };
   }
 
+  function independentLiveTaskSummary(execution: DesktopIndependentLiveTaskExecution): ExecutionSummary {
+    if (isAutoCookLiveTaskReport(execution.result)) {
+      return {
+        title: execution.task,
+        meta: execution.result.status,
+        details: [
+          { label: "Frames", value: `${execution.result.state.frames_processed ?? 0}` },
+          { label: "Space", value: `${execution.result.state.space_press_count ?? 0}` },
+          { label: "Confirm", value: `${execution.result.state.white_confirm_click_count ?? 0}` },
+          { label: "Events", value: `${execution.result.events.length}` },
+        ],
+      };
+    }
+
+    if (isAutoMusicPerformanceReport(execution.result)) {
+      return {
+        title: execution.task,
+        meta: execution.result.stop_reason,
+        details: [
+          { label: "Frames", value: `${execution.result.frames_processed}` },
+          { label: "Held", value: `${execution.result.held_keys_before_release.length}` },
+          { label: "Events", value: `${execution.result.events.length}` },
+        ],
+      };
+    }
+
+    if (isAutoMusicAlbumReport(execution.result)) {
+      return {
+        title: execution.task,
+        meta: execution.result.status,
+        details: [
+          { label: "Difficulties", value: `${execution.result.difficulty_count}` },
+          { label: "Songs", value: `${execution.result.songs_checked}` },
+          { label: "Played", value: `${execution.result.performed_songs}` },
+          { label: "Skipped", value: `${execution.result.skipped_songs}` },
+          { label: "Events", value: `${execution.result.events.length}` },
+        ],
+      };
+    }
+
+    if (isAutoOpenChestReport(execution.result)) {
+      return {
+        title: execution.task,
+        meta: execution.result.status,
+        details: [
+          { label: "Iterations", value: `${execution.result.state.iterations ?? 0}` },
+          {
+            label: "Actions",
+            value: `${
+              execution.result.dispatched_actions.length +
+              execution.result.cleanup_actions.length +
+              execution.result.post_loop_actions.length
+            }`,
+          },
+          { label: "Elapsed", value: `${execution.result.state.elapsed_ms ?? 0}ms` },
+          {
+            label: "Result",
+            value:
+              execution.result.state.final_result === undefined || execution.result.state.final_result === null
+                ? "-"
+                : String(execution.result.state.final_result),
+          },
+        ],
+      };
+    }
+
+    const stateResult = execution.result.state?.result;
+    return {
+      title: execution.task,
+      meta: execution.result.completed ? "completed" : "incomplete",
+      details: [
+        { label: "Executed", value: `${execution.result.executed_steps.length}` },
+        { label: "Skipped", value: `${execution.result.skipped_steps.length}` },
+        { label: "Result", value: stateResult === undefined || stateResult === null ? "-" : String(stateResult) },
+      ],
+    };
+  }
+
+  function redeemReportList(result: UseRedeemCodeExecutionResult, key: string): string[] {
+    const value = result.report.state[key];
+    return Array.isArray(value) ? value.map(String) : [];
+  }
+
   function notificationExecutionSummary(execution: NotificationExecution): ExecutionSummary {
     const appDispatch = execution.app_dispatch;
     const providerSent =
@@ -2920,6 +3206,7 @@
     if (step.key_mouse_execution) return step.key_mouse_execution;
     if (step.pathing_execution) return step.pathing_execution;
     if (step.shell_result) return step.shell_result;
+    if (step.skip_reason) return step.skip_reason;
     return step.error ?? "No payload.";
   }
 
@@ -4000,7 +4287,7 @@
                 <pre>{updateResult.release_notes.body ?? "No release notes returned."}</pre>
               </section>
             {:else}
-              <section class="notice">Stable checks use the OSS notice gray-release gate. Alpha checks use the MirrorChyan latest endpoint. Updater sources are planned by Rust core and executed through the local BetterGI.update.exe.</section>
+              <section class="notice">Stable checks use the OSS notice gray-release gate. Alpha checks use the MirrorChyan latest endpoint. Updater sources are planned by Rust core and executed through the local updater sidecar.</section>
             {/if}
           {:else}
             <section class="notice">Check a channel to inspect the Rust update decision, remote request, updater availability, and available manual actions.</section>
@@ -4033,6 +4320,16 @@
             </button>
             <button disabled={redeemFeedBusy || !redeemLiveResult} onclick={() => planRedeemCodes("live")}>
               Plan Live
+            </button>
+            <button disabled={redeemFeedBusy || !redeemManualText.trim()} onclick={() => executeRedeemCodes("manual")}>
+              <Play size={17} />
+              Execute Manual
+            </button>
+            <button disabled={redeemFeedBusy || !redeemFeedItems} onclick={() => executeRedeemCodes("feed")}>
+              Execute Feed
+            </button>
+            <button disabled={redeemFeedBusy || !redeemLiveResult} onclick={() => executeRedeemCodes("live")}>
+              Execute Live
             </button>
             <button disabled={redeemFeedBusy} onclick={checkRedeemClipboardText}>
               Check Clipboard
@@ -4204,6 +4501,39 @@
                   .slice(0, 18)
                   .map((step) => `${step.phase}/${step.condition}${step.code ? `/${step.code}` : ""}: ${step.label}`)
                   .join("\n")}</code>
+              </article>
+            </div>
+          {/if}
+          {#if redeemExecutionResult}
+            {@const successfulCodes = redeemReportList(redeemExecutionResult, "successful_codes")}
+            {@const failedCodes = redeemReportList(redeemExecutionResult, "failed_codes")}
+            <div class="redeem-summary compact">
+              <article>
+                <span>Execution</span>
+                <strong>{redeemExecutionResult.report.completed ? "completed" : "incomplete"}</strong>
+              </article>
+              <article>
+                <span>Executed</span>
+                <strong>{redeemExecutionResult.report.executed_steps.length}</strong>
+              </article>
+              <article>
+                <span>Skipped</span>
+                <strong>{redeemExecutionResult.report.skipped_steps.length}</strong>
+              </article>
+              <article>
+                <span>Success / Failed</span>
+                <strong>{successfulCodes.length} / {failedCodes.length}</strong>
+              </article>
+            </div>
+            <div class="redeem-feed-list">
+              <article>
+                <div>
+                  <strong>Auto Redeem Execution</strong>
+                  <span>{redeemExecutionResult.report.task_key}</span>
+                </div>
+                <em>{redeemExecutionResult.report.completed ? "done" : "incomplete"}</em>
+                <p>{failedCodes.length ? `Failed: ${failedCodes.join(", ")}` : "No failed codes reported."}</p>
+                <code>{successfulCodes.concat(failedCodes).join("\n") || "No code result reported."}</code>
               </article>
             </div>
           {/if}
@@ -4602,6 +4932,69 @@
             </div>
             <dl>
               {#each shellSummary.details as detail}
+                <div>
+                  <dt>{detail.label}</dt>
+                  <dd>{detail.value}</dd>
+                </div>
+              {/each}
+            </dl>
+          </div>
+        {/if}
+        <div class="script-settings-toolbar">
+          <label>
+            <span>Live Tasks</span>
+            <input value="QuickBuy / QuickSereniteaPot / AutoOpenChest / AutoCook / AutoMusic" readonly />
+          </label>
+          <button disabled={independentLiveTaskBusy} onclick={() => runIndependentLiveTask("task_execute_quick_buy")}>
+            <PackageOpen size={17} />
+            QuickBuy
+          </button>
+          <button
+            disabled={independentLiveTaskBusy}
+            onclick={() => runIndependentLiveTask("task_execute_quick_serenitea_pot")}
+          >
+            <Play size={17} />
+            Quick Pot
+          </button>
+          <button
+            disabled={independentLiveTaskBusy}
+            onclick={() => runIndependentLiveTask("task_execute_auto_open_chest")}
+          >
+            <PackageOpen size={17} />
+            AutoChest
+          </button>
+          <button disabled={independentLiveTaskBusy} onclick={() => runIndependentLiveTask("task_execute_auto_cook")}>
+            <Play size={17} />
+            AutoCook
+          </button>
+          <button
+            disabled={independentLiveTaskBusy}
+            onclick={() => runIndependentLiveTask("task_execute_auto_music_game_performance")}
+          >
+            <Keyboard size={17} />
+            Music Play
+          </button>
+          <button
+            disabled={independentLiveTaskBusy}
+            onclick={() => runIndependentLiveTask("task_execute_auto_music_game_album")}
+          >
+            <Play size={17} />
+            Music Album
+          </button>
+          <button disabled={!independentLiveTaskBusy} title="Stop running live task" onclick={stopIndependentLiveTask}>
+            <Square size={17} />
+            Stop
+          </button>
+        </div>
+        {#if independentLiveTaskResult}
+          {@const liveTaskSummary = independentLiveTaskSummary(independentLiveTaskResult)}
+          <div class="execution-summary">
+            <div>
+              <strong>{liveTaskSummary.title}</strong>
+              <em>{liveTaskSummary.meta}</em>
+            </div>
+            <dl>
+              {#each liveTaskSummary.details as detail}
                 <div>
                   <dt>{detail.label}</dt>
                   <dd>{detail.value}</dd>

@@ -1,8 +1,13 @@
+pub mod execution_records;
+pub mod farming_plan;
 pub mod group;
 pub mod host;
 pub mod r#macro;
 pub mod manifest;
+pub mod pathing_result;
+pub mod pathing_skip;
 pub mod policy;
+pub mod pre_execution;
 pub mod project;
 pub mod repo;
 pub mod repo_bridge;
@@ -10,7 +15,21 @@ pub mod runtime;
 pub mod script_host;
 pub mod settings;
 
+pub use bgi_core::{FarmingPlanConfig, MiyousheDataSupportConfig};
 pub use bgi_input::InputCancellationToken;
+pub use execution_records::{
+    convert_seconds_to_days_up, is_skip_task, is_today_by_boundary, DailyExecutionRecord,
+    ExecutionRecord, ExecutionRecordClock, ExecutionRecordProjectRef, ExecutionRecordResult,
+    ExecutionRecordSkipDecision, ExecutionRecordStorage, ExecutionRecordStorageError,
+    TaskCompletionSkipRuleConfig,
+};
+pub use farming_plan::{
+    daily_farming_data_path, daily_farming_date_key, farming_plan_skip_decision,
+    farming_plan_skip_decision_from_pathing_file, read_daily_farming_data, record_farming_session,
+    save_daily_farming_data, DailyFarmingData, FarmingPlanDailyTotals, FarmingPlanError,
+    FarmingPlanExecutionContext, FarmingPlanRecordOutcome, FarmingPlanResult,
+    FarmingPlanSkipDecision, FarmingRecord, FarmingRouteRef,
+};
 pub use group::{
     add_key_mouse_script_project, add_pathing_script_project, add_script_group_project,
     add_shell_script_project, available_js_script_projects, available_key_mouse_scripts,
@@ -28,10 +47,22 @@ pub use host::{
     HostPermission,
 };
 pub use manifest::{Author, Manifest, ManifestError};
+pub use pathing_result::{
+    decide_pathing_result, PathingResultDecision, PathingResultException, PathingRunResult,
+};
+pub use pathing_skip::{
+    is_current_hour_equal, pathing_pre_run_skip_decision, PathingPartySkipConfig,
+    PathingPartyTaskCycleConfig, PathingPreRunSkipDecision,
+};
 pub use policy::{
     http_allowed_urls_hash, script_host_security_summary, NotificationRateLimiter,
     ScriptFilePolicy, ScriptHostPolicyError, ScriptHostSecuritySummary, ScriptHttpPolicy,
     ScriptNotificationPolicy,
+};
+pub use pre_execution::{
+    parse_pre_execution_group_names, plan_pre_execution_priority_projects,
+    pre_execution_project_key, try_plan_pre_execution_priority_projects,
+    PreExecutionPriorityCandidate, PreExecutionPriorityConfig, PreExecutionPriorityPlan,
 };
 pub use project::{
     execution_mode_for_code, import_rewrites_for_code, normalize_package_specifier,

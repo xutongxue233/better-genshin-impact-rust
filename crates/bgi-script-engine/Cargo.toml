@@ -8,6 +8,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+bgi-core = { path = "../bgi-core" }
 bgi-script = { path = "../bgi-script" }
 bgi-task = { path = "../bgi-task" }
 bgi-vision = { path = "../bgi-vision" }
@@ -18,3 +19,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 bgi-capture = { path = "../bgi-capture" }
+chrono.workspace = true

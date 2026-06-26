@@ -24,7 +24,7 @@ pub enum BgiError {
         searched: Vec<PathBuf>,
     },
 
-    #[error("workspace root does not contain BetterGenshinImpact sources: {0:?}")]
+    #[error("workspace root does not contain BGI asset roots: {0:?}")]
     InvalidWorkspace(PathBuf),
 }
 

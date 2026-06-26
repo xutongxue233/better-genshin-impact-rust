@@ -13,4 +13,5 @@ bgi-input = { path = "../bgi-input" }
 bgi-vision = { path = "../bgi-vision" }
 serde.workspace = true
 serde_json.workspace = true
+regex.workspace = true
 thiserror.workspace = true

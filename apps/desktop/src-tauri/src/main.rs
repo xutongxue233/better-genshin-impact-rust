@@ -11,23 +11,23 @@ use bgi_core::{
     read_config, redeem_code_feed_update_decision, redeem_code_live_act_id_from_bbs_response,
     redeem_code_live_codes_from_response, redeem_code_live_index_from_response, ui_shell_decision,
     update_decision, update_download_page_url, update_request_plan, updater_launch_options,
-    updater_launch_plan, write_config, AppConfig, GenshinAction, MaskWindowConfig, MaskWindowState,
-    MirrorChyanLatestOutcome, MirrorChyanLatestResponse, NavigationItem, Notice,
-    NotificationDispatchError, NotificationDispatchExecution, NotificationEmailClient,
-    NotificationEmailRequest, NotificationEmailSecurity, NotificationEventResult,
-    NotificationHttpClient, NotificationHttpRequest, NotificationHttpResponse, NotificationImage,
-    NotificationPayload, NotificationProviderKind, NotificationWebSocketClient,
-    NotificationWindowsToastClient, NotificationWindowsToastRequest, RedeemCodeFeedItem,
-    RedeemCodeFeedUpdateDecision, RedeemCodeLiveData, UiShellDecision, UpdateChannel,
-    UpdateDecision, UpdateDecisionAction, UpdateOption, UpdateRequestPlan, UpdateTrigger,
-    UpdaterLaunchPlan, ALPHA_RELEASES_URL, DOWNLOAD_PAGE_URL, REDEEM_CODE_BBS_ACT_ID_1_URL,
-    REDEEM_CODE_BBS_ACT_ID_2_URL, REDEEM_CODE_CODES_URL, REDEEM_CODE_LIVE_INDEX_URL,
-    REDEEM_CODE_LIVE_REFRESH_CODE_URL, REDEEM_CODE_UPDATE_TIME_URL,
+    updater_launch_plan, write_config, AppConfig, GenshinAction, KeyBindingsConfig,
+    MaskWindowConfig, MaskWindowState, MirrorChyanLatestOutcome, MirrorChyanLatestResponse,
+    NavigationItem, Notice, NotificationDispatchError, NotificationDispatchExecution,
+    NotificationEmailClient, NotificationEmailRequest, NotificationEmailSecurity,
+    NotificationEventResult, NotificationHttpClient, NotificationHttpRequest,
+    NotificationHttpResponse, NotificationImage, NotificationPayload, NotificationProviderKind,
+    NotificationWebSocketClient, NotificationWindowsToastClient, NotificationWindowsToastRequest,
+    RedeemCodeFeedItem, RedeemCodeFeedUpdateDecision, RedeemCodeLiveData, UiShellDecision,
+    UpdateChannel, UpdateDecision, UpdateDecisionAction, UpdateOption, UpdateRequestPlan,
+    UpdateTrigger, UpdaterLaunchPlan, ALPHA_RELEASES_URL, DOWNLOAD_PAGE_URL,
+    REDEEM_CODE_BBS_ACT_ID_1_URL, REDEEM_CODE_BBS_ACT_ID_2_URL, REDEEM_CODE_CODES_URL,
+    REDEEM_CODE_LIVE_INDEX_URL, REDEEM_CODE_LIVE_REFRESH_CODE_URL, REDEEM_CODE_UPDATE_TIME_URL,
 };
 use bgi_hotkey::Hotkey;
 use bgi_input::{
-    post_message_events_for_action, release_pressed_keys_sequence, InputSequence, KeyActionType,
-    MouseButton, PostMessageMode,
+    input_events_for_action, post_message_events_for_action, release_pressed_keys_sequence,
+    InputSequence, KeyActionType, MouseButton, PostMessageMode,
 };
 use bgi_script::{
     add_key_mouse_script_project, add_pathing_script_project, add_script_group_project,
@@ -41,10 +41,10 @@ use bgi_script::{
     rename_script_group, repo_bridge_index_nodes, repo_bridge_subscribed_paths_json,
     save_script_group_project_settings, script_group_file_path, script_host_security_summary,
     script_import_plan, script_repo_bridge_paths, script_runtime_summary,
-    update_script_group_project, zip_import_plan, GameCaptureFrameSource, HtmlMaskCommand,
-    HtmlMaskInitialState, HtmlMaskMessage, HtmlMaskWindowPlan, InputCancellationToken,
-    KeyMouseScript, NotificationDispatchMode, ScriptGroup, ScriptGroupFile, ScriptGroupProject,
-    ScriptGroupProjectPatch, ScriptGroupResumePointer, ScriptHostRuntimeConfig,
+    update_script_group_project, zip_import_plan, GameCaptureFrameSource, GlobalInputDispatchMode,
+    HtmlMaskCommand, HtmlMaskInitialState, HtmlMaskMessage, HtmlMaskWindowPlan,
+    InputCancellationToken, KeyMouseScript, NotificationDispatchMode, ScriptGroup, ScriptGroupFile,
+    ScriptGroupProject, ScriptGroupProjectPatch, ScriptGroupResumePointer, ScriptHostRuntimeConfig,
     ScriptHostRuntimeError, ScriptHostTarget, ScriptProjectStatus, ScriptProjectType,
     ScriptRepoBridgeIndexNode, SystemGitRunner,
 };
@@ -52,21 +52,80 @@ use bgi_script_engine::{
     JavaScriptExecutionOutcome, ScriptGroupExecutionOutcome, ScriptGroupExecutionRoots,
 };
 use bgi_task::{
-    detect_active_combat_avatar_index_from_default_rects_with_arrow,
-    execute_auto_fight_finish_detection_live_probe, execute_independent_task_with_cancel,
-    execute_team_context_combat_script_inputs, extract_redeem_codes_from_text, independent_tasks,
-    redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick, task_catalog,
+    battle_pass_reward_text_candidates_from_ocr_regions,
+    check_rewards_text_candidates_from_ocr_regions, choose_talk_option_candidates_from_ocr_regions,
+    choose_talk_option_ocr_rect_from_lowest_icon,
+    claim_encounter_points_text_candidates_from_ocr_regions, count_auto_cook_target_color,
+    detect_active_combat_avatar_index_from_default_rects_with_arrow, execute_auto_cook_plan,
+    execute_auto_fight_finish_detection_live_probe, execute_auto_music_album_plan,
+    execute_auto_music_performance_plan, execute_auto_open_chest_plan,
+    execute_auto_pathing_action_boundary_with_live_executor,
+    execute_blessing_of_the_welkin_moon_live, execute_check_rewards_plan,
+    execute_choose_talk_option_plan, execute_claim_battle_pass_rewards_plan,
+    execute_claim_encounter_points_rewards_plan, execute_claim_mail_rewards_live,
+    execute_independent_task_with_cancel, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
+    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
+    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
+    execute_use_redeem_code_plan, execute_walk_to_f_live, execute_wonderland_cycle_live,
+    extract_redeem_codes_from_text, independent_tasks, plan_auto_cook, plan_auto_music_game,
+    plan_auto_open_chest, plan_quick_buy, plan_quick_serenitea_pot, plan_return_main_ui,
+    redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick,
+    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
+    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
+    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
     AutoFightExecutionConfig, AutoFightExecutionPlan, AutoFightFinishDetectionExecutionMode,
-    AutoFightFinishDetectionLiveExecution, AutoFightParam, AutoPathingExecutionPlan,
+    AutoFightFinishDetectionLiveExecution, AutoFightParam, AutoMusicAlbumExecutionReport,
+    AutoMusicAlbumPageStatus, AutoMusicAlbumRuntime, AutoMusicDifficultyRule,
+    AutoMusicGameExecutionConfig, AutoMusicGameExecutionPlan, AutoMusicGameKeyLane,
+    AutoMusicLaneBlueSample, AutoMusicPerformanceFrame, AutoMusicPerformanceReport,
+    AutoMusicPerformanceRuntime, AutoMusicTemplateLocator, AutoOpenChestAction,
+    AutoOpenChestActionPress, AutoOpenChestExecutionConfig, AutoOpenChestExecutionPlan,
+    AutoOpenChestExecutionReport, AutoOpenChestObservation, AutoOpenChestRuntime,
+    AutoPathingActionBoundaryReport, AutoPathingExecutionPlan, BattlePassClaimAllRule,
+    BattlePassClaimScope,
+    BattlePassRewardTextCandidate, BlessingOfTheWelkinMoonExecutionPlan,
+    BlessingOfTheWelkinMoonExecutionReport, CancellableCommonJobClock, CheckRewardsExecutionPlan,
+    CheckRewardsExecutionReport, CheckRewardsRuntime, CheckRewardsTextCandidate,
+    ChooseTalkOptionCandidate, ChooseTalkOptionExecutionPlan, ChooseTalkOptionExecutionReport,
+    ChooseTalkOptionOcrRule, ChooseTalkOptionOrangeRule, ChooseTalkOptionRuntime,
+    ClaimBattlePassRewardsExecutionPlan, ClaimBattlePassRewardsExecutionReport,
+    ClaimBattlePassRewardsRuntime, ClaimEncounterPointsRewardsExecutionPlan,
+    ClaimEncounterPointsRewardsExecutionReport, ClaimEncounterPointsRewardsOcrRule,
+    ClaimEncounterPointsRewardsRuntime, ClaimEncounterPointsRewardsTextCandidate,
+    ClaimMailRewardsExecutionPlan, ClaimMailRewardsExecutionReport,
     CombatActiveAvatarDetectionResult, CombatCommandPlaybackMode, CombatTeamPlaybackExecution,
-    DispatcherRuntime, IndependentTaskExecution, IndependentTaskExecutionRequest, RedeemCodeEntry,
-    RunnerRuntime, ShellConfig, ShellExecutionResult, UseRedeemCodeExecutionPlan,
+    CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource, CommonJobInputDriver,
+    CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome, CommonJobStepAction,
+    DispatcherRuntime, IndependentTaskExecution, IndependentTaskExecutionRequest,
+    IndependentTaskLiveExecutionReport, PartyTextClickYAnchor, PureTemplateCommonJobRuntime,
+    QuickBuyClickTarget, QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport,
+    QuickBuyPreflightRule, QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
+    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
+    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
+    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
+    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
+    RedeemCodeEntry, ReloginExecutionPlan, ReloginExecutionReport, ReturnMainUiExecutionPlan,
+    ReturnMainUiExecutionReport, RunnerRuntime, ScriptDispatcherExecutionPlan,
+    ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan, SetTimeExecutionReport, ShellConfig,
+    ShellExecutionResult, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
+    SwitchPartyExecutionPlan, SwitchPartyExecutionReport, SwitchPartyListScanOutcome,
+    SwitchPartyListScanRule, SwitchPartyRuntime, SwitchPartyTextCandidate, TaskError,
+    TaskInvocationExecutionMode, TaskInvocationExecutionResult, TaskInvocationExecutionStatus,
+    UseRedeemCodeExecutionConfig, UseRedeemCodeExecutionPlan, UseRedeemCodeExecutionReport,
+    UseRedeemCodeRuntime, WalkToFExecutionPlan, WalkToFExecutionReport,
+    WonderlandCycleExecutionPlan, WonderlandCycleExecutionReport,
+    AUTO_MUSIC_GAME_TASK_KEY, AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH, AUTO_OPEN_CHEST_TASK_KEY,
+    COMMON_BTN_WHITE_CONFIRM, QUICK_BUY_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
+    RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
 };
 use bgi_vision::{
-    recognition_type_infos, registered_onnx_models, BgrImage, OnnxModelLoadPlan,
-    OnnxProviderSelection, Size as VisionSize,
+    convert_bgr_image, crop_bgr_image, in_range_mask, recognition_type_infos,
+    registered_onnx_models, resize_bgr_nearest, BgrImage, BvImage, BvLocatorOperation,
+    BvLocatorPlan, BvPageCommand, ColorConversion, ImageRegion, OcrMatchConfig, OcrResult,
+    OcrResultRegion, OnnxModelLoadPlan, OnnxProviderSelection, PureRustVisionBackend,
+    RecognitionType, Rect, Region, Size as VisionSize, VisionBackend,
 };
-use chrono::{Local, NaiveDate};
+use chrono::{FixedOffset, Local, NaiveDate, Offset};
 use image::ImageEncoder;
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
@@ -78,7 +137,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton as TrayMouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{
@@ -287,6 +346,8 @@ struct TaskRuntimeSummary {
     independent_tasks: Vec<bgi_task::IndependentTaskDescriptor>,
     catalog_entries: usize,
     config_bound_catalog_entries: usize,
+    rust_invocation_plan_ready_catalog_entries: usize,
+    rust_execution_plan_ready_catalog_entries: usize,
     native_pending_catalog_entries: usize,
 }
 
@@ -493,6 +554,13 @@ struct DesktopRedeemCodePlanResult {
     plan: UseRedeemCodeExecutionPlan,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopRedeemCodeExecutionResult {
+    extracted_codes: Vec<String>,
+    plan: UseRedeemCodeExecutionPlan,
+    report: UseRedeemCodeExecutionReport,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RedeemCodeClipboardCheckPayload {
@@ -556,6 +624,42 @@ struct DesktopShellTaskExecution {
     result: ShellExecutionResult,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopQuickBuyTaskExecution {
+    task: String,
+    result: QuickBuyExecutionReport,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopQuickSereniteaPotTaskExecution {
+    task: String,
+    result: QuickSereniteaPotExecutionReport,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopAutoOpenChestTaskExecution {
+    task: String,
+    result: AutoOpenChestExecutionReport,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopAutoCookTaskExecution {
+    task: String,
+    result: AutoCookExecutionReport,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopAutoMusicGamePerformanceExecution {
+    task: String,
+    result: AutoMusicPerformanceReport,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopAutoMusicGameAlbumExecution {
+    task: String,
+    result: AutoMusicAlbumExecutionReport,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopAutoPathingTaskPayload {
@@ -566,6 +670,13 @@ struct DesktopAutoPathingTaskPayload {
 struct DesktopAutoPathingTaskExecution {
     task: String,
     result: AutoPathingExecutionPlan,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopAutoPathingActionBoundaryExecution {
+    task: String,
+    plan: AutoPathingExecutionPlan,
+    boundary: AutoPathingActionBoundaryReport,
 }
 
 #[derive(Debug, Deserialize)]
@@ -767,7 +878,7 @@ struct ScriptSettingsDesktopSaveResult {
     cleaned_invalid_values: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DesktopGameCaptureFrameSource {
     hwnd: WindowHandle,
     settings: CaptureSettings,
@@ -1120,6 +1231,7 @@ fn dashboard_state(
         &dispatcher,
         std::time::Duration::from_secs(60),
     );
+    let task_catalog_entries = task_catalog();
 
     DashboardState {
         navigation: default_navigation(),
@@ -1176,14 +1288,31 @@ fn dashboard_state(
             selected_triggers: selection.triggers,
             selection_reason: selection.reason,
             independent_tasks: independent_tasks(),
-            catalog_entries: task_catalog().len(),
-            config_bound_catalog_entries: task_catalog()
+            catalog_entries: task_catalog_entries.len(),
+            config_bound_catalog_entries: task_catalog_entries
                 .iter()
                 .filter(|task| task.config_bound())
                 .count(),
-            native_pending_catalog_entries: task_catalog()
+            rust_invocation_plan_ready_catalog_entries: task_catalog_entries
                 .iter()
                 .filter(|task| {
+                    task.rust_execution_surface()
+                        == bgi_task::TaskRustExecutionSurface::InvocationPlanOnly
+                })
+                .count(),
+            rust_execution_plan_ready_catalog_entries: task_catalog_entries
+                .iter()
+                .filter(|task| {
+                    task.rust_execution_surface()
+                        == bgi_task::TaskRustExecutionSurface::ExecutionPlanOnly
+                })
+                .count(),
+            native_pending_catalog_entries: task_catalog_entries
+                .iter()
+                .filter(|task| {
+                    if task.has_rust_execution_plan() {
+                        return false;
+                    }
                     matches!(
                         task.port_state,
                         bgi_task::TaskPortState::MetadataOnly
@@ -1281,6 +1410,67 @@ fn notification_send_test(
             &mut windows_toast_client,
         ));
     }
+    Ok(execute_notification_dispatch_with_transports(
+        &config.notification_config,
+        payload,
+        &mut client,
+        &mut web_socket_client,
+        &mut email_client,
+        &mut windows_toast_client,
+    ))
+}
+
+fn dispatch_desktop_notification_logged(
+    app_root: &Path,
+    config: &AppConfig,
+    event: &str,
+    result: NotificationEventResult,
+    message: &str,
+) {
+    match dispatch_desktop_notification(app_root, config, event, result, message) {
+        Ok(execution) => append_desktop_log(
+            app_root,
+            "INFO",
+            &format!(
+                "notification dispatched: event={event}, attempted={}, deliveries={}",
+                execution.attempted,
+                execution.deliveries.len()
+            ),
+        ),
+        Err(error) => append_desktop_log(
+            app_root,
+            "WARN",
+            &format!("notification dispatch failed for {event}: {error}"),
+        ),
+    }
+}
+
+fn dispatch_desktop_notification(
+    app_root: &Path,
+    config: &AppConfig,
+    event: &str,
+    result: NotificationEventResult,
+    message: &str,
+) -> Result<NotificationDispatchExecution, String> {
+    let mut payload = NotificationPayload {
+        event: event.to_string(),
+        result,
+        message: Some(message.to_string()),
+        data: None,
+        timestamp_ms: Some(current_time_ms()?),
+        has_screenshot: false,
+        screenshot: None,
+    };
+    if config.notification_config.include_screen_shot {
+        if let Some(screenshot) = capture_notification_screenshot(config) {
+            payload = payload.with_screenshot(screenshot);
+        }
+    }
+
+    let mut client = DesktopNotificationHttpClient::new().map_err(|error| error.to_string())?;
+    let mut web_socket_client = DesktopNotificationWebSocketClient;
+    let mut email_client = DesktopNotificationEmailClient;
+    let mut windows_toast_client = DesktopNotificationWindowsToastClient::new(app_root);
     Ok(execute_notification_dispatch_with_transports(
         &config.notification_config,
         payload,
@@ -1581,12 +1771,51 @@ fn redeem_code_auto_redeem_plan(
     let app_root = app_root(&app)?;
     append_desktop_log(&app_root, "INFO", "redeem code auto-redeem plan requested");
     let entries = redeem_code_entries_from_payload(payload);
-    let extracted_codes = entries.iter().map(|entry| entry.code.clone()).collect();
+    let extracted_codes: Vec<String> = entries.iter().map(|entry| entry.code.clone()).collect();
     let plan = plan_use_redeem_codes_through_task_boundary(entries, &app_root)?;
     Ok(DesktopRedeemCodePlanResult {
         extracted_codes,
         plan,
     })
+}
+
+#[tauri::command]
+fn redeem_code_auto_redeem_execute(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+    state: tauri::State<'_, RedeemCodeClipboardState>,
+    payload: RedeemCodePlanPayload,
+) -> Result<DesktopRedeemCodeExecutionResult, String> {
+    let script_cancellation =
+        start_desktop_script_run(&task_state, "IndependentTask:UseRedeemCode".to_string())?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            "redeem code auto-redeem execution requested",
+        );
+        let entries = redeem_code_entries_from_payload(payload);
+        let extracted_codes: Vec<String> = entries.iter().map(|entry| entry.code.clone()).collect();
+        for code in &extracted_codes {
+            let _ = remember_ignored_clipboard_hash(&state, code)?;
+        }
+        let (plan, report) = execute_desktop_use_redeem_code_live_plan(
+            &app_root,
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            entries,
+            Arc::clone(&script_cancellation),
+        )?;
+        Ok(DesktopRedeemCodeExecutionResult {
+            extracted_codes,
+            plan,
+            report,
+        })
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
 }
 
 #[tauri::command]
@@ -1760,11 +1989,19 @@ fn plan_use_redeem_codes_through_task_boundary(
     entries: Vec<RedeemCodeEntry>,
     app_root: &Path,
 ) -> Result<UseRedeemCodeExecutionPlan, String> {
-    let request = IndependentTaskExecutionRequest::use_redeem_code(
+    plan_use_redeem_codes_through_task_boundary_with_capture_size(
         entries,
         bgi_vision::Size::new(1920, 1080),
         app_root,
-    );
+    )
+}
+
+fn plan_use_redeem_codes_through_task_boundary_with_capture_size(
+    entries: Vec<RedeemCodeEntry>,
+    capture_size: VisionSize,
+    app_root: &Path,
+) -> Result<UseRedeemCodeExecutionPlan, String> {
+    let request = IndependentTaskExecutionRequest::use_redeem_code(entries, capture_size, app_root);
     let execution = execute_independent_task_with_cancel(&request, || false)
         .map_err(|error| error.to_string())?;
     let IndependentTaskExecution::UseRedeemCodePlan(plan) = execution.execution else {
@@ -1969,6 +2206,55 @@ fn clear_system_clipboard() -> bool {
 #[cfg(not(windows))]
 fn clear_system_clipboard() -> bool {
     false
+}
+
+#[cfg(windows)]
+fn set_system_clipboard_text(text: &str) -> Result<(), String> {
+    use std::ptr;
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Ole::CF_UNICODETEXT;
+
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+    wide.push(0);
+    let byte_len = wide.len() * std::mem::size_of::<u16>();
+
+    unsafe {
+        let global = GlobalAlloc(GMEM_MOVEABLE, byte_len).map_err(|error| error.to_string())?;
+        let ptr = GlobalLock(global) as *mut u16;
+        if ptr.is_null() {
+            let _ = GlobalFree(Some(global));
+            return Err("failed to lock clipboard text buffer".to_string());
+        }
+        ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+        let _ = GlobalUnlock(global);
+
+        if let Err(error) = OpenClipboard(None) {
+            let _ = GlobalFree(Some(global));
+            return Err(error.to_string());
+        }
+        if let Err(error) = EmptyClipboard() {
+            let _ = CloseClipboard();
+            let _ = GlobalFree(Some(global));
+            return Err(error.to_string());
+        }
+        if let Err(error) = SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(global.0))) {
+            let _ = CloseClipboard();
+            let _ = GlobalFree(Some(global));
+            return Err(error.to_string());
+        }
+        let _ = CloseClipboard();
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn set_system_clipboard_text(_text: &str) -> Result<(), String> {
+    Err("clipboard write is only supported on Windows".to_string())
 }
 
 #[tauri::command]
@@ -2709,6 +2995,13 @@ fn script_execute_js(
         restore_html_mask_from_script_outcome(&app, &outcome);
         dispatch_script_notifications_in_javascript_outcome(&config, &mut outcome);
         dispatch_script_html_mask_in_javascript_outcome(&app, &mut outcome);
+        execute_desktop_task_invocation_live_in_javascript_outcome(
+            &app_root,
+            &config,
+            game_window.as_ref(),
+            Arc::clone(&script_cancellation),
+            &mut outcome,
+        );
         Ok(outcome)
     })();
     finish_desktop_script_run(&task_state);
@@ -2804,6 +3097,186 @@ fn task_execute_shell(
 }
 
 #[tauri::command]
+fn task_execute_quick_buy(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopQuickBuyTaskExecution, String> {
+    let script_cancellation =
+        start_desktop_script_run(&task_state, "IndependentTask:QuickBuy".to_string())?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            "independent quick-buy execution requested",
+        );
+        execute_desktop_quick_buy_live_plan(
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            Arc::clone(&script_cancellation),
+        )
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
+fn task_execute_quick_serenitea_pot(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopQuickSereniteaPotTaskExecution, String> {
+    let script_cancellation =
+        start_desktop_script_run(&task_state, "IndependentTask:QuickSereniteaPot".to_string())?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            "independent quick-serenitea-pot execution requested",
+        );
+        execute_desktop_quick_serenitea_pot_live_plan(
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            Arc::clone(&script_cancellation),
+        )
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
+fn task_execute_auto_open_chest(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopAutoOpenChestTaskExecution, String> {
+    let script_cancellation =
+        start_desktop_script_run(&task_state, "IndependentTask:AutoOpenChest".to_string())?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            "independent auto-open-chest execution requested",
+        );
+        execute_desktop_auto_open_chest_live_plan(
+            &app_root,
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            Arc::clone(&script_cancellation),
+        )
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
+fn task_execute_auto_cook(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopAutoCookTaskExecution, String> {
+    let script_cancellation =
+        start_desktop_script_run(&task_state, "ScriptDispatcher:AutoCook".to_string())?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(&app_root, "INFO", "auto-cook live execution requested");
+        execute_desktop_auto_cook_live_plan(
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            Arc::clone(&script_cancellation),
+        )
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
+fn task_execute_auto_music_game_performance(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopAutoMusicGamePerformanceExecution, String> {
+    let script_cancellation = start_desktop_script_run(
+        &task_state,
+        "IndependentTask:AutoMusicGame:Performance".to_string(),
+    )?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            "auto-music-game performance live execution requested",
+        );
+        execute_desktop_auto_music_game_performance_live_plan(
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            Arc::clone(&script_cancellation),
+        )
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
+fn task_execute_auto_music_game_album(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopAutoMusicGameAlbumExecution, String> {
+    let script_cancellation = start_desktop_script_run(
+        &task_state,
+        "IndependentTask:AutoMusicGame:Album".to_string(),
+    )?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            "auto-music-game album live execution requested",
+        );
+        dispatch_desktop_notification_logged(
+            &app_root,
+            &config,
+            "album.start",
+            NotificationEventResult::Success,
+            "自动音游专辑启动",
+        );
+        let execution = execute_desktop_auto_music_game_album_live_plan(
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            Arc::clone(&script_cancellation),
+        );
+        match execution {
+            Ok(execution) => {
+                dispatch_desktop_notification_logged(
+                    &app_root,
+                    &config,
+                    "album.end",
+                    NotificationEventResult::Success,
+                    "自动音游专辑结束",
+                );
+                Ok(execution)
+            }
+            Err(error) => {
+                dispatch_desktop_notification_logged(
+                    &app_root,
+                    &config,
+                    "album.error",
+                    NotificationEventResult::Fail,
+                    &format!("自动音游专辑异常: {error}"),
+                );
+                Err(error)
+            }
+        }
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
 fn task_plan_auto_pathing(
     app: tauri::AppHandle,
     payload: DesktopAutoPathingTaskPayload,
@@ -2824,6 +3297,63 @@ fn task_plan_auto_pathing(
         task: execution.task_key,
         result,
     })
+}
+
+#[tauri::command]
+fn task_execute_auto_pathing_action_boundary(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+    payload: DesktopAutoPathingTaskPayload,
+) -> Result<DesktopAutoPathingActionBoundaryExecution, String> {
+    let script_cancellation = start_desktop_script_run(
+        &task_state,
+        format!("IndependentTask:AutoPathing:{}", payload.route),
+    )?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(
+            &app_root,
+            "INFO",
+            &format!(
+                "independent auto-pathing action boundary requested: {}",
+                payload.route
+            ),
+        );
+        let request =
+            IndependentTaskExecutionRequest::auto_pathing(payload.route.clone(), &app_root);
+        let execution =
+            execute_independent_task_with_cancel(&request, || script_cancellation.is_cancelled())
+                .map_err(|error| error.to_string())?;
+        let task = execution.task_key;
+        let IndependentTaskExecution::AutoPathingPlan(plan) = execution.execution else {
+            return Err("AutoPathing returned a non-pathing execution".to_string());
+        };
+
+        let game_window = find_desktop_game_window(&config);
+        let capture_size = desktop_common_job_capture_size(game_window.as_ref());
+        let boundary = execute_auto_pathing_action_boundary_with_live_executor(
+            &plan,
+            capture_size,
+            |common_job_plan| {
+                execute_desktop_common_job_live_plan(
+                    &config,
+                    game_window.as_ref(),
+                    Arc::clone(&script_cancellation),
+                    common_job_plan,
+                )
+            },
+        )
+        .map_err(|error| error.to_string())?;
+
+        Ok(DesktopAutoPathingActionBoundaryExecution {
+            task,
+            plan,
+            boundary,
+        })
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
 }
 
 fn desktop_auto_fight_request(
@@ -3055,7 +3585,13 @@ fn script_execute_group_project(
         project.js_script_settings_object = Some(settings);
     }
     let mut roots = ScriptGroupExecutionRoots::from_app_root(&app_root);
+    roots.app_version = Some(app.package_info().version.to_string());
     let config = read_desktop_config(&app, &app_root);
+    let farming_context = bgi_script::FarmingPlanExecutionContext::from_app_root(
+        &app_root,
+        config.other_config.farming_plan_config.clone(),
+    )
+    .with_app_version(app.package_info().version.to_string());
     let game_window = find_desktop_game_window(&config);
     configure_desktop_script_roots(game_window.as_ref(), &mut roots);
     let result = (|| {
@@ -3063,11 +3599,17 @@ fn script_execute_group_project(
             .dispatcher
             .lock()
             .map_err(|_| "task dispatcher state lock poisoned".to_string())?;
-        let outcome = if honor_run_count.unwrap_or(false) {
-            bgi_script_engine::execute_script_group_project_repeated_with_task_dispatcher_hooks_and_cancellation(
+        let storage = bgi_script::ExecutionRecordStorage::from_app_root(&app_root);
+        let execution_clock = desktop_execution_record_clock(&config)?;
+        let outcome =
+            bgi_script_engine::execute_script_group_project_with_execution_records_and_farming_plan_hooks_and_cancellation(
                 &roots,
                 &group,
                 project_index,
+                &storage,
+                execution_clock,
+                &farming_context,
+                honor_run_count.unwrap_or(false),
                 Some(&mut dispatcher),
                 Some(script_cancellation.as_ref()),
                 |host| {
@@ -3077,25 +3619,15 @@ fn script_execute_group_project(
                 |javascript| {
                     restore_html_mask_from_script_outcome(&app, javascript);
                     dispatch_script_html_mask_in_javascript_outcome(&app, javascript);
+                    execute_desktop_task_invocation_live_in_javascript_outcome(
+                        &app_root,
+                        &config,
+                        game_window.as_ref(),
+                        Arc::clone(&script_cancellation),
+                        javascript,
+                    );
                 },
-            )
-        } else {
-            bgi_script_engine::execute_script_group_project_with_task_dispatcher_hooks_and_cancellation(
-                &roots,
-                &group,
-                project_index,
-                Some(&mut dispatcher),
-                Some(script_cancellation.as_ref()),
-                |host| {
-                    host.html_mask_initial_state = take_html_mask_initial_state_for_script(&app);
-                    configure_desktop_script_host(&config, game_window.as_ref(), host);
-                },
-                |javascript| {
-                    restore_html_mask_from_script_outcome(&app, javascript);
-                    dispatch_script_html_mask_in_javascript_outcome(&app, javascript);
-                },
-            )
-        };
+            );
         let mut outcome = outcome.map_err(|error| error.to_string())?;
         dispatch_script_notifications_in_group_outcome(&config, &mut outcome);
         Ok(outcome)
@@ -3118,10 +3650,33 @@ fn script_execute_group(
         "INFO",
         &format!("script group execution requested: {group_name}"),
     );
-    let group_path = script_group_file_path(script_group_root(&app_root), &group_name);
+    let group_root = script_group_root(&app_root);
+    let group_path = script_group_file_path(&group_root, &group_name);
     let group = read_script_group_file(&group_path).map_err(|error| error.to_string())?;
+    let mut current_group_found = false;
+    let mut all_groups = read_script_groups(&group_root)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|file| {
+            if file.path == group_path {
+                current_group_found = true;
+                group.clone()
+            } else {
+                file.group
+            }
+        })
+        .collect::<Vec<_>>();
+    if !current_group_found {
+        all_groups.push(group.clone());
+    }
     let mut roots = ScriptGroupExecutionRoots::from_app_root(&app_root);
+    roots.app_version = Some(app.package_info().version.to_string());
     let config = read_desktop_config(&app, &app_root);
+    let farming_context = bgi_script::FarmingPlanExecutionContext::from_app_root(
+        &app_root,
+        config.other_config.farming_plan_config.clone(),
+    )
+    .with_app_version(app.package_info().version.to_string());
     let game_window = find_desktop_game_window(&config);
     configure_desktop_script_roots(game_window.as_ref(), &mut roots);
     let result = (|| {
@@ -3129,10 +3684,16 @@ fn script_execute_group(
             .dispatcher
             .lock()
             .map_err(|_| "task dispatcher state lock poisoned".to_string())?;
+        let storage = bgi_script::ExecutionRecordStorage::from_app_root(&app_root);
+        let execution_clock = desktop_execution_record_clock(&config)?;
         let mut outcome =
-            bgi_script_engine::execute_script_group_with_task_dispatcher_hooks_and_cancellation(
+            bgi_script_engine::execute_script_group_with_pre_execution_records_and_farming_plan_hooks_and_cancellation(
                 &roots,
                 &group,
+                &all_groups,
+                &storage,
+                execution_clock,
+                &farming_context,
                 Some(&mut dispatcher),
                 Some(script_cancellation.as_ref()),
                 |host| {
@@ -3142,8 +3703,16 @@ fn script_execute_group(
                 |javascript| {
                     restore_html_mask_from_script_outcome(&app, javascript);
                     dispatch_script_html_mask_in_javascript_outcome(&app, javascript);
+                    execute_desktop_task_invocation_live_in_javascript_outcome(
+                        &app_root,
+                        &config,
+                        game_window.as_ref(),
+                        Arc::clone(&script_cancellation),
+                        javascript,
+                    );
                 },
-            );
+            )
+            .map_err(|error| error.to_string())?;
         dispatch_script_notifications_in_group_outcome(&config, &mut outcome);
         Ok(outcome)
     })();
@@ -3181,7 +3750,13 @@ fn script_execute_group_from_project(
         project_name: project.name.clone(),
     };
     let mut roots = ScriptGroupExecutionRoots::from_app_root(&app_root);
+    roots.app_version = Some(app.package_info().version.to_string());
     let config = read_desktop_config(&app, &app_root);
+    let farming_context = bgi_script::FarmingPlanExecutionContext::from_app_root(
+        &app_root,
+        config.other_config.farming_plan_config.clone(),
+    )
+    .with_app_version(app.package_info().version.to_string());
     let game_window = find_desktop_game_window(&config);
     configure_desktop_script_roots(game_window.as_ref(), &mut roots);
     let result = (|| {
@@ -3189,11 +3764,16 @@ fn script_execute_group_from_project(
             .dispatcher
             .lock()
             .map_err(|_| "task dispatcher state lock poisoned".to_string())?;
+        let storage = bgi_script::ExecutionRecordStorage::from_app_root(&app_root);
+        let execution_clock = desktop_execution_record_clock(&config)?;
         let mut outcome =
-            bgi_script_engine::execute_script_group_from_resume_with_task_dispatcher_hooks_and_cancellation(
+            bgi_script_engine::execute_script_group_from_resume_with_execution_records_and_farming_plan_hooks_and_cancellation(
                 &roots,
                 &group,
                 &resume_pointer,
+                &storage,
+                execution_clock,
+                &farming_context,
                 Some(&mut dispatcher),
                 Some(script_cancellation.as_ref()),
                 |host| {
@@ -3203,8 +3783,16 @@ fn script_execute_group_from_project(
                 |javascript| {
                     restore_html_mask_from_script_outcome(&app, javascript);
                     dispatch_script_html_mask_in_javascript_outcome(&app, javascript);
+                    execute_desktop_task_invocation_live_in_javascript_outcome(
+                        &app_root,
+                        &config,
+                        game_window.as_ref(),
+                        Arc::clone(&script_cancellation),
+                        javascript,
+                    );
                 },
-            );
+            )
+            .map_err(|error| error.to_string())?;
         dispatch_script_notifications_in_group_outcome(&config, &mut outcome);
         Ok(outcome)
     })();
@@ -3433,6 +4021,4256 @@ fn configure_desktop_script_host(
         return;
     };
     host.capture_frame_source = Some(Arc::new(source));
+}
+
+fn execute_desktop_task_invocation_live_in_javascript_outcome(
+    app_root: &Path,
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    outcome: &mut JavaScriptExecutionOutcome,
+) {
+    if outcome.task_execution.mode != TaskInvocationExecutionMode::ExecuteReady {
+        return;
+    }
+
+    for result in outcome
+        .task_execution
+        .dispatcher
+        .iter_mut()
+        .chain(outcome.task_execution.genshin.iter_mut())
+    {
+        execute_desktop_common_job_live_result(
+            config,
+            game_window,
+            Arc::clone(&cancellation),
+            result,
+        );
+        execute_desktop_script_dispatcher_live_result(
+            config,
+            game_window,
+            Arc::clone(&cancellation),
+            result,
+        );
+        execute_desktop_independent_task_live_result(
+            app_root,
+            config,
+            game_window,
+            Arc::clone(&cancellation),
+            result,
+        );
+    }
+}
+
+fn execute_desktop_common_job_live_result(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    result: &mut TaskInvocationExecutionResult,
+) {
+    let Some(plan) = result.common_job_execution_plan.clone() else {
+        return;
+    };
+    let task_key = plan.task_key().to_string();
+    match execute_desktop_common_job_live_plan(config, game_window, cancellation, &plan) {
+        Ok(Some(report)) => {
+            let (task_name, completed, executed_steps, skipped_steps) =
+                desktop_common_job_live_summary(&report);
+            result.status = TaskInvocationExecutionStatus::Ready;
+            result.executed = true;
+            result.message = format!(
+                "{} live execution completed: completed={}, executed_steps={}, skipped_steps={}",
+                task_name, completed, executed_steps, skipped_steps
+            );
+            result.common_job_live_execution = Some(report);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            result.status = TaskInvocationExecutionStatus::Invalid;
+            result.executed = false;
+            result.message = format!("{task_key} live execution failed: {error}");
+            result.common_job_live_execution = None;
+        }
+    }
+}
+
+fn execute_desktop_script_dispatcher_live_result(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    result: &mut TaskInvocationExecutionResult,
+) {
+    let Some(plan) = result.script_dispatcher_execution_plan.clone() else {
+        return;
+    };
+    let task_key = plan.task_key().to_string();
+    match execute_desktop_script_dispatcher_live_plan(config, game_window, cancellation, &plan) {
+        Ok(Some(report)) => {
+            result.status = TaskInvocationExecutionStatus::Ready;
+            result.executed = true;
+            result.message = desktop_script_dispatcher_live_summary(&report);
+            result.script_dispatcher_live_execution = Some(report);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            result.status = TaskInvocationExecutionStatus::Invalid;
+            result.executed = false;
+            result.message = format!("{task_key} live execution failed: {error}");
+            result.script_dispatcher_live_execution = None;
+        }
+    }
+}
+
+fn desktop_script_dispatcher_live_summary(report: &ScriptDispatcherLiveExecutionReport) -> String {
+    match report {
+        ScriptDispatcherLiveExecutionReport::AutoCook(report) => {
+            let completed = report.status != AutoCookExecutionStatus::IterationLimitReached;
+            format!(
+                "AutoCook live execution completed: completed={}, status={:?}, frames_processed={}, space_press_count={}, white_confirm_click_count={}",
+                completed,
+                report.status,
+                report.state.frames_processed,
+                report.state.space_press_count,
+                report.state.white_confirm_click_count
+            )
+        }
+    }
+}
+
+fn execute_desktop_script_dispatcher_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    plan: &ScriptDispatcherExecutionPlan,
+) -> bgi_task::Result<Option<ScriptDispatcherLiveExecutionReport>> {
+    match plan {
+        ScriptDispatcherExecutionPlan::AutoCook(plan) => {
+            let Some(window) = game_window else {
+                return Err(TaskError::CommonJobExecution(
+                    "AutoCook live execution requires a detected game window".to_string(),
+                ));
+            };
+            execute_desktop_auto_cook_live(config, window, plan, cancellation)
+                .map(ScriptDispatcherLiveExecutionReport::AutoCook)
+                .map(Some)
+                .map_err(TaskError::CommonJobExecution)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn execute_desktop_common_job_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    plan: &CommonJobExecutionPlan,
+) -> bgi_task::Result<Option<CommonJobLiveExecutionReport>> {
+    if !matches!(
+        plan,
+        CommonJobExecutionPlan::ReturnMainUi(_)
+            | CommonJobExecutionPlan::SetTime(_)
+            | CommonJobExecutionPlan::ChooseTalkOption(_)
+            | CommonJobExecutionPlan::CheckRewards(_)
+            | CommonJobExecutionPlan::BlessingOfTheWelkinMoon(_)
+            | CommonJobExecutionPlan::ClaimBattlePassRewards(_)
+            | CommonJobExecutionPlan::ClaimEncounterPointsRewards(_)
+            | CommonJobExecutionPlan::ClaimMailRewards(_)
+            | CommonJobExecutionPlan::WonderlandCycle(_)
+            | CommonJobExecutionPlan::Relogin(_)
+            | CommonJobExecutionPlan::SwitchParty(_)
+            | CommonJobExecutionPlan::WalkToF(_)
+    ) {
+        return Ok(None);
+    }
+
+    let task_key = plan.task_key().to_string();
+    let Some(window) = game_window else {
+        return Err(TaskError::CommonJobExecution(format!(
+            "{task_key} live execution requires a detected game window"
+        )));
+    };
+
+    let execution = match plan {
+        CommonJobExecutionPlan::ReturnMainUi(plan) => {
+            execute_desktop_return_main_ui_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::ReturnMainUi)
+        }
+        CommonJobExecutionPlan::SetTime(plan) => {
+            execute_desktop_set_time_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::SetTime)
+        }
+        CommonJobExecutionPlan::ChooseTalkOption(plan) => {
+            execute_desktop_choose_talk_option_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::ChooseTalkOption)
+        }
+        CommonJobExecutionPlan::CheckRewards(plan) => {
+            execute_desktop_check_rewards_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::CheckRewards)
+        }
+        CommonJobExecutionPlan::BlessingOfTheWelkinMoon(plan) => {
+            execute_desktop_blessing_of_the_welkin_moon_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::BlessingOfTheWelkinMoon)
+        }
+        CommonJobExecutionPlan::ClaimBattlePassRewards(plan) => {
+            execute_desktop_claim_battle_pass_rewards_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::ClaimBattlePassRewards)
+        }
+        CommonJobExecutionPlan::ClaimEncounterPointsRewards(plan) => {
+            execute_desktop_claim_encounter_points_rewards_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::ClaimEncounterPointsRewards)
+        }
+        CommonJobExecutionPlan::ClaimMailRewards(plan) => {
+            execute_desktop_claim_mail_rewards_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::ClaimMailRewards)
+        }
+        CommonJobExecutionPlan::WonderlandCycle(plan) => {
+            execute_desktop_wonderland_cycle_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::WonderlandCycle)
+        }
+        CommonJobExecutionPlan::Relogin(plan) => {
+            execute_desktop_relogin_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::Relogin)
+        }
+        CommonJobExecutionPlan::SwitchParty(plan) => {
+            execute_desktop_switch_party_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::SwitchParty)
+        }
+        CommonJobExecutionPlan::WalkToF(plan) => {
+            execute_desktop_walk_to_f_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::WalkToF)
+        }
+        _ => return Ok(None),
+    };
+
+    execution.map(Some).map_err(TaskError::CommonJobExecution)
+}
+
+fn execute_desktop_independent_task_live_result(
+    app_root: &Path,
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    result: &mut TaskInvocationExecutionResult,
+) {
+    match execute_desktop_independent_task_live_plan(
+        app_root,
+        config,
+        game_window,
+        cancellation,
+        &result.plan,
+        result.status,
+    ) {
+        Ok(Some(report)) => {
+            let task_name = report.task_name();
+            let completed = report.completed();
+            let executed_steps = report.executed_steps();
+            let skipped_steps = report.skipped_steps();
+            result.status = TaskInvocationExecutionStatus::Ready;
+            result.executed = true;
+            result.message = format!(
+                "{task_name} live execution completed: completed={completed}, executed_steps={executed_steps}, skipped_steps={skipped_steps}"
+            );
+            result.independent_task_live_execution = Some(report);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let task_key = result
+                .plan
+                .task_key
+                .as_deref()
+                .unwrap_or("<unknown independent task>");
+            result.status = TaskInvocationExecutionStatus::Invalid;
+            result.executed = false;
+            result.message = format!("{task_key} live execution failed: {error}");
+            result.independent_task_live_execution = None;
+        }
+    }
+}
+
+fn execute_desktop_independent_task_live_plan(
+    app_root: &Path,
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    plan: &bgi_task::TaskInvocationPlan,
+    status: TaskInvocationExecutionStatus,
+) -> bgi_task::Result<Option<IndependentTaskLiveExecutionReport>> {
+    if status != TaskInvocationExecutionStatus::RustExecutionPlanReady {
+        return Ok(None);
+    }
+
+    match plan.task_key.as_deref() {
+        Some(USE_REDEEM_CODE_TASK_KEY) => {
+            let redeem_config = UseRedeemCodeExecutionConfig::from_value(plan.config.as_ref());
+            if redeem_config.codes.is_empty() {
+                return Err(TaskError::CommonJobExecution(
+                    "UseRedeemCode live execution requires at least one redeem code".to_string(),
+                ));
+            }
+
+            let (_plan, report) = execute_desktop_use_redeem_code_live_plan(
+                app_root,
+                config,
+                game_window,
+                redeem_config.codes,
+                cancellation,
+            )
+            .map_err(TaskError::CommonJobExecution)?;
+
+            Ok(Some(IndependentTaskLiveExecutionReport::UseRedeemCode(
+                report,
+            )))
+        }
+        Some(AUTO_OPEN_CHEST_TASK_KEY) => {
+            let execution = execute_desktop_auto_open_chest_live_plan(
+                app_root,
+                config,
+                game_window,
+                cancellation,
+            )
+            .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(IndependentTaskLiveExecutionReport::AutoOpenChest(
+                execution.result,
+            )))
+        }
+        Some(QUICK_BUY_TASK_KEY) => {
+            let execution = execute_desktop_quick_buy_live_plan(config, game_window, cancellation)
+                .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(IndependentTaskLiveExecutionReport::QuickBuy(
+                execution.result,
+            )))
+        }
+        Some(QUICK_SERENITEA_POT_TASK_KEY) => {
+            let execution =
+                execute_desktop_quick_serenitea_pot_live_plan(config, game_window, cancellation)
+                    .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(IndependentTaskLiveExecutionReport::QuickSereniteaPot(
+                execution.result,
+            )))
+        }
+        Some(AUTO_MUSIC_GAME_TASK_KEY) => {
+            match desktop_auto_music_game_route_mode(plan.config.as_ref())? {
+                DesktopAutoMusicGameRouteMode::Performance => {
+                    let execution = execute_desktop_auto_music_game_performance_live_plan(
+                        config,
+                        game_window,
+                        cancellation,
+                    )
+                    .map_err(TaskError::CommonJobExecution)?;
+                    Ok(Some(
+                        IndependentTaskLiveExecutionReport::AutoMusicGamePerformance(
+                            execution.result,
+                        ),
+                    ))
+                }
+                DesktopAutoMusicGameRouteMode::Album => {
+                    let execution = execute_desktop_auto_music_game_album_live_plan(
+                        config,
+                        game_window,
+                        cancellation,
+                    )
+                    .map_err(TaskError::CommonJobExecution)?;
+                    Ok(Some(
+                        IndependentTaskLiveExecutionReport::AutoMusicGameAlbum(execution.result),
+                    ))
+                }
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopAutoMusicGameRouteMode {
+    Performance,
+    Album,
+}
+
+fn desktop_auto_music_game_route_mode(
+    config: Option<&Value>,
+) -> bgi_task::Result<DesktopAutoMusicGameRouteMode> {
+    let raw_mode = config.and_then(|value| {
+        value
+            .get("mode")
+            .or_else(|| value.get("executionMode"))
+            .or_else(|| value.get("taskMode"))
+            .and_then(Value::as_str)
+    });
+    let Some(raw_mode) = raw_mode else {
+        return Ok(DesktopAutoMusicGameRouteMode::Performance);
+    };
+    match raw_mode.trim().to_ascii_lowercase().as_str() {
+        "" | "performance" | "manual" | "manualperformance" | "manual_performance" => {
+            Ok(DesktopAutoMusicGameRouteMode::Performance)
+        }
+        "album" | "autoalbum" | "auto_album" => Ok(DesktopAutoMusicGameRouteMode::Album),
+        other => Err(TaskError::CommonJobExecution(format!(
+            "unsupported AutoMusicGame live execution mode: {other}"
+        ))),
+    }
+}
+
+fn execute_desktop_auto_open_chest_live_plan(
+    app_root: &Path,
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopAutoOpenChestTaskExecution, String> {
+    let window = game_window
+        .ok_or_else(|| "AutoOpenChest live execution requires a detected game window".to_string())?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig {
+        capture_size,
+        asset_scale: desktop_auto_open_chest_asset_scale(capture_size),
+    })
+    .map_err(|error| error.to_string())?;
+    let result =
+        execute_desktop_auto_open_chest_live(app_root, config, window, &plan, cancellation)?;
+    Ok(DesktopAutoOpenChestTaskExecution {
+        task: plan.task_key,
+        result,
+    })
+}
+
+fn desktop_auto_open_chest_asset_scale(capture_size: VisionSize) -> f64 {
+    capture_size.width as f64 / AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH as f64
+}
+
+fn execute_desktop_auto_open_chest_live(
+    app_root: &Path,
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &AutoOpenChestExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<AutoOpenChestExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("AutoOpenChest live execution cancelled".to_string());
+    }
+    let metrics = window
+        .metrics
+        .ok_or_else(|| "AutoOpenChest live execution requires game window metrics".to_string())?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "AutoOpenChest live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err("AutoOpenChest live execution requires the BitBlt capture backend".to_string());
+    }
+
+    let capture_area = metrics.capture_area;
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings.clone())
+        .map_err(|error| error.to_string())?;
+    let global_input = bgi_script::GlobalInputHost::new_with_frame_source(
+        bgi_script::GameCaptureArea {
+            x: capture_area.left,
+            y: capture_area.top,
+            width: metrics.client_width,
+            height: metrics.client_height,
+        },
+        1.0,
+        Some(Arc::new(
+            DesktopGameCaptureFrameSource::new(window.handle, settings)
+                .map_err(|error| error.to_string())?,
+        )),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut runtime = DesktopAutoOpenChestRuntime::new(
+        app_root.to_path_buf(),
+        bgi_task::task_asset_root(),
+        global_input,
+        capture_size,
+        capture_source,
+        window.handle.0,
+        config.key_bindings_config.clone(),
+        cancellation,
+    )?;
+    execute_auto_open_chest_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopAutoOpenChestRuntime {
+    app_root: PathBuf,
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    global_input: bgi_script::GlobalInputHost,
+    capture_size: VisionSize,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    key_bindings_config: KeyBindingsConfig,
+    cancellation: Arc<InputCancellationToken>,
+    started_at: Instant,
+}
+
+impl DesktopAutoOpenChestRuntime {
+    fn new(
+        app_root: PathBuf,
+        template_root: PathBuf,
+        mut global_input: bgi_script::GlobalInputHost,
+        capture_size: VisionSize,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        key_bindings_config: KeyBindingsConfig,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Result<Self, String> {
+        global_input
+            .set_game_metrics(capture_size.width, capture_size.height, 1.0)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            app_root,
+            template_root,
+            global_input,
+            capture_size,
+            capture_source,
+            window_handle,
+            key_bindings_config,
+            cancellation,
+            started_at: Instant::now(),
+        })
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::VisionPlan(
+                "AutoOpenChest live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_image_region(&self) -> bgi_task::Result<ImageRegion> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let image = bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        Ok(ImageRegion::capture(image))
+    }
+
+    fn locate_region_in_capture(
+        &self,
+        capture: &ImageRegion,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<Option<Region>> {
+        let region = capture
+            .find(&self.vision_backend, &locator.recognition_object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoOpenChest template lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist().then_some(region))
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn execute_events(&self, events: Vec<bgi_input::InputEvent>) -> bgi_task::Result<()> {
+        bgi_script::GlobalInputExecution::execute_events(
+            events,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn sleep_with_cancellation(&self, duration_ms: u64) {
+        let deadline = Instant::now() + Duration::from_millis(duration_ms);
+        while Instant::now() < deadline {
+            if self.cancellation.is_cancelled() {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(25)));
+        }
+    }
+}
+
+impl AutoOpenChestRuntime for DesktopAutoOpenChestRuntime {
+    fn elapsed_auto_open_chest_ms(&mut self) -> bgi_task::Result<u64> {
+        Ok(self.started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64)
+    }
+
+    fn is_auto_open_chest_cancelled(&mut self) -> bgi_task::Result<bool> {
+        Ok(self.cancellation.is_cancelled())
+    }
+
+    fn observe_auto_open_chest(
+        &mut self,
+        plan: &AutoOpenChestExecutionPlan,
+    ) -> bgi_task::Result<AutoOpenChestObservation> {
+        let capture = self.capture_image_region()?;
+        let chest_f_icon_exists = self
+            .locate_region_in_capture(&capture, &plan.locators.chest_f_icon)?
+            .is_some();
+        let chest_icon = self
+            .locate_region_in_capture(&capture, &plan.locators.chest_icon)?
+            .map(|region| region.rect);
+        let flower_f_icon_exists = self
+            .locate_region_in_capture(&capture, &plan.locators.flower_f_icon)?
+            .is_some();
+
+        Ok(AutoOpenChestObservation {
+            initial_chest_f_icon_exists: chest_f_icon_exists,
+            chest_icon,
+            chest_f_icon_exists,
+            flower_f_icon_exists,
+            capture_width: self.capture_size.width,
+        })
+    }
+
+    fn dispatch_auto_open_chest_action(
+        &mut self,
+        action: &AutoOpenChestAction,
+    ) -> bgi_task::Result<()> {
+        match action {
+            AutoOpenChestAction::GenshinAction { action, press } => {
+                let action_type = match press {
+                    AutoOpenChestActionPress::KeyPress => KeyActionType::KeyPress,
+                    AutoOpenChestActionPress::KeyDown => KeyActionType::KeyDown,
+                    AutoOpenChestActionPress::KeyUp => KeyActionType::KeyUp,
+                };
+                let events =
+                    input_events_for_action(&self.key_bindings_config, *action, action_type)
+                        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+                self.execute_events(events)
+            }
+            AutoOpenChestAction::MouseMoveBy { delta_x, delta_y } => {
+                self.execute_sequence(self.global_input.move_mouse_by(*delta_x, *delta_y))
+            }
+            AutoOpenChestAction::MouseMiddleClick => {
+                self.execute_sequence(self.global_input.middle_button_click())
+            }
+            AutoOpenChestAction::Delay { duration_ms } => {
+                self.sleep_with_cancellation(*duration_ms);
+                Ok(())
+            }
+            AutoOpenChestAction::Log { message } => {
+                append_desktop_log(&self.app_root, "INFO", message);
+                Ok(())
+            }
+        }
+    }
+}
+
+fn execute_desktop_quick_buy_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopQuickBuyTaskExecution, String> {
+    let window = game_window
+        .ok_or_else(|| "QuickBuy live execution requires a detected game window".to_string())?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_quick_buy(QuickBuyExecutionConfig { capture_size })
+        .map_err(|error| error.to_string())?;
+    let result = execute_desktop_quick_buy_live(config, window, &plan, cancellation)?;
+    Ok(DesktopQuickBuyTaskExecution {
+        task: plan.task_key,
+        result,
+    })
+}
+
+fn execute_desktop_quick_buy_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &QuickBuyExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<QuickBuyExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("QuickBuy live execution cancelled".to_string());
+    }
+    let metrics = window
+        .metrics
+        .ok_or_else(|| "QuickBuy live execution requires game window metrics".to_string())?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "QuickBuy live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err("QuickBuy live execution requires the BitBlt capture backend".to_string());
+    }
+
+    let capture_area = metrics.capture_area;
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings.clone())
+        .map_err(|error| error.to_string())?;
+    let global_input = bgi_script::GlobalInputHost::new_with_frame_source(
+        bgi_script::GameCaptureArea {
+            x: capture_area.left,
+            y: capture_area.top,
+            width: metrics.client_width,
+            height: metrics.client_height,
+        },
+        1.0,
+        Some(Arc::new(
+            DesktopGameCaptureFrameSource::new(window.handle, settings)
+                .map_err(|error| error.to_string())?,
+        )),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut runtime = DesktopQuickBuyRuntime::new(
+        bgi_task::task_asset_root(),
+        global_input,
+        capture_size,
+        capture_source,
+        window.handle.0,
+        cancellation,
+    )?;
+    execute_quick_buy_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopQuickBuyRuntime {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    global_input: bgi_script::GlobalInputHost,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopQuickBuyRuntime {
+    fn new(
+        template_root: PathBuf,
+        mut global_input: bgi_script::GlobalInputHost,
+        capture_size: VisionSize,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Result<Self, String> {
+        global_input
+            .set_game_metrics(capture_size.width, capture_size.height, 1.0)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            global_input,
+            capture_source,
+            window_handle,
+            cancellation,
+        })
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::VisionPlan(
+                "QuickBuy live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_image_region(&self) -> bgi_task::Result<ImageRegion> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let image = bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        Ok(ImageRegion::capture(image))
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn execute_events(&self, events: Vec<bgi_input::InputEvent>) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute_events(
+            events,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+}
+
+impl QuickBuyRuntime for DesktopQuickBuyRuntime {
+    fn quick_buy_preflight(&mut self, _rule: &QuickBuyPreflightRule) -> bgi_task::Result<bool> {
+        self.ensure_not_cancelled()?;
+        Ok(true)
+    }
+
+    fn locate_quick_buy_template(&mut self, locator: &BvLocatorPlan) -> bgi_task::Result<bool> {
+        let region = self
+            .capture_image_region()?
+            .find(&self.vision_backend, &locator.recognition_object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "QuickBuy template lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist())
+    }
+
+    fn move_quick_buy_cursor(&mut self, point: &QuickBuyScreenPoint) -> bgi_task::Result<()> {
+        self.execute_sequence(
+            self.global_input
+                .move_mouse_to(point.screen_x.round() as i32, point.screen_y.round() as i32)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+        )
+    }
+
+    fn execute_quick_buy_page_command(&mut self, command: &BvPageCommand) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        match command {
+            BvPageCommand::Wait { milliseconds } => {
+                std::thread::sleep(Duration::from_millis(u64::from(*milliseconds)));
+                Ok(())
+            }
+            BvPageCommand::Click1080p {
+                screen_x, screen_y, ..
+            } => self.execute_sequence(
+                self.global_input
+                    .click(screen_x.round() as i32, screen_y.round() as i32)
+                    .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+            ),
+            other => Err(TaskError::VisionPlan(format!(
+                "QuickBuy desktop runtime does not support page command {other:?}"
+            ))),
+        }
+    }
+
+    fn dispatch_quick_buy_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<()> {
+        let mut mapped = Vec::with_capacity(events.len());
+        for event in events {
+            match event {
+                bgi_input::InputEvent::MouseMoveAbsolute { x, y, .. } => {
+                    mapped.extend_from_slice(
+                        self.global_input
+                            .move_mouse_to(*x, *y)
+                            .map_err(|error| TaskError::VisionPlan(error.to_string()))?
+                            .events(),
+                    );
+                }
+                event => mapped.push(*event),
+            }
+        }
+        self.execute_events(mapped)
+    }
+
+    fn click_quick_buy_target(&mut self, target: &QuickBuyClickTarget) -> bgi_task::Result<()> {
+        let (x, y) = quick_buy_target_capture_point(target);
+        self.execute_sequence(
+            self.global_input
+                .click(x, y)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+        )
+    }
+
+    fn clear_quick_buy_vision_drawings(&mut self) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()
+    }
+}
+
+fn quick_buy_target_capture_point(target: &QuickBuyClickTarget) -> (i32, i32) {
+    match target {
+        QuickBuyClickTarget::Fixed1080p(point) => {
+            (point.screen_x.round() as i32, point.screen_y.round() as i32)
+        }
+        QuickBuyClickTarget::BottomRightOffset {
+            screen_x, screen_y, ..
+        } => (screen_x.round() as i32, screen_y.round() as i32),
+    }
+}
+
+fn execute_desktop_quick_serenitea_pot_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopQuickSereniteaPotTaskExecution, String> {
+    let window = game_window.ok_or_else(|| {
+        "QuickSereniteaPot live execution requires a detected game window".to_string()
+    })?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig { capture_size })
+        .map_err(|error| error.to_string())?;
+    let result = execute_desktop_quick_serenitea_pot_live(config, window, &plan, cancellation)?;
+    Ok(DesktopQuickSereniteaPotTaskExecution {
+        task: plan.task_key,
+        result,
+    })
+}
+
+fn execute_desktop_quick_serenitea_pot_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &QuickSereniteaPotExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<QuickSereniteaPotExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("QuickSereniteaPot live execution cancelled".to_string());
+    }
+    let metrics = window.metrics.ok_or_else(|| {
+        "QuickSereniteaPot live execution requires game window metrics".to_string()
+    })?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "QuickSereniteaPot live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err(
+            "QuickSereniteaPot live execution requires the BitBlt capture backend".to_string(),
+        );
+    }
+
+    let capture_area = metrics.capture_area;
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings.clone())
+        .map_err(|error| error.to_string())?;
+    let global_input = bgi_script::GlobalInputHost::new_with_frame_source(
+        bgi_script::GameCaptureArea {
+            x: capture_area.left,
+            y: capture_area.top,
+            width: metrics.client_width,
+            height: metrics.client_height,
+        },
+        1.0,
+        Some(Arc::new(
+            DesktopGameCaptureFrameSource::new(window.handle, settings)
+                .map_err(|error| error.to_string())?,
+        )),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut runtime = DesktopQuickSereniteaPotRuntime::new(
+        bgi_task::task_asset_root(),
+        global_input,
+        capture_size,
+        capture_source,
+        window.handle.0,
+        config.key_bindings_config.clone(),
+        cancellation,
+    )?;
+    execute_quick_serenitea_pot_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopQuickSereniteaPotRuntime {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    global_input: bgi_script::GlobalInputHost,
+    capture_size: VisionSize,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    key_bindings_config: KeyBindingsConfig,
+    main_ui_locator: BvLocatorPlan,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopQuickSereniteaPotRuntime {
+    fn new(
+        template_root: PathBuf,
+        mut global_input: bgi_script::GlobalInputHost,
+        capture_size: VisionSize,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        key_bindings_config: KeyBindingsConfig,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Result<Self, String> {
+        global_input
+            .set_game_metrics(capture_size.width, capture_size.height, 1.0)
+            .map_err(|error| error.to_string())?;
+        let return_main_ui_plan =
+            bgi_task::plan_return_main_ui(capture_size, 1).map_err(|error| error.to_string())?;
+        let main_ui_locator = return_main_ui_plan
+            .steps
+            .into_iter()
+            .find_map(|step| match step.action {
+                CommonJobStepAction::Locator { locator }
+                    if step.label.contains("already in main UI") =>
+                {
+                    Some(locator)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                "QuickSereniteaPot live execution could not build main-UI locator".to_string()
+            })?;
+        Ok(Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            global_input,
+            capture_size,
+            capture_source,
+            window_handle,
+            key_bindings_config,
+            main_ui_locator,
+            cancellation,
+        })
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::VisionPlan(
+                "QuickSereniteaPot live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_image_region(&self) -> bgi_task::Result<ImageRegion> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let image = bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        Ok(ImageRegion::capture(image))
+    }
+
+    fn locate_region_once(&self, locator: &BvLocatorPlan) -> bgi_task::Result<Option<Region>> {
+        let region = self
+            .capture_image_region()?
+            .find(&self.vision_backend, &locator.recognition_object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "QuickSereniteaPot template lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist().then_some(region))
+    }
+
+    fn wait_for_locator(&self, locator: &BvLocatorPlan) -> bgi_task::Result<Option<Region>> {
+        for attempt in 0..locator.retry_count.max(1) {
+            self.ensure_not_cancelled()?;
+            if let Some(region) = self.locate_region_once(locator)? {
+                return Ok(Some(region));
+            }
+            if attempt + 1 < locator.retry_count.max(1) {
+                std::thread::sleep(Duration::from_millis(u64::from(locator.retry_interval_ms)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn wait_for_locator_to_disappear(&self, locator: &BvLocatorPlan) -> bgi_task::Result<bool> {
+        for attempt in 0..locator.retry_count.max(1) {
+            self.ensure_not_cancelled()?;
+            if self.locate_region_once(locator)?.is_none() {
+                return Ok(true);
+            }
+            if attempt + 1 < locator.retry_count.max(1) {
+                std::thread::sleep(Duration::from_millis(u64::from(locator.retry_interval_ms)));
+            }
+        }
+        Ok(false)
+    }
+
+    fn click_capture_point(&self, x: i32, y: i32) -> bgi_task::Result<()> {
+        self.execute_sequence(
+            self.global_input
+                .click(x, y)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+        )
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn execute_events(&self, events: Vec<bgi_input::InputEvent>) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute_events(
+            events,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn detect_main_ui(&self) -> bgi_task::Result<bool> {
+        Ok(self.wait_for_locator(&self.main_ui_locator)?.is_some())
+    }
+}
+
+impl QuickSereniteaPotRuntime for DesktopQuickSereniteaPotRuntime {
+    fn quick_serenitea_pot_preflight(
+        &mut self,
+        _rule: &QuickSereniteaPotPreflightRule,
+    ) -> bgi_task::Result<bool> {
+        self.ensure_not_cancelled()?;
+        Ok(true)
+    }
+
+    fn dispatch_quick_serenitea_pot_action(
+        &mut self,
+        action: GenshinAction,
+    ) -> bgi_task::Result<()> {
+        let events =
+            input_events_for_action(&self.key_bindings_config, action, KeyActionType::KeyPress)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        self.execute_events(events)
+    }
+
+    fn locate_quick_serenitea_pot_template(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<bool> {
+        match locator.operation {
+            BvLocatorOperation::WaitForDisappear => self.wait_for_locator_to_disappear(locator),
+            BvLocatorOperation::ClickUntilDisappears => {
+                let mut disappeared = false;
+                for attempt in 0..locator.retry_count.max(1) {
+                    let Some(region) = self.locate_region_once(locator)? else {
+                        disappeared = true;
+                        break;
+                    };
+                    let center = region.rect.center();
+                    self.click_capture_point(center.x, center.y)?;
+                    if attempt + 1 < locator.retry_count.max(1) {
+                        std::thread::sleep(Duration::from_millis(u64::from(
+                            locator.retry_interval_ms,
+                        )));
+                    }
+                }
+                Ok(disappeared)
+            }
+            BvLocatorOperation::Click | BvLocatorOperation::DoubleClick => {
+                let Some(region) = self.wait_for_locator(locator)? else {
+                    return Ok(false);
+                };
+                let center = region.rect.center();
+                self.click_capture_point(center.x, center.y)?;
+                if locator.operation == BvLocatorOperation::DoubleClick {
+                    self.click_capture_point(center.x, center.y)?;
+                }
+                Ok(true)
+            }
+            BvLocatorOperation::FindAll
+            | BvLocatorOperation::IsExist
+            | BvLocatorOperation::WaitFor => Ok(self.wait_for_locator(locator)?.is_some()),
+        }
+    }
+
+    fn click_quick_serenitea_pot_point(
+        &mut self,
+        point: &QuickSereniteaPotScreenPoint,
+    ) -> bgi_task::Result<()> {
+        let (x, y) = quick_serenitea_pot_screen_point_capture_point(point);
+        self.click_capture_point(x, y)
+    }
+
+    fn execute_quick_serenitea_pot_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        match command {
+            BvPageCommand::Screenshot { size } if *size == self.capture_size => {
+                self.capture_image_region()?;
+                Ok(())
+            }
+            BvPageCommand::Screenshot { size } => Err(TaskError::VisionPlan(format!(
+                "QuickSereniteaPot screenshot command expects {}x{} but runtime capture is {}x{}",
+                size.width, size.height, self.capture_size.width, self.capture_size.height
+            ))),
+            BvPageCommand::Wait { milliseconds } => {
+                std::thread::sleep(Duration::from_millis(u64::from(*milliseconds)));
+                Ok(())
+            }
+            BvPageCommand::Click1080p {
+                screen_x, screen_y, ..
+            } => self.click_capture_point(screen_x.round() as i32, screen_y.round() as i32),
+            BvPageCommand::Ocr { .. } => Err(TaskError::VisionPlan(
+                "QuickSereniteaPot desktop runtime cannot run OCR commands yet".to_string(),
+            )),
+        }
+    }
+
+    fn verify_quick_serenitea_pot_placement(
+        &mut self,
+        rule: &QuickSereniteaPotPlacementRule,
+    ) -> bgi_task::Result<QuickSereniteaPotPlacementOutcome> {
+        for _ in 0..rule.main_ui_success_checks {
+            if self.detect_main_ui()? {
+                return Ok(QuickSereniteaPotPlacementOutcome {
+                    main_ui_reached: true,
+                    big_map_detected: false,
+                });
+            }
+        }
+        for attempt in 0..rule.big_map_reopen_attempts {
+            self.dispatch_quick_serenitea_pot_action(rule.reopen_inventory_action)?;
+            if attempt + 1 < rule.big_map_reopen_attempts {
+                std::thread::sleep(Duration::from_millis(u64::from(
+                    rule.find_pot_retry_interval_ms,
+                )));
+            }
+        }
+        Ok(QuickSereniteaPotPlacementOutcome {
+            main_ui_reached: false,
+            big_map_detected: false,
+        })
+    }
+
+    fn click_quick_serenitea_pot_white_confirm(
+        &mut self,
+        locator: &BvLocatorPlan,
+        pre_click_delay_ms: u32,
+        _missing_is_ok: bool,
+    ) -> bgi_task::Result<bool> {
+        std::thread::sleep(Duration::from_millis(u64::from(pre_click_delay_ms)));
+        self.locate_quick_serenitea_pot_template(locator)
+    }
+
+    fn find_quick_serenitea_pot_interaction(
+        &mut self,
+        _rule: &QuickSereniteaPotInteractionRule,
+    ) -> bgi_task::Result<QuickSereniteaPotInteractionOutcome> {
+        self.ensure_not_cancelled()?;
+        Ok(QuickSereniteaPotInteractionOutcome::Missing)
+    }
+
+    fn clear_quick_serenitea_pot_vision_drawings(&mut self) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()
+    }
+}
+
+fn quick_serenitea_pot_screen_point_capture_point(
+    point: &QuickSereniteaPotScreenPoint,
+) -> (i32, i32) {
+    (point.screen_x.round() as i32, point.screen_y.round() as i32)
+}
+
+fn execute_desktop_auto_cook_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopAutoCookTaskExecution, String> {
+    let window = game_window
+        .ok_or_else(|| "AutoCook live execution requires a detected game window".to_string())?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_auto_cook(AutoCookExecutionConfig {
+        capture_size,
+        asset_scale: desktop_auto_cook_asset_scale(capture_size),
+        auto_cook_config: config.auto_cook_config.clone(),
+    });
+    let task = plan.task_key.clone();
+    let result = execute_desktop_auto_cook_live(config, window, &plan, cancellation)?;
+    Ok(DesktopAutoCookTaskExecution { task, result })
+}
+
+fn execute_desktop_auto_cook_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &AutoCookExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<AutoCookExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("AutoCook live execution cancelled".to_string());
+    }
+    let metrics = window
+        .metrics
+        .ok_or_else(|| "AutoCook live execution requires game window metrics".to_string())?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "AutoCook live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err("AutoCook live execution requires the BitBlt capture backend".to_string());
+    }
+
+    let capture_area = metrics.capture_area;
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings.clone())
+        .map_err(|error| error.to_string())?;
+    let global_input = bgi_script::GlobalInputHost::new_with_frame_source(
+        bgi_script::GameCaptureArea {
+            x: capture_area.left,
+            y: capture_area.top,
+            width: metrics.client_width,
+            height: metrics.client_height,
+        },
+        1.0,
+        Some(Arc::new(
+            DesktopGameCaptureFrameSource::new(window.handle, settings)
+                .map_err(|error| error.to_string())?,
+        )),
+    )
+    .map_err(|error| error.to_string())?;
+    let mut runtime = DesktopAutoCookRuntime::new(
+        bgi_task::task_asset_root(),
+        global_input,
+        capture_size,
+        capture_source,
+        window.handle.0,
+        plan.clone(),
+        cancellation,
+    )?;
+    execute_auto_cook_plan(plan, &mut runtime, 0).map_err(|error| error.to_string())
+}
+
+struct DesktopAutoCookRuntime {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    global_input: bgi_script::GlobalInputHost,
+    capture_size: VisionSize,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    plan: AutoCookExecutionPlan,
+    last_white_confirm_region: Option<Region>,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopAutoCookRuntime {
+    fn new(
+        template_root: PathBuf,
+        mut global_input: bgi_script::GlobalInputHost,
+        capture_size: VisionSize,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        plan: AutoCookExecutionPlan,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Result<Self, String> {
+        global_input
+            .set_game_metrics(capture_size.width, capture_size.height, 1.0)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            global_input,
+            capture_size,
+            capture_source,
+            window_handle,
+            plan,
+            last_white_confirm_region: None,
+            cancellation,
+        })
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::VisionPlan(
+                "AutoCook live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_bgr_image(&self) -> bgi_task::Result<BgrImage> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn locate_auto_cook_template(
+        &self,
+        image: &BgrImage,
+        locator: &AutoCookTemplateLocator,
+    ) -> bgi_task::Result<Option<Region>> {
+        let object = desktop_auto_cook_template_object(locator, self.capture_size)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let region = self
+            .vision_backend
+            .find(&image.pixels, image.size, &object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoCook template lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist().then_some(region))
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn sleep_loop_with_cancellation(&self, duration_ms: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(duration_ms);
+        while !self.cancellation.is_cancelled() {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep((deadline - now).min(Duration::from_millis(50)));
+        }
+    }
+}
+
+impl AutoCookRuntime for DesktopAutoCookRuntime {
+    fn next_auto_cook_frame(&mut self) -> bgi_task::Result<Option<AutoCookRuntimeFrame>> {
+        if self.cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        let image = self.capture_bgr_image()?;
+        let in_cook_ui = self
+            .locate_auto_cook_template(&image, &self.plan.locators.cook_icon)?
+            .is_some();
+        let recover_button_detected = if in_cook_ui {
+            self.locate_auto_cook_template(&image, &self.plan.locators.white_recover_button)?
+                .is_some()
+        } else {
+            false
+        };
+        let white_confirm_region = if in_cook_ui {
+            self.locate_auto_cook_template(&image, &self.plan.locators.white_confirm_button)?
+        } else {
+            None
+        };
+        let white_confirm_button_detected = white_confirm_region.is_some();
+        self.last_white_confirm_region = white_confirm_region;
+        let target_color_count = if in_cook_ui {
+            count_auto_cook_target_color(
+                &image,
+                self.plan.cook_bar_rule.scaled_cook_color_rect,
+                self.plan.cook_bar_rule.target_rgb,
+            )?
+        } else {
+            0
+        };
+
+        Ok(Some(AutoCookRuntimeFrame {
+            now_ms: desktop_now_millis(),
+            in_cook_ui,
+            recover_button_detected,
+            white_confirm_button_detected,
+            target_color_count,
+        }))
+    }
+
+    fn delay_auto_cook_white_confirm_pre_click(
+        &mut self,
+        duration_ms: u64,
+    ) -> bgi_task::Result<()> {
+        self.sleep_loop_with_cancellation(duration_ms);
+        self.ensure_not_cancelled()
+    }
+
+    fn click_auto_cook_white_confirm(&mut self) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        let Some(region) = &self.last_white_confirm_region else {
+            return Ok(());
+        };
+        let center = region.rect.center();
+        self.execute_sequence(
+            self.global_input
+                .click(center.x, center.y)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+        )
+    }
+
+    fn press_auto_cook_key(&mut self, vk: u16) -> bgi_task::Result<()> {
+        self.execute_sequence(InputSequence::new().key_press(vk))
+    }
+
+    fn delay_auto_cook_loop(&mut self, duration_ms: u64) -> bgi_task::Result<()> {
+        self.sleep_loop_with_cancellation(duration_ms);
+        Ok(())
+    }
+}
+
+fn desktop_auto_cook_template_object(
+    locator: &AutoCookTemplateLocator,
+    capture_size: VisionSize,
+) -> bgi_vision::Result<bgi_vision::RecognitionObject> {
+    let image = BvImage::new(&locator.asset)?;
+    let mut object =
+        image.to_recognition_object_for_screen(locator.roi, locator.threshold, capture_size)?;
+    object.template.mode = locator.match_mode;
+    object.template.use_3_channels = locator.use_3_channels;
+    object.validate()?;
+    Ok(object)
+}
+
+fn desktop_auto_cook_asset_scale(capture_size: VisionSize) -> f64 {
+    capture_size.width as f64 / 1920.0
+}
+
+fn desktop_now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn execute_desktop_auto_music_game_performance_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopAutoMusicGamePerformanceExecution, String> {
+    let window = game_window.ok_or_else(|| {
+        "AutoMusicGame performance live execution requires a detected game window".to_string()
+    })?;
+    let metrics = window.metrics.ok_or_else(|| {
+        "AutoMusicGame performance live execution requires game window metrics".to_string()
+    })?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig {
+        capture_size,
+        asset_scale: desktop_auto_music_game_asset_scale(capture_size),
+        auto_music_game_config: config.auto_music_game_config.clone(),
+    });
+    let task = plan.task_key.clone();
+    let result = execute_desktop_auto_music_game_performance_live(window, &plan, cancellation)?;
+    Ok(DesktopAutoMusicGamePerformanceExecution { task, result })
+}
+
+fn execute_desktop_auto_music_game_performance_live(
+    window: &GameWindowMatch,
+    plan: &AutoMusicGameExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<AutoMusicPerformanceReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("AutoMusicGame performance live execution cancelled".to_string());
+    }
+    let metrics = window.metrics.ok_or_else(|| {
+        "AutoMusicGame performance live execution requires game window metrics".to_string()
+    })?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "AutoMusicGame performance live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    if metrics.client_width.saturating_mul(9) != metrics.client_height.saturating_mul(16) {
+        return Err(format!(
+            "AutoMusicGame performance live execution requires a 16:9 game window; got {}x{}",
+            metrics.client_width, metrics.client_height
+        ));
+    }
+
+    let lane_points = plan
+        .key_lanes
+        .iter()
+        .map(|lane| {
+            let (x, y) = desktop_auto_music_lane_capture_point(lane, plan.asset_scale);
+            (lane.key.clone(), x, y)
+        })
+        .collect();
+    let mut runtime =
+        DesktopAutoMusicPerformanceRuntime::new(window.handle.0, lane_points, cancellation);
+    execute_auto_music_performance_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopAutoMusicPerformanceRuntime {
+    window_handle: isize,
+    lane_points: Vec<(String, i32, i32)>,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopAutoMusicPerformanceRuntime {
+    fn new(
+        window_handle: isize,
+        lane_points: Vec<(String, i32, i32)>,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            window_handle,
+            lane_points,
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "AutoMusicGame performance live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::CommonJobExecution(error.to_string()))
+    }
+
+    fn key_sequence(&self, key: &str, down: bool) -> bgi_task::Result<InputSequence> {
+        let vk = bgi_script::virtual_key_code_for_script(key)
+            .map_err(|error| TaskError::CommonJobExecution(error.to_string()))?;
+        Ok(if down {
+            InputSequence::new().key_down(vk)
+        } else {
+            InputSequence::new().key_up(vk)
+        })
+    }
+
+    fn sleep_loop_with_cancellation(&self, duration_ms: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(duration_ms);
+        while !self.cancellation.is_cancelled() {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep((deadline - now).min(Duration::from_millis(5)));
+        }
+    }
+}
+
+impl AutoMusicPerformanceRuntime for DesktopAutoMusicPerformanceRuntime {
+    fn is_auto_music_performance_cancelled(&mut self) -> bgi_task::Result<bool> {
+        Ok(self.cancellation.is_cancelled())
+    }
+
+    fn next_auto_music_performance_frame(
+        &mut self,
+    ) -> bgi_task::Result<Option<AutoMusicPerformanceFrame>> {
+        if self.cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        let lane_blues = self
+            .lane_points
+            .iter()
+            .map(|(key, x, y)| {
+                let blue = desktop_auto_music_sample_blue(self.window_handle, *x, *y)
+                    .map_err(TaskError::VisionPlan)?;
+                Ok(AutoMusicLaneBlueSample {
+                    key: key.clone(),
+                    blue,
+                })
+            })
+            .collect::<bgi_task::Result<Vec<_>>>()?;
+        Ok(Some(AutoMusicPerformanceFrame { lane_blues }))
+    }
+
+    fn auto_music_key_down(&mut self, key: &str) -> bgi_task::Result<()> {
+        let sequence = self.key_sequence(key, true)?;
+        self.execute_sequence(sequence)
+    }
+
+    fn auto_music_key_up(&mut self, key: &str) -> bgi_task::Result<()> {
+        let sequence = self.key_sequence(key, false)?;
+        self.execute_sequence(sequence)
+    }
+
+    fn delay_auto_music_poll(&mut self, duration_ms: u64) -> bgi_task::Result<()> {
+        self.sleep_loop_with_cancellation(duration_ms);
+        Ok(())
+    }
+
+    fn release_all_auto_music_keys(
+        &mut self,
+        _held_keys_before_release: &[String],
+    ) -> bgi_task::Result<()> {
+        bgi_script::GlobalInputExecution::execute(
+            bgi_input::release_all_keys_sequence(),
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::CommonJobExecution(error.to_string()))
+    }
+}
+
+fn desktop_auto_music_game_asset_scale(capture_size: VisionSize) -> f64 {
+    capture_size.width as f64 / 1920.0
+}
+
+fn desktop_auto_music_lane_capture_point(
+    lane: &AutoMusicGameKeyLane,
+    asset_scale: f64,
+) -> (i32, i32) {
+    (
+        (lane.x_1080p as f64 * asset_scale) as i32,
+        (lane.y_1080p as f64 * asset_scale) as i32,
+    )
+}
+
+#[cfg(windows)]
+fn desktop_auto_music_sample_blue(window_handle: isize, x: i32, y: i32) -> Result<u8, String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+
+    let hwnd = HWND(window_handle as *mut std::ffi::c_void);
+    unsafe {
+        let hdc = GetDC(Some(hwnd));
+        if hdc.is_invalid() {
+            return Err("AutoMusicGame GetDC failed".to_string());
+        }
+        let color = GetPixel(hdc, x, y);
+        let _ = ReleaseDC(Some(hwnd), hdc);
+        if color.0 == u32::MAX {
+            return Err(format!("AutoMusicGame GetPixel failed at ({x}, {y})"));
+        }
+        Ok(((color.0 >> 16) & 0xff) as u8)
+    }
+}
+
+#[cfg(not(windows))]
+fn desktop_auto_music_sample_blue(_window_handle: isize, _x: i32, _y: i32) -> Result<u8, String> {
+    Err("AutoMusicGame performance live execution requires Windows GDI GetPixel".to_string())
+}
+
+const AUTO_MUSIC_ALBUM_WHITE_CONFIRM_PRE_CLICK_MS: u64 = 500;
+const AUTO_MUSIC_ALBUM_PAGE_WAIT_ATTEMPTS: usize = 5;
+const AUTO_MUSIC_ALBUM_PAGE_WAIT_INTERVAL_MS: u64 = 1_000;
+const AUTO_MUSIC_ALBUM_ALL_SONGS_OCR_WIDTH_RATIO: f64 = 0.16;
+
+fn execute_desktop_auto_music_game_album_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopAutoMusicGameAlbumExecution, String> {
+    let window = game_window.ok_or_else(|| {
+        "AutoMusicGame album live execution requires a detected game window".to_string()
+    })?;
+    let metrics = window.metrics.ok_or_else(|| {
+        "AutoMusicGame album live execution requires game window metrics".to_string()
+    })?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig {
+        capture_size,
+        asset_scale: desktop_auto_music_game_asset_scale(capture_size),
+        auto_music_game_config: config.auto_music_game_config.clone(),
+    });
+    let task = plan.task_key.clone();
+    let result = execute_desktop_auto_music_game_album_live(config, window, &plan, cancellation)?;
+    Ok(DesktopAutoMusicGameAlbumExecution { task, result })
+}
+
+fn execute_desktop_auto_music_game_album_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &AutoMusicGameExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<AutoMusicAlbumExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("AutoMusicGame album live execution cancelled".to_string());
+    }
+    let metrics = window.metrics.ok_or_else(|| {
+        "AutoMusicGame album live execution requires game window metrics".to_string()
+    })?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "AutoMusicGame album live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    if metrics.client_width.saturating_mul(9) != metrics.client_height.saturating_mul(16) {
+        return Err(format!(
+            "AutoMusicGame album live execution requires a 16:9 game window; got {}x{}",
+            metrics.client_width, metrics.client_height
+        ));
+    }
+
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err(
+            "AutoMusicGame album live execution requires the BitBlt capture backend".to_string(),
+        );
+    }
+
+    let capture_area = metrics.capture_area;
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings.clone())
+        .map_err(|error| error.to_string())?;
+    let mut global_input = bgi_script::GlobalInputHost::new_with_frame_source(
+        bgi_script::GameCaptureArea {
+            x: capture_area.left,
+            y: capture_area.top,
+            width: metrics.client_width,
+            height: metrics.client_height,
+        },
+        1.0,
+        Some(Arc::new(
+            DesktopGameCaptureFrameSource::new(window.handle, settings)
+                .map_err(|error| error.to_string())?,
+        )),
+    )
+    .map_err(|error| error.to_string())?;
+    global_input
+        .set_game_metrics(capture_size.width, capture_size.height, 1.0)
+        .map_err(|error| error.to_string())?;
+
+    let mut runtime = DesktopAutoMusicAlbumRuntime::new(
+        global_input,
+        capture_size,
+        capture_source,
+        window.handle.0,
+        plan.clone(),
+        cancellation,
+    );
+    execute_auto_music_album_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopAutoMusicAlbumRuntime {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    global_input: bgi_script::GlobalInputHost,
+    capture_size: VisionSize,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    plan: AutoMusicGameExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopAutoMusicAlbumRuntime {
+    fn new(
+        global_input: bgi_script::GlobalInputHost,
+        capture_size: VisionSize,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        plan: AutoMusicGameExecutionPlan,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        let template_root = bgi_task::task_asset_root();
+        Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            global_input,
+            capture_size,
+            capture_source,
+            window_handle,
+            plan,
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "AutoMusicGame album live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_bgr_image(&self) -> bgi_task::Result<BgrImage> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn locate_auto_music_template(
+        &mut self,
+        image: &BgrImage,
+        locator: &AutoMusicTemplateLocator,
+    ) -> bgi_task::Result<Option<Region>> {
+        let object = desktop_auto_music_template_object(locator, self.capture_size)
+            .map_err(TaskError::VisionPlan)?;
+        self.locate_recognition_object(image, &object, &locator.name)
+    }
+
+    fn locate_recognition_object(
+        &mut self,
+        image: &BgrImage,
+        object: &bgi_vision::RecognitionObject,
+        label: &str,
+    ) -> bgi_task::Result<Option<Region>> {
+        desktop_auto_music_register_scaled_template(&mut self.vision_backend, object, image.size)?;
+        let region = self
+            .vision_backend
+            .find(&image.pixels, image.size, object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoMusicGame album template lookup for {label} failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist().then_some(region))
+    }
+
+    fn wait_for_auto_music_template(
+        &mut self,
+        locator: &AutoMusicTemplateLocator,
+        attempts: usize,
+        interval_ms: u64,
+    ) -> bgi_task::Result<Option<Region>> {
+        for attempt in 0..attempts.max(1) {
+            self.ensure_not_cancelled()?;
+            let image = self.capture_bgr_image()?;
+            if let Some(region) = self.locate_auto_music_template(&image, locator)? {
+                return Ok(Some(region));
+            }
+            if attempt + 1 < attempts.max(1) {
+                self.sleep_loop_with_cancellation(interval_ms);
+            }
+        }
+        Ok(None)
+    }
+
+    fn click_capture_point(&self, x: i32, y: i32) -> bgi_task::Result<()> {
+        self.execute_sequence(
+            self.global_input
+                .click(x, y)
+                .map_err(|error| TaskError::CommonJobExecution(error.to_string()))?,
+        )
+    }
+
+    fn click_region_center(&self, region: &Region) -> bgi_task::Result<()> {
+        let center = region.rect.center();
+        self.click_capture_point(center.x, center.y)
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::CommonJobExecution(error.to_string()))
+    }
+
+    fn sleep_loop_with_cancellation(&self, duration_ms: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(duration_ms);
+        while !self.cancellation.is_cancelled() {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep((deadline - now).min(Duration::from_millis(25)));
+        }
+    }
+}
+
+impl AutoMusicAlbumRuntime for DesktopAutoMusicAlbumRuntime {
+    fn is_auto_music_album_cancelled(&mut self) -> bgi_task::Result<bool> {
+        Ok(self.cancellation.is_cancelled())
+    }
+
+    fn check_auto_music_album_page(
+        &mut self,
+        icon_locator: &AutoMusicTemplateLocator,
+    ) -> bgi_task::Result<AutoMusicAlbumPageStatus> {
+        let image = self.capture_bgr_image()?;
+        let Some(icon_region) = self.locate_auto_music_template(&image, icon_locator)? else {
+            return Ok(AutoMusicAlbumPageStatus::NotAlbumPage);
+        };
+        let roi = desktop_auto_music_album_all_songs_ocr_roi(image.size, icon_region.rect)?;
+        let cropped = crop_bgr_image(&image, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!("AutoMusicGame album WinRT OCR failed: {error}"))
+        })?;
+        if desktop_auto_music_ocr_contains_all_songs(&regions) {
+            Ok(AutoMusicAlbumPageStatus::AllSongsPage)
+        } else {
+            Ok(AutoMusicAlbumPageStatus::ThemeAlbum)
+        }
+    }
+
+    fn is_auto_music_song_completed(
+        &mut self,
+        locator: &AutoMusicTemplateLocator,
+    ) -> bgi_task::Result<bool> {
+        let image = self.capture_bgr_image()?;
+        Ok(self.locate_auto_music_template(&image, locator)?.is_some())
+    }
+
+    fn click_auto_music_next_song(&mut self, x_1080p: i32, y_1080p: i32) -> bgi_task::Result<()> {
+        let (x, y) = desktop_auto_music_1080p_capture_point(x_1080p, y_1080p, self.capture_size);
+        self.click_capture_point(x, y)
+    }
+
+    fn click_auto_music_white_confirm(&mut self) -> bgi_task::Result<()> {
+        self.sleep_loop_with_cancellation(AUTO_MUSIC_ALBUM_WHITE_CONFIRM_PRE_CLICK_MS);
+        self.ensure_not_cancelled()?;
+        let image = self.capture_bgr_image()?;
+        let object = desktop_auto_music_white_confirm_object().map_err(TaskError::VisionPlan)?;
+        if let Some(region) =
+            self.locate_recognition_object(&image, &object, COMMON_BTN_WHITE_CONFIRM)?
+        {
+            self.click_region_center(&region)?;
+        }
+        Ok(())
+    }
+
+    fn click_auto_music_difficulty(
+        &mut self,
+        difficulty: &AutoMusicDifficultyRule,
+    ) -> bgi_task::Result<()> {
+        let (x, y) = desktop_auto_music_1080p_capture_point(
+            difficulty.click_x_1080p,
+            difficulty.click_y_1080p,
+            self.capture_size,
+        );
+        self.click_capture_point(x, y)
+    }
+
+    fn delay_auto_music_album(&mut self, duration_ms: u64) -> bgi_task::Result<()> {
+        self.sleep_loop_with_cancellation(duration_ms);
+        self.ensure_not_cancelled()
+    }
+
+    fn execute_auto_music_song(
+        &mut self,
+        _difficulty: &AutoMusicDifficultyRule,
+        _song_index: u64,
+    ) -> bgi_task::Result<AutoMusicPerformanceReport> {
+        execute_desktop_auto_music_game_album_song_performance(
+            &self.plan,
+            self.global_input.clone(),
+            self.capture_source.clone(),
+            self.window_handle,
+            Arc::clone(&self.cancellation),
+        )
+    }
+
+    fn wait_auto_music_album_page(
+        &mut self,
+        icon_locator: &AutoMusicTemplateLocator,
+    ) -> bgi_task::Result<()> {
+        if self
+            .wait_for_auto_music_template(
+                icon_locator,
+                AUTO_MUSIC_ALBUM_PAGE_WAIT_ATTEMPTS,
+                AUTO_MUSIC_ALBUM_PAGE_WAIT_INTERVAL_MS,
+            )?
+            .is_some()
+        {
+            return Ok(());
+        }
+        Err(TaskError::CommonJobExecution(
+            "AutoMusicGame album page did not return after performance".to_string(),
+        ))
+    }
+}
+
+fn execute_desktop_auto_music_game_album_song_performance(
+    plan: &AutoMusicGameExecutionPlan,
+    global_input: bgi_script::GlobalInputHost,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    cancellation: Arc<InputCancellationToken>,
+) -> bgi_task::Result<AutoMusicPerformanceReport> {
+    let lane_points = plan
+        .key_lanes
+        .iter()
+        .map(|lane| {
+            let (x, y) = desktop_auto_music_lane_capture_point(lane, plan.asset_scale);
+            (lane.key.clone(), x, y)
+        })
+        .collect();
+    let mut runtime = DesktopAutoMusicAlbumSongPerformanceRuntime::new(
+        global_input,
+        capture_source,
+        window_handle,
+        plan.locators.btn_list.clone(),
+        plan.album_rule.album_check_interval_ms,
+        lane_points,
+        cancellation,
+    );
+    execute_auto_music_performance_plan(plan, &mut runtime)
+}
+
+struct DesktopAutoMusicAlbumSongPerformanceRuntime {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    global_input: bgi_script::GlobalInputHost,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    btn_list_locator: AutoMusicTemplateLocator,
+    album_check_interval: Duration,
+    next_album_check_at: std::time::Instant,
+    lane_points: Vec<(String, i32, i32)>,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopAutoMusicAlbumSongPerformanceRuntime {
+    fn new(
+        global_input: bgi_script::GlobalInputHost,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        btn_list_locator: AutoMusicTemplateLocator,
+        album_check_interval_ms: u64,
+        lane_points: Vec<(String, i32, i32)>,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        let template_root = bgi_task::task_asset_root();
+        let interval = Duration::from_millis(album_check_interval_ms.max(1));
+        Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            global_input,
+            capture_source,
+            window_handle,
+            btn_list_locator,
+            album_check_interval: interval,
+            next_album_check_at: std::time::Instant::now() + interval,
+            lane_points,
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "AutoMusicGame album performance live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_bgr_image(&self) -> bgi_task::Result<BgrImage> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn locate_btn_list(&mut self, image: &BgrImage) -> bgi_task::Result<Option<Region>> {
+        let object = desktop_auto_music_template_object(&self.btn_list_locator, image.size)
+            .map_err(TaskError::VisionPlan)?;
+        desktop_auto_music_register_scaled_template(&mut self.vision_backend, &object, image.size)?;
+        let region = self
+            .vision_backend
+            .find(&image.pixels, image.size, &object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoMusicGame album BtnList lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist().then_some(region))
+    }
+
+    fn click_region_center(&self, region: &Region) -> bgi_task::Result<()> {
+        let center = region.rect.center();
+        self.execute_sequence(
+            self.global_input
+                .click(center.x, center.y)
+                .map_err(|error| TaskError::CommonJobExecution(error.to_string()))?,
+        )
+    }
+
+    fn execute_sequence(&self, sequence: InputSequence) -> bgi_task::Result<()> {
+        bgi_script::GlobalInputExecution::execute(
+            sequence,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::CommonJobExecution(error.to_string()))
+    }
+
+    fn key_sequence(&self, key: &str, down: bool) -> bgi_task::Result<InputSequence> {
+        let vk = bgi_script::virtual_key_code_for_script(key)
+            .map_err(|error| TaskError::CommonJobExecution(error.to_string()))?;
+        Ok(if down {
+            InputSequence::new().key_down(vk)
+        } else {
+            InputSequence::new().key_up(vk)
+        })
+    }
+
+    fn sleep_loop_with_cancellation(&self, duration_ms: u64) {
+        let deadline = std::time::Instant::now() + Duration::from_millis(duration_ms);
+        while !self.cancellation.is_cancelled() {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            std::thread::sleep((deadline - now).min(Duration::from_millis(5)));
+        }
+    }
+}
+
+impl AutoMusicPerformanceRuntime for DesktopAutoMusicAlbumSongPerformanceRuntime {
+    fn is_auto_music_performance_cancelled(&mut self) -> bgi_task::Result<bool> {
+        Ok(self.cancellation.is_cancelled())
+    }
+
+    fn next_auto_music_performance_frame(
+        &mut self,
+    ) -> bgi_task::Result<Option<AutoMusicPerformanceFrame>> {
+        if self.cancellation.is_cancelled() {
+            return Ok(None);
+        }
+
+        let now = std::time::Instant::now();
+        if now >= self.next_album_check_at {
+            self.next_album_check_at = now + self.album_check_interval;
+            let image = self.capture_bgr_image()?;
+            if let Some(region) = self.locate_btn_list(&image)? {
+                self.click_region_center(&region)?;
+                return Ok(None);
+            }
+        }
+
+        let lane_blues = self
+            .lane_points
+            .iter()
+            .map(|(key, x, y)| {
+                let blue = desktop_auto_music_sample_blue(self.window_handle, *x, *y)
+                    .map_err(TaskError::VisionPlan)?;
+                Ok(AutoMusicLaneBlueSample {
+                    key: key.clone(),
+                    blue,
+                })
+            })
+            .collect::<bgi_task::Result<Vec<_>>>()?;
+        Ok(Some(AutoMusicPerformanceFrame { lane_blues }))
+    }
+
+    fn auto_music_key_down(&mut self, key: &str) -> bgi_task::Result<()> {
+        let sequence = self.key_sequence(key, true)?;
+        self.execute_sequence(sequence)
+    }
+
+    fn auto_music_key_up(&mut self, key: &str) -> bgi_task::Result<()> {
+        let sequence = self.key_sequence(key, false)?;
+        self.execute_sequence(sequence)
+    }
+
+    fn delay_auto_music_poll(&mut self, duration_ms: u64) -> bgi_task::Result<()> {
+        self.sleep_loop_with_cancellation(duration_ms);
+        Ok(())
+    }
+
+    fn release_all_auto_music_keys(
+        &mut self,
+        _held_keys_before_release: &[String],
+    ) -> bgi_task::Result<()> {
+        bgi_script::GlobalInputExecution::execute(
+            bgi_input::release_all_keys_sequence(),
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::CommonJobExecution(error.to_string()))
+    }
+}
+
+fn desktop_auto_music_1080p_capture_point(
+    x_1080p: i32,
+    y_1080p: i32,
+    capture_size: VisionSize,
+) -> (i32, i32) {
+    let scale = desktop_auto_music_game_asset_scale(capture_size);
+    (
+        (x_1080p as f64 * scale) as i32,
+        (y_1080p as f64 * scale) as i32,
+    )
+}
+
+fn desktop_auto_music_template_object(
+    locator: &AutoMusicTemplateLocator,
+    capture_size: VisionSize,
+) -> Result<bgi_vision::RecognitionObject, String> {
+    let image = BvImage::new(&locator.asset).map_err(|error| error.to_string())?;
+    let roi = desktop_auto_music_template_roi(locator, capture_size)?;
+    let mut object = image
+        .to_recognition_object(roi, locator.threshold.unwrap_or(0.8))
+        .map_err(|error| error.to_string())?;
+    object.template.mode = locator.match_mode;
+    object.validate().map_err(|error| error.to_string())?;
+    Ok(object)
+}
+
+fn desktop_auto_music_white_confirm_object() -> Result<bgi_vision::RecognitionObject, String> {
+    let image = BvImage::new(COMMON_BTN_WHITE_CONFIRM).map_err(|error| error.to_string())?;
+    image
+        .to_recognition_object(None, 0.8)
+        .map_err(|error| error.to_string())
+}
+
+fn desktop_auto_music_register_scaled_template(
+    backend: &mut PureRustVisionBackend,
+    object: &bgi_vision::RecognitionObject,
+    capture_size: VisionSize,
+) -> bgi_task::Result<()> {
+    if capture_size == VisionSize::new(1920, 1080) {
+        return Ok(());
+    }
+    let Some(template_asset) = object.template.template_asset.as_ref() else {
+        return Ok(());
+    };
+    let template = BgrImage::read(bgi_task::task_asset_root().join(template_asset))
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    let scale = desktop_auto_music_game_asset_scale(capture_size);
+    let scaled_size = VisionSize::new(
+        ((template.size.width as f64 * scale) as u32).max(1),
+        ((template.size.height as f64 * scale) as u32).max(1),
+    );
+    let scaled = resize_bgr_nearest(&template, scaled_size)
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    backend.register_template(template_asset.clone(), scaled);
+    Ok(())
+}
+
+fn desktop_auto_music_template_roi(
+    locator: &AutoMusicTemplateLocator,
+    capture_size: VisionSize,
+) -> Result<Option<Rect>, String> {
+    if let Some(roi) = locator.roi {
+        return desktop_auto_music_scaled_rect(roi, capture_size).map(Some);
+    }
+    let Some(rule) = locator.roi_rule.as_deref() else {
+        return Ok(None);
+    };
+    match rule {
+        "CaptureRect.CutRightTop(0.2, 0.2)" => {
+            desktop_auto_music_cut_right_rect(capture_size, 0.2, 0.2, false).map(Some)
+        }
+        "CaptureRect.CutRightBottom(0.4, 0.2)" => {
+            desktop_auto_music_cut_right_rect(capture_size, 0.4, 0.2, true).map(Some)
+        }
+        _ => Err(format!("unsupported AutoMusicGame ROI rule: {rule}")),
+    }
+}
+
+fn desktop_auto_music_scaled_rect(rect: Rect, capture_size: VisionSize) -> Result<Rect, String> {
+    let scale = desktop_auto_music_game_asset_scale(capture_size);
+    let scaled_positive = |value: i32| ((value as f64 * scale) as i32).max(1);
+    Rect::new(
+        (rect.x as f64 * scale) as i32,
+        (rect.y as f64 * scale) as i32,
+        scaled_positive(rect.width),
+        scaled_positive(rect.height),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn desktop_auto_music_cut_right_rect(
+    capture_size: VisionSize,
+    width_ratio: f64,
+    height_ratio: f64,
+    bottom: bool,
+) -> Result<Rect, String> {
+    let width = (capture_size.width as f64 * width_ratio) as i32;
+    let height = (capture_size.height as f64 * height_ratio) as i32;
+    let x = capture_size.width as i32 - width;
+    let y = if bottom {
+        capture_size.height as i32 - height
+    } else {
+        0
+    };
+    Rect::new(x, y, width.max(1), height.max(1)).map_err(|error| error.to_string())
+}
+
+fn desktop_auto_music_album_all_songs_ocr_roi(
+    image_size: VisionSize,
+    icon_rect: Rect,
+) -> bgi_task::Result<Rect> {
+    let width = (image_size.width as f64 * AUTO_MUSIC_ALBUM_ALL_SONGS_OCR_WIDTH_RATIO) as i32;
+    let requested = Rect::new(
+        icon_rect.x + icon_rect.width,
+        icon_rect.y,
+        width.max(1),
+        icon_rect.height.max(1),
+    )
+    .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    desktop_ocr_roi_for_image(image_size, requested)
+}
+
+fn desktop_auto_music_ocr_contains_all_songs(regions: &[OcrResultRegion]) -> bool {
+    regions.iter().any(|region| region.text.contains("全部"))
+}
+
+fn execute_desktop_use_redeem_code_live_plan(
+    app_root: &Path,
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    entries: Vec<RedeemCodeEntry>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<(UseRedeemCodeExecutionPlan, UseRedeemCodeExecutionReport), String> {
+    let window = game_window.ok_or_else(|| {
+        "UseRedeemCode live execution requires a detected game window".to_string()
+    })?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_use_redeem_codes_through_task_boundary_with_capture_size(
+        entries,
+        capture_size,
+        app_root,
+    )?;
+    let report = execute_desktop_use_redeem_code_live(config, window, &plan, cancellation)?;
+    Ok((plan, report))
+}
+
+fn execute_desktop_use_redeem_code_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &UseRedeemCodeExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<UseRedeemCodeExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("UseRedeemCode live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "UseRedeemCode")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "UseRedeemCode live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "UseRedeemCode live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+    );
+    let mut runtime = DesktopUseRedeemCodeRuntime::new(common_runtime, capture_size);
+    match execute_use_redeem_code_plan(plan, &mut runtime) {
+        Ok(report) => Ok(report),
+        Err(error) => {
+            let _ = runtime.clear_redeem_clipboard();
+            let _ = runtime.execute_redeem_common_job(RETURN_MAIN_UI_TASK_KEY);
+            Err(error.to_string())
+        }
+    }
+}
+
+struct DesktopUseRedeemCodeRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    capture_size: VisionSize,
+}
+
+impl<F, I, C> DesktopUseRedeemCodeRuntime<F, I, C> {
+    fn new(common: PureTemplateCommonJobRuntime<F, I, C>, capture_size: VisionSize) -> Self {
+        Self {
+            common,
+            capture_size,
+        }
+    }
+}
+
+impl<F, I, C> DesktopUseRedeemCodeRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn wait_ms(&mut self, milliseconds: u32) -> bgi_task::Result<()> {
+        let command = BvPageCommand::Wait { milliseconds };
+        CommonJobRuntime::execute_page_command(&mut self.common, &command).map(|_| ())
+    }
+
+    fn execute_ocr_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        match locator.operation {
+            BvLocatorOperation::FindAll
+            | BvLocatorOperation::IsExist
+            | BvLocatorOperation::WaitFor => Ok(CommonJobRuntimeOutcome::Matched(
+                self.wait_for_ocr_locator(locator)?.is_some(),
+            )),
+            BvLocatorOperation::WaitForDisappear => Ok(CommonJobRuntimeOutcome::Matched(
+                self.wait_for_ocr_locator_to_disappear(locator)?,
+            )),
+            BvLocatorOperation::Click | BvLocatorOperation::DoubleClick => {
+                let Some(region) = self.wait_for_ocr_locator(locator)? else {
+                    return Ok(CommonJobRuntimeOutcome::Matched(false));
+                };
+                let center = region.rect.center();
+                self.common
+                    .input_driver_mut()
+                    .click_capture_point(center.x, center.y)?;
+                if locator.operation == BvLocatorOperation::DoubleClick {
+                    self.common
+                        .input_driver_mut()
+                        .click_capture_point(center.x, center.y)?;
+                }
+                Ok(CommonJobRuntimeOutcome::Matched(true))
+            }
+            BvLocatorOperation::ClickUntilDisappears => {
+                let mut disappeared = false;
+                for attempt in 0..locator.retry_count.max(1) {
+                    let Some(region) = self.locate_ocr_once(locator)? else {
+                        disappeared = true;
+                        break;
+                    };
+                    let center = region.rect.center();
+                    self.common
+                        .input_driver_mut()
+                        .click_capture_point(center.x, center.y)?;
+                    if attempt + 1 < locator.retry_count.max(1) {
+                        self.wait_ms(locator.retry_interval_ms)?;
+                    }
+                }
+                Ok(CommonJobRuntimeOutcome::Matched(disappeared))
+            }
+        }
+    }
+
+    fn wait_for_ocr_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<Option<Region>> {
+        for attempt in 0..locator.retry_count.max(1) {
+            let region = self.locate_ocr_once(locator)?;
+            if region.is_some() {
+                return Ok(region);
+            }
+            if attempt + 1 < locator.retry_count.max(1) {
+                self.wait_ms(locator.retry_interval_ms)?;
+            }
+        }
+        Ok(None)
+    }
+
+    fn wait_for_ocr_locator_to_disappear(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<bool> {
+        for attempt in 0..locator.retry_count.max(1) {
+            if self.locate_ocr_once(locator)?.is_none() {
+                return Ok(true);
+            }
+            if attempt + 1 < locator.retry_count.max(1) {
+                self.wait_ms(locator.retry_interval_ms)?;
+            }
+        }
+        Ok(false)
+    }
+
+    fn locate_ocr_once(&mut self, locator: &BvLocatorPlan) -> bgi_task::Result<Option<Region>> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_redeem_code_ocr_roi_for_locator(frame.size, locator)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!("UseRedeemCode WinRT OCR failed: {error}"))
+        })?;
+        desktop_redeem_code_match_ocr_regions(&locator.recognition_object, &regions, roi)
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopUseRedeemCodeRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        if desktop_redeem_code_locator_uses_ocr(locator) {
+            return self.execute_ocr_locator(locator);
+        }
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> UseRedeemCodeRuntime for DesktopUseRedeemCodeRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn execute_redeem_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        if task_key != RETURN_MAIN_UI_TASK_KEY {
+            return Err(TaskError::CommonJobExecution(format!(
+                "UseRedeemCode desktop runtime only supports nested {RETURN_MAIN_UI_TASK_KEY}; got {task_key}"
+            )));
+        }
+        let plan = plan_return_main_ui(self.capture_size, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS)?;
+        let report = execute_return_main_ui_plan(&plan, self)?;
+        Ok(CommonJobRuntimeOutcome::Matched(report.completed))
+    }
+
+    fn set_redeem_clipboard_text(
+        &mut self,
+        text: &str,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        set_system_clipboard_text(text).map_err(|error| {
+            TaskError::CommonJobExecution(format!("set clipboard failed: {error}"))
+        })?;
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn clear_redeem_clipboard(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::Matched(clear_system_clipboard()))
+    }
+}
+
+fn desktop_redeem_code_locator_uses_ocr(locator: &BvLocatorPlan) -> bool {
+    matches!(
+        locator.recognition_object.recognition_type,
+        RecognitionType::Ocr | RecognitionType::OcrMatch
+    )
+}
+
+fn desktop_redeem_code_ocr_roi_for_locator(
+    image_size: VisionSize,
+    locator: &BvLocatorPlan,
+) -> bgi_task::Result<Rect> {
+    let roi = locator
+        .recognition_object
+        .region_of_interest
+        .unwrap_or_else(Rect::empty);
+    let roi = if roi.is_empty() {
+        Rect::new(0, 0, image_size.width as i32, image_size.height as i32)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?
+    } else {
+        roi
+    };
+    desktop_ocr_roi_for_image(image_size, roi)
+}
+
+fn desktop_redeem_code_match_ocr_regions(
+    object: &bgi_vision::RecognitionObject,
+    regions: &[OcrResultRegion],
+    roi: Rect,
+) -> bgi_task::Result<Option<Region>> {
+    for region in regions {
+        if desktop_redeem_code_text_matches_object(object, &region.text)? {
+            return desktop_redeem_code_offset_ocr_region(region, roi).map(Some);
+        }
+    }
+
+    let aggregate = OcrResult {
+        regions: regions.to_vec(),
+    }
+    .text();
+    if !aggregate.trim().is_empty() && desktop_redeem_code_text_matches_object(object, &aggregate)?
+    {
+        return desktop_redeem_code_bounding_ocr_region(regions, roi, aggregate).map(Some);
+    }
+
+    Ok(None)
+}
+
+fn desktop_redeem_code_text_matches_object(
+    object: &bgi_vision::RecognitionObject,
+    text: &str,
+) -> bgi_task::Result<bool> {
+    match object.recognition_type {
+        RecognitionType::Ocr => {
+            let needle = OcrMatchConfig::normalize_text(&object.ocr.text);
+            if needle.is_empty() {
+                return Ok(!OcrMatchConfig::normalize_text(text).is_empty());
+            }
+            Ok(OcrMatchConfig::normalize_text(text).contains(&needle))
+        }
+        RecognitionType::OcrMatch => object
+            .ocr
+            .matches_text(text)
+            .map_err(|error| TaskError::VisionPlan(error.to_string())),
+        other => Err(TaskError::VisionPlan(format!(
+            "UseRedeemCode OCR locator cannot handle recognition type {other:?}"
+        ))),
+    }
+}
+
+fn desktop_redeem_code_offset_ocr_region(
+    region: &OcrResultRegion,
+    roi: Rect,
+) -> bgi_task::Result<Region> {
+    let rect = Rect::new(
+        roi.x + region.rect.x,
+        roi.y + region.rect.y,
+        region.rect.width,
+        region.rect.height,
+    )
+    .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    Ok(Region {
+        rect,
+        text: region.text.clone(),
+        score: Some(region.score),
+    })
+}
+
+fn desktop_redeem_code_bounding_ocr_region(
+    regions: &[OcrResultRegion],
+    roi: Rect,
+    text: String,
+) -> bgi_task::Result<Region> {
+    let Some(first) = regions.first() else {
+        return Err(TaskError::VisionPlan(
+            "UseRedeemCode OCR aggregate matched without OCR regions".to_string(),
+        ));
+    };
+    let mut left = first.rect.x;
+    let mut top = first.rect.y;
+    let mut right = first.rect.right();
+    let mut bottom = first.rect.bottom();
+    let mut score = first.score;
+
+    for region in &regions[1..] {
+        left = left.min(region.rect.x);
+        top = top.min(region.rect.y);
+        right = right.max(region.rect.right());
+        bottom = bottom.max(region.rect.bottom());
+        score = score.max(region.score);
+    }
+
+    let rect = Rect::new(roi.x + left, roi.y + top, right - left, bottom - top)
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    Ok(Region {
+        rect,
+        text,
+        score: Some(score),
+    })
+}
+
+fn desktop_common_job_capture_size(game_window: Option<&GameWindowMatch>) -> VisionSize {
+    game_window
+        .and_then(|window| window.metrics)
+        .map(|metrics| VisionSize::new(metrics.client_width, metrics.client_height))
+        .unwrap_or_else(|| VisionSize::new(1920, 1080))
+}
+
+fn desktop_common_job_live_summary(
+    report: &CommonJobLiveExecutionReport,
+) -> (&'static str, bool, usize, usize) {
+    match report {
+        CommonJobLiveExecutionReport::ReturnMainUi(report) => (
+            "ReturnMainUi",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::SetTime(report) => (
+            "SetTime",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::ChooseTalkOption(report) => (
+            "ChooseTalkOption",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::CheckRewards(report) => (
+            "CheckRewards",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::BlessingOfTheWelkinMoon(report) => (
+            "BlessingOfTheWelkinMoon",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::ClaimBattlePassRewards(report) => (
+            "ClaimBattlePassRewards",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::ClaimEncounterPointsRewards(report) => (
+            "ClaimEncounterPointsRewards",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::ClaimMailRewards(report) => (
+            "ClaimMailRewards",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::CountInventoryItem(report) => (
+            "CountInventoryItem",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::ScanPickDrops(report) => (
+            "ScanPickDrops",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::LowerHeadThenWalkTo(report) => (
+            "LowerHeadThenWalkTo",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::SwitchParty(report) => (
+            "SwitchParty",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::GoToCraftingBench(report) => (
+            "GoToCraftingBench",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::Teleport(report) => {
+            ("Teleport", report.completed, report.executed_steps.len(), 0)
+        }
+        CommonJobLiveExecutionReport::GoToAdventurersGuild(report) => (
+            "GoToAdventurersGuild",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::GoToSereniteaPot(report) => (
+            "GoToSereniteaPot",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::OneKeyExpedition(report) => (
+            "OneKeyExpedition",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::WonderlandCycle(report) => (
+            "WonderlandCycle",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::Relogin(report) => (
+            "Relogin",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+        CommonJobLiveExecutionReport::WalkToF(report) => (
+            "WalkToF",
+            report.completed,
+            report.executed_steps.len(),
+            report.skipped_steps.len(),
+        ),
+    }
+}
+
+fn desktop_common_job_global_input(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    task_name: &str,
+) -> Result<(bgi_script::GlobalInputHost, VisionSize), String> {
+    let metrics = window
+        .metrics
+        .ok_or_else(|| format!("{task_name} live execution requires game window metrics"))?;
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err(format!(
+            "{task_name} live execution requires the BitBlt capture backend"
+        ));
+    }
+
+    let capture_area = metrics.capture_area;
+    let source = DesktopGameCaptureFrameSource::new(window.handle, settings)
+        .map_err(|error| error.to_string())?;
+    let mut global_input = bgi_script::GlobalInputHost::new_with_frame_source(
+        bgi_script::GameCaptureArea {
+            x: capture_area.left,
+            y: capture_area.top,
+            width: metrics.client_width,
+            height: metrics.client_height,
+        },
+        1.0,
+        Some(Arc::new(source)),
+    )
+    .map_err(|error| error.to_string())?;
+    global_input
+        .set_game_metrics(metrics.client_width, metrics.client_height, 1.0)
+        .map_err(|error| error.to_string())?;
+    Ok((
+        global_input,
+        VisionSize::new(metrics.client_width, metrics.client_height),
+    ))
+}
+
+fn execute_desktop_return_main_ui_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ReturnMainUiExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ReturnMainUiExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("ReturnMainUi live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "ReturnMainUi")?;
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "ReturnMainUi live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_return_main_ui_live(
+        capture_size,
+        plan.max_escape_attempts,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_set_time_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &SetTimeExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<SetTimeExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("SetTime live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) = desktop_common_job_global_input(config, window, "SetTime")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "SetTime live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "SetTime live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_set_time_live(
+        plan,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_choose_talk_option_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ChooseTalkOptionExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ChooseTalkOptionExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("ChooseTalkOption live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "ChooseTalkOption")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "ChooseTalkOption live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "ChooseTalkOption live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    );
+    let mut runtime =
+        DesktopChooseTalkOptionRuntime::new(common_runtime, plan.option_icon_locator.clone());
+    execute_choose_talk_option_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopChooseTalkOptionRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    option_icon_locator: BvLocatorPlan,
+}
+
+impl<F, I, C> DesktopChooseTalkOptionRuntime<F, I, C> {
+    fn new(
+        common: PureTemplateCommonJobRuntime<F, I, C>,
+        option_icon_locator: BvLocatorPlan,
+    ) -> Self {
+        Self {
+            common,
+            option_icon_locator,
+        }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopChooseTalkOptionRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> ChooseTalkOptionRuntime for DesktopChooseTalkOptionRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn recognize_talk_options(
+        &mut self,
+        rule: &ChooseTalkOptionOcrRule,
+    ) -> bgi_task::Result<Vec<ChooseTalkOptionCandidate>> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let mut icon_regions = self
+            .common
+            .vision_backend()
+            .find_multi(
+                &frame.pixels,
+                frame.size,
+                &self.option_icon_locator.recognition_object,
+            )
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        icon_regions.retain(|region| region.is_exist());
+        if rule.sort_icons_by_y_descending {
+            icon_regions.sort_by(|left, right| right.rect.y.cmp(&left.rect.y));
+        } else {
+            icon_regions.sort_by_key(|region| region.rect.y);
+        }
+        let Some(lowest_icon) = icon_regions.first() else {
+            return Ok(Vec::new());
+        };
+        let ocr_roi =
+            choose_talk_option_ocr_rect_from_lowest_icon(lowest_icon.rect, frame.size, rule)?;
+        let cropped = crop_bgr_image(&frame, ocr_roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!("ChooseTalkOption WinRT OCR failed: {error}"))
+        })?;
+        choose_talk_option_candidates_from_ocr_regions(&regions, ocr_roi, rule)
+    }
+
+    fn is_orange_talk_option(
+        &mut self,
+        candidate: &ChooseTalkOptionCandidate,
+        rule: &ChooseTalkOptionOrangeRule,
+    ) -> bgi_task::Result<bool> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, candidate.rect)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let hsv = convert_bgr_image(&cropped.pixels, cropped.size, ColorConversion::BgrToHsv)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let mask = in_range_mask(&hsv, rule.hsv_lower, rule.hsv_upper, None)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let pixel_count = cropped.size.width as f64 * cropped.size.height as f64;
+        let orange_pixel_rate = if pixel_count <= 0.0 {
+            0.0
+        } else {
+            mask.matched_count as f64 / pixel_count
+        };
+        Ok(orange_pixel_rate > rule.min_pixel_rate)
+    }
+
+    fn click_talk_option(&mut self, candidate: &ChooseTalkOptionCandidate) -> bgi_task::Result<()> {
+        let center = candidate.rect.center();
+        self.common
+            .input_driver_mut()
+            .click_capture_point(center.x, center.y)
+    }
+}
+
+fn execute_desktop_check_rewards_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &CheckRewardsExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<CheckRewardsExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("CheckRewards live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "CheckRewards")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "CheckRewards live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "CheckRewards live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    );
+    let mut runtime = DesktopCheckRewardsRuntime::new(common_runtime);
+    execute_check_rewards_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopCheckRewardsRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+}
+
+impl<F, I, C> DesktopCheckRewardsRuntime<F, I, C> {
+    fn new(common: PureTemplateCommonJobRuntime<F, I, C>) -> Self {
+        Self { common }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopCheckRewardsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> CheckRewardsRuntime for DesktopCheckRewardsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn recognize_check_rewards_text(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<Vec<CheckRewardsTextCandidate>> {
+        let requested_roi = match command {
+            BvPageCommand::Ocr { locator } => locator
+                .recognition_object
+                .region_of_interest
+                .unwrap_or_else(Rect::empty),
+            _ => {
+                return Err(TaskError::CommonJobExecution(
+                    "CheckRewards OCR requires a BvPageCommand::Ocr command".to_string(),
+                ));
+            }
+        };
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, requested_roi)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!("CheckRewards WinRT OCR failed: {error}"))
+        })?;
+        check_rewards_text_candidates_from_ocr_regions(&regions, roi)
+    }
+
+    fn click_check_rewards_text(
+        &mut self,
+        candidate: &CheckRewardsTextCandidate,
+    ) -> bgi_task::Result<()> {
+        let center = candidate.rect.center();
+        self.common
+            .input_driver_mut()
+            .click_capture_point(center.x, center.y)
+    }
+
+    fn notify_check_rewards(
+        &mut self,
+        _payload: &NotificationPayload,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn execute_desktop_claim_battle_pass_rewards_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ClaimBattlePassRewardsExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ClaimBattlePassRewardsExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("ClaimBattlePassRewards live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "ClaimBattlePassRewards")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "ClaimBattlePassRewards live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "ClaimBattlePassRewards live execution has no capture frame source".to_string()
+    })?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    );
+    let mut runtime = DesktopClaimBattlePassRewardsRuntime::new(common_runtime);
+    execute_claim_battle_pass_rewards_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopClaimBattlePassRewardsRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+}
+
+impl<F, I, C> DesktopClaimBattlePassRewardsRuntime<F, I, C> {
+    fn new(common: PureTemplateCommonJobRuntime<F, I, C>) -> Self {
+        Self { common }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopClaimBattlePassRewardsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> ClaimBattlePassRewardsRuntime for DesktopClaimBattlePassRewardsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn recognize_battle_pass_reward_text(
+        &mut self,
+        command: &BvPageCommand,
+        rule: &BattlePassClaimAllRule,
+        _scope: BattlePassClaimScope,
+    ) -> bgi_task::Result<Vec<BattlePassRewardTextCandidate>> {
+        let requested_roi = match command {
+            BvPageCommand::Ocr { locator } => locator
+                .recognition_object
+                .region_of_interest
+                .unwrap_or(rule.ocr_roi),
+            _ => {
+                return Err(TaskError::CommonJobExecution(
+                    "ClaimBattlePassRewards OCR requires a BvPageCommand::Ocr command".to_string(),
+                ));
+            }
+        };
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, requested_roi)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "ClaimBattlePassRewards WinRT OCR failed: {error}"
+            ))
+        })?;
+        battle_pass_reward_text_candidates_from_ocr_regions(&regions, roi)
+    }
+
+    fn click_battle_pass_reward_text(
+        &mut self,
+        candidate: &BattlePassRewardTextCandidate,
+        _scope: BattlePassClaimScope,
+    ) -> bgi_task::Result<()> {
+        let center = candidate.rect.center();
+        self.common
+            .input_driver_mut()
+            .click_capture_point(center.x, center.y)
+    }
+}
+
+fn execute_desktop_blessing_of_the_welkin_moon_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &BlessingOfTheWelkinMoonExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<BlessingOfTheWelkinMoonExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("BlessingOfTheWelkinMoon live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "BlessingOfTheWelkinMoon")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "BlessingOfTheWelkinMoon live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let server_time_zone_offset_minutes =
+        desktop_server_time_zone_offset_minutes(config, "BlessingOfTheWelkinMoon")?;
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "BlessingOfTheWelkinMoon live execution has no capture frame source".to_string()
+    })?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_blessing_of_the_welkin_moon_live(
+        plan,
+        server_time_zone_offset_minutes,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_claim_mail_rewards_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ClaimMailRewardsExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ClaimMailRewardsExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("ClaimMailRewards live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "ClaimMailRewards")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "ClaimMailRewards live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "ClaimMailRewards live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_claim_mail_rewards_live(
+        plan,
+        &config.key_bindings_config,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_claim_encounter_points_rewards_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ClaimEncounterPointsRewardsExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ClaimEncounterPointsRewardsExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("ClaimEncounterPointsRewards live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "ClaimEncounterPointsRewards")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "ClaimEncounterPointsRewards live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "ClaimEncounterPointsRewards live execution has no capture frame source".to_string()
+    })?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    );
+    let mut runtime = DesktopClaimEncounterPointsRewardsRuntime::new(common_runtime);
+    execute_claim_encounter_points_rewards_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopClaimEncounterPointsRewardsRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+}
+
+impl<F, I, C> DesktopClaimEncounterPointsRewardsRuntime<F, I, C> {
+    fn new(common: PureTemplateCommonJobRuntime<F, I, C>) -> Self {
+        Self { common }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopClaimEncounterPointsRewardsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> ClaimEncounterPointsRewardsRuntime
+    for DesktopClaimEncounterPointsRewardsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn recognize_encounter_points_text(
+        &mut self,
+        command: &BvPageCommand,
+        rule: &ClaimEncounterPointsRewardsOcrRule,
+    ) -> bgi_task::Result<Vec<ClaimEncounterPointsRewardsTextCandidate>> {
+        let requested_roi = match command {
+            BvPageCommand::Ocr { locator } => locator
+                .recognition_object
+                .region_of_interest
+                .unwrap_or(rule.left_panel_roi),
+            _ => {
+                return Err(TaskError::CommonJobExecution(
+                    "ClaimEncounterPointsRewards OCR requires a BvPageCommand::Ocr command"
+                        .to_string(),
+                ));
+            }
+        };
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, requested_roi)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "ClaimEncounterPointsRewards WinRT OCR failed: {error}"
+            ))
+        })?;
+        claim_encounter_points_text_candidates_from_ocr_regions(&regions, roi)
+    }
+
+    fn click_encounter_points_text(
+        &mut self,
+        candidate: &ClaimEncounterPointsRewardsTextCandidate,
+    ) -> bgi_task::Result<()> {
+        let center = candidate.rect.center();
+        self.common
+            .input_driver_mut()
+            .click_capture_point(center.x, center.y)
+    }
+}
+
+fn execute_desktop_switch_party_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &SwitchPartyExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<SwitchPartyExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("SwitchParty live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "SwitchParty")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "SwitchParty live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "SwitchParty live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    );
+    let mut runtime = DesktopSwitchPartyRuntime::new(common_runtime);
+    execute_switch_party_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopSwitchPartyRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+}
+
+impl<F, I, C> DesktopSwitchPartyRuntime<F, I, C> {
+    fn new(common: PureTemplateCommonJobRuntime<F, I, C>) -> Self {
+        Self { common }
+    }
+}
+
+impl<F, I, C> DesktopSwitchPartyRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn wait_ms(&mut self, milliseconds: u32) -> bgi_task::Result<()> {
+        let command = BvPageCommand::Wait { milliseconds };
+        CommonJobRuntime::execute_page_command(&mut self.common, &command).map(|_| ())
+    }
+
+    fn locator_matched(&mut self, locator: &BvLocatorPlan, label: &str) -> bgi_task::Result<bool> {
+        let outcome = CommonJobRuntime::execute_locator(&mut self.common, locator)?;
+        desktop_switch_party_outcome_as_bool(outcome, label)
+    }
+
+    fn click_locator_once(
+        &mut self,
+        locator: &BvLocatorPlan,
+        timeout_ms: u32,
+        label: &str,
+    ) -> bgi_task::Result<bool> {
+        let mut click_locator = locator.clone();
+        click_locator.operation = BvLocatorOperation::Click;
+        click_locator.timeout_ms = timeout_ms.max(1);
+        click_locator.retry_interval_ms = timeout_ms.max(1);
+        click_locator.retry_count = 1;
+        self.locator_matched(&click_locator, label)
+    }
+
+    fn recognize_switch_party_ocr_roi(
+        &mut self,
+        requested_roi: Rect,
+    ) -> bgi_task::Result<Vec<SwitchPartyTextCandidate>> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, requested_roi)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!("SwitchParty WinRT OCR failed: {error}"))
+        })?;
+        switch_party_text_candidates_from_ocr_regions(&regions, roi)
+    }
+
+    fn click_capture_point(&mut self, x: i32, y: i32) -> bgi_task::Result<()> {
+        self.common.input_driver_mut().click_capture_point(x, y)
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopSwitchPartyRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> SwitchPartyRuntime for DesktopSwitchPartyRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn recognize_switch_party_text(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<Vec<SwitchPartyTextCandidate>> {
+        let requested_roi = match command {
+            BvPageCommand::Ocr { locator } => locator
+                .recognition_object
+                .region_of_interest
+                .ok_or_else(|| {
+                    TaskError::CommonJobExecution(
+                        "SwitchParty OCR command has no region of interest".to_string(),
+                    )
+                })?,
+            _ => {
+                return Err(TaskError::CommonJobExecution(
+                    "SwitchParty OCR requires a BvPageCommand::Ocr command".to_string(),
+                ));
+            }
+        };
+        self.recognize_switch_party_ocr_roi(requested_roi)
+    }
+
+    fn open_switch_party_choose_menu(
+        &mut self,
+        rule: &SwitchPartyChooseMenuRule,
+        choose_locator: &BvLocatorPlan,
+        delete_locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        let attempts = rule.open_attempts.max(1);
+        for attempt in 0..attempts {
+            if self.locator_matched(delete_locator, "SwitchParty delete button probe")? {
+                return Ok(CommonJobRuntimeOutcome::Matched(true));
+            }
+            let _ = self.click_locator_once(
+                choose_locator,
+                rule.open_interval_ms,
+                "SwitchParty choose-view button click",
+            )?;
+            self.wait_ms(rule.open_interval_ms)?;
+            if self.locator_matched(delete_locator, "SwitchParty delete button after click")? {
+                return Ok(CommonJobRuntimeOutcome::Matched(true));
+            }
+            if attempt + 1 < attempts {
+                self.wait_ms(rule.open_interval_ms)?;
+            }
+        }
+
+        for attempt in 0..rule.delete_verify_attempts.max(1) {
+            if self.locator_matched(delete_locator, "SwitchParty delete button verification")? {
+                return Ok(CommonJobRuntimeOutcome::Matched(true));
+            }
+            if attempt + 1 < rule.delete_verify_attempts.max(1) {
+                self.wait_ms(rule.open_interval_ms)?;
+            }
+        }
+        Ok(CommonJobRuntimeOutcome::Matched(false))
+    }
+
+    fn scan_switch_party_list(
+        &mut self,
+        rule: &SwitchPartyListScanRule,
+        party_name: &str,
+        current_page_texts: &[SwitchPartyTextCandidate],
+    ) -> bgi_task::Result<SwitchPartyListScanOutcome> {
+        let mut page_texts = current_page_texts.to_vec();
+        let mut scanned_pages = 0;
+
+        for page_index in 0..rule.max_pages.max(1) {
+            scanned_pages = page_index + 1;
+            if page_texts.is_empty() {
+                return Ok(SwitchPartyListScanOutcome {
+                    scanned_pages,
+                    matched_party: None,
+                    reached_end: true,
+                });
+            }
+
+            if let Some(candidate) =
+                switch_party_find_matching_text_candidate(&page_texts, party_name, true)?
+            {
+                let click_x = candidate.rect.x
+                    + (candidate.rect.width as f64 * rule.matched_party_click_x_multiplier).round()
+                        as i32;
+                let click_y = match rule.matched_party_click_y_anchor {
+                    PartyTextClickYAnchor::Bottom => candidate.rect.bottom(),
+                };
+                self.click_capture_point(click_x, click_y)?;
+                self.wait_ms(rule.after_matched_party_click_delay_ms)?;
+                return Ok(SwitchPartyListScanOutcome {
+                    scanned_pages,
+                    matched_party: Some(candidate),
+                    reached_end: false,
+                });
+            }
+
+            let lowest = page_texts
+                .iter()
+                .filter(|candidate| {
+                    candidate.rect.x > rule.lowest_item_x_min
+                        && candidate.rect.x < rule.lowest_item_x_max
+                })
+                .max_by_key(|candidate| candidate.rect.y);
+            let Some(lowest) = lowest else {
+                return Ok(SwitchPartyListScanOutcome {
+                    scanned_pages,
+                    matched_party: None,
+                    reached_end: true,
+                });
+            };
+            if lowest.rect.y < rule.last_item_threshold_y {
+                return Ok(SwitchPartyListScanOutcome {
+                    scanned_pages,
+                    matched_party: None,
+                    reached_end: true,
+                });
+            }
+
+            if page_index == 0 {
+                self.click_capture_point(
+                    rule.first_page_preclick.screen_x.round() as i32,
+                    rule.first_page_preclick.screen_y.round() as i32,
+                )?;
+                self.wait_ms(rule.first_page_preclick_delay_ms)?;
+            }
+
+            self.click_capture_point(
+                rule.ocr_roi.x + rule.ocr_roi.width / 2,
+                lowest.rect.bottom(),
+            )?;
+            self.wait_ms(rule.page_scroll_delay_ms)?;
+            page_texts = self.recognize_switch_party_ocr_roi(rule.ocr_roi)?;
+        }
+
+        Ok(SwitchPartyListScanOutcome {
+            scanned_pages,
+            matched_party: None,
+            reached_end: true,
+        })
+    }
+
+    fn confirm_switch_party(
+        &mut self,
+        rule: &SwitchPartyConfirmRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        if !self.locator_matched(&rule.left_confirm_locator, "SwitchParty left confirm click")? {
+            return Ok(CommonJobRuntimeOutcome::Matched(false));
+        }
+
+        let mut choose_menu_closed = false;
+        for attempt in 0..rule.close_check_attempts.max(1) {
+            if !self.locator_matched(
+                &rule.party_delete_locator,
+                "SwitchParty choose menu close probe",
+            )? {
+                choose_menu_closed = true;
+                break;
+            }
+            if attempt + 1 < rule.close_check_attempts.max(1) {
+                self.wait_ms(rule.party_delete_locator.retry_interval_ms)?;
+            }
+        }
+        if !choose_menu_closed {
+            return Ok(CommonJobRuntimeOutcome::Matched(false));
+        }
+
+        self.wait_ms(rule.after_first_confirm_delay_ms)?;
+        let _ = self.locator_matched(
+            &rule.right_confirm_locator,
+            "SwitchParty right confirm click",
+        )?;
+        self.wait_ms(rule.after_second_confirm_delay_ms)?;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+
+    fn clear_switch_party_combat_scenes(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn desktop_switch_party_outcome_as_bool(
+    outcome: CommonJobRuntimeOutcome,
+    label: &str,
+) -> bgi_task::Result<bool> {
+    match outcome {
+        CommonJobRuntimeOutcome::Matched(value) => Ok(value),
+        CommonJobRuntimeOutcome::None => Err(TaskError::CommonJobExecution(format!(
+            "SwitchParty {label} did not return a match result"
+        ))),
+    }
+}
+
+fn desktop_ocr_roi_for_image(image_size: VisionSize, roi: Rect) -> bgi_task::Result<Rect> {
+    let roi = if roi.is_empty() {
+        Rect::new(0, 0, image_size.width as i32, image_size.height as i32)
+    } else {
+        Ok(roi)
+    }
+    .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    let roi = roi
+        .clamp_to(image_size)
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    if roi.width <= 0 || roi.height <= 0 {
+        return Err(TaskError::VisionPlan(
+            "desktop OCR ROI is empty after clamping to the captured image".to_string(),
+        ));
+    }
+    Ok(roi)
+}
+
+fn desktop_winrt_ocr_bgr_image(image: &BgrImage) -> Result<Vec<OcrResultRegion>, String> {
+    let png = encode_bgr_image_png(image)?;
+    desktop_winrt_ocr_png_regions(&png)
+}
+
+fn encode_bgr_image_png(image: &BgrImage) -> Result<Vec<u8>, String> {
+    let rgb = image.to_rgb_bytes();
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png)
+        .write_image(
+            &rgb,
+            image.size.width,
+            image.size.height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(png)
+}
+
+fn desktop_winrt_ocr_png_regions(png: &[u8]) -> Result<Vec<OcrResultRegion>, String> {
+    use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat};
+    use windows::Media::Ocr::OcrEngine;
+    use windows::Storage::Streams::{DataWriter, InMemoryRandomAccessStream};
+
+    let stream = InMemoryRandomAccessStream::new().map_err(|error| error.to_string())?;
+    let output_stream = stream
+        .GetOutputStreamAt(0)
+        .map_err(|error| error.to_string())?;
+    let writer = DataWriter::CreateDataWriter(&output_stream).map_err(|error| error.to_string())?;
+    writer.WriteBytes(png).map_err(|error| error.to_string())?;
+    writer
+        .StoreAsync()
+        .map_err(|error| error.to_string())?
+        .get()
+        .map_err(|error| error.to_string())?;
+    writer.DetachStream().map_err(|error| error.to_string())?;
+    stream.Seek(0).map_err(|error| error.to_string())?;
+
+    let decoder = BitmapDecoder::CreateAsync(&stream)
+        .map_err(|error| error.to_string())?
+        .get()
+        .map_err(|error| error.to_string())?;
+    let bitmap = decoder
+        .GetSoftwareBitmapConvertedAsync(BitmapPixelFormat::Bgra8, BitmapAlphaMode::Ignore)
+        .map_err(|error| error.to_string())?
+        .get()
+        .map_err(|error| error.to_string())?;
+    let engine =
+        OcrEngine::TryCreateFromUserProfileLanguages().map_err(|error| error.to_string())?;
+    let result = engine
+        .RecognizeAsync(&bitmap)
+        .map_err(|error| error.to_string())?
+        .get()
+        .map_err(|error| error.to_string())?;
+    let lines = result.Lines().map_err(|error| error.to_string())?;
+    let mut regions = Vec::new();
+    for line_index in 0..lines.Size().map_err(|error| error.to_string())? {
+        let line = lines.GetAt(line_index).map_err(|error| error.to_string())?;
+        let words = line.Words().map_err(|error| error.to_string())?;
+        for word_index in 0..words.Size().map_err(|error| error.to_string())? {
+            let word = words.GetAt(word_index).map_err(|error| error.to_string())?;
+            let text = word.Text().map_err(|error| error.to_string())?.to_string();
+            let bounds = word.BoundingRect().map_err(|error| error.to_string())?;
+            let width = bounds.Width.round().max(0.0) as i32;
+            let height = bounds.Height.round().max(0.0) as i32;
+            if text.trim().is_empty() || width <= 0 || height <= 0 {
+                continue;
+            }
+            let rect = Rect::new(
+                bounds.X.round().max(0.0) as i32,
+                bounds.Y.round().max(0.0) as i32,
+                width,
+                height,
+            )
+            .map_err(|error| error.to_string())?;
+            regions.push(OcrResultRegion {
+                rect,
+                text,
+                score: 1.0,
+            });
+        }
+    }
+    Ok(regions)
+}
+
+fn desktop_server_time_zone_offset_minutes(
+    config: &AppConfig,
+    task_name: &str,
+) -> Result<i32, String> {
+    let offset = bgi_script::ServerTimeHost::from_offset_string(
+        &config.other_config.server_time_zone_offset,
+    )
+    .map_err(|error| format!("{task_name} live execution has invalid server timezone: {error}"))?;
+    Ok(offset.server_time_zone_offset_milliseconds() / 60_000)
+}
+
+fn desktop_execution_record_clock(
+    config: &AppConfig,
+) -> Result<bgi_script::ExecutionRecordClock, String> {
+    let local_now = Local::now();
+    let local_offset = local_now.offset().fix();
+    let offset = bgi_script::ServerTimeHost::from_offset_string(
+        &config.other_config.server_time_zone_offset,
+    )
+    .map_err(|error| format!("script execution has invalid server timezone: {error}"))?;
+    let server_offset_seconds = offset.server_time_zone_offset_milliseconds() / 1_000;
+    let server_offset = FixedOffset::east_opt(server_offset_seconds).ok_or_else(|| {
+        format!("script execution has invalid server timezone seconds: {server_offset_seconds}")
+    })?;
+
+    Ok(bgi_script::ExecutionRecordClock::fixed(
+        local_now.naive_local(),
+        local_offset,
+        local_now.with_timezone(&server_offset),
+    ))
+}
+
+fn execute_desktop_wonderland_cycle_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &WonderlandCycleExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<WonderlandCycleExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("WonderlandCycle live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "WonderlandCycle")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "WonderlandCycle live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "WonderlandCycle live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_wonderland_cycle_live(
+        plan,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_walk_to_f_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &WalkToFExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<WalkToFExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("WalkToF live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) = desktop_common_job_global_input(config, window, "WalkToF")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "WalkToF live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "WalkToF live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_walk_to_f_live(
+        plan,
+        &config.key_bindings_config,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_relogin_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ReloginExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ReloginExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("Relogin live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) = desktop_common_job_global_input(config, window, "Relogin")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "Relogin live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "Relogin live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_relogin_live(
+        plan,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn capture_notification_screenshot(config: &AppConfig) -> Option<NotificationImage> {
@@ -4513,7 +9351,7 @@ fn current_time_ms() -> Result<u64, String> {
 }
 
 fn updater_exe_path(app_root: &Path) -> PathBuf {
-    app_root.join("BetterGI.update.exe")
+    app_root.join("bgi-updater.exe")
 }
 
 fn open_url(url: &str) -> Result<(), String> {
@@ -4820,7 +9658,14 @@ fn main() {
             desktop_shell_hide_main_window,
             desktop_shell_toggle_main_window,
             task_execute_shell,
+            task_execute_quick_buy,
+            task_execute_quick_serenitea_pot,
+            task_execute_auto_open_chest,
+            task_execute_auto_cook,
+            task_execute_auto_music_game_performance,
+            task_execute_auto_music_game_album,
             task_plan_auto_pathing,
+            task_execute_auto_pathing_action_boundary,
             task_plan_auto_fight,
             task_execute_auto_fight_team_playback,
             task_probe_auto_fight_finish,
@@ -4841,6 +9686,7 @@ fn main() {
             redeem_code_feed_items,
             redeem_code_live_codes,
             redeem_code_auto_redeem_plan,
+            redeem_code_auto_redeem_execute,
             redeem_code_clipboard_state,
             redeem_code_clipboard_set_enabled,
             redeem_code_clipboard_check,
@@ -4885,4 +9731,994 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run BetterGI Rust desktop app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_updater_path_defaults_to_rust_sidecar_name() {
+        let root = desktop_test_temp_root("updater-default");
+        fs::create_dir_all(&root).unwrap();
+
+        assert_eq!(updater_exe_path(&root), root.join("bgi-updater.exe"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_common_job_capture_size_defaults_when_game_window_is_missing() {
+        assert_eq!(
+            desktop_common_job_capture_size(None),
+            VisionSize::new(1920, 1080)
+        );
+    }
+
+    #[test]
+    fn desktop_common_job_live_plan_skips_unsupported_common_jobs() {
+        let plan = bgi_task::plan_common_job(
+            bgi_task::TELEPORT_TASK_KEY,
+            Some(&serde_json::json!({
+                "x": 1.0,
+                "y": 2.0
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        let result = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap();
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn desktop_common_job_live_plan_reports_supported_jobs_without_game_window() {
+        let set_time = bgi_task::plan_common_job(
+            bgi_task::SET_TIME_TASK_KEY,
+            Some(&serde_json::json!({
+                "hour": 8,
+                "minute": 30,
+                "skip": true
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &set_time,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("SetTime live execution requires a detected game window")
+        ));
+
+        let choose_talk_option = bgi_task::plan_common_job(
+            bgi_task::CHOOSE_TALK_OPTION_TASK_KEY,
+            Some(&serde_json::json!({
+                "option": "Target"
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &choose_talk_option,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("ChooseTalkOption live execution requires a detected game window")
+        ));
+
+        let check_rewards = bgi_task::plan_common_job(bgi_task::CHECK_REWARDS_TASK_KEY, None)
+            .unwrap()
+            .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &check_rewards,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("CheckRewards live execution requires a detected game window")
+        ));
+
+        let claim_mail_rewards =
+            bgi_task::plan_common_job(bgi_task::CLAIM_MAIL_REWARDS_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &claim_mail_rewards,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("ClaimMailRewards live execution requires a detected game window")
+        ));
+
+        let claim_battle_pass_rewards =
+            bgi_task::plan_common_job(bgi_task::CLAIM_BATTLE_PASS_REWARDS_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &claim_battle_pass_rewards,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("ClaimBattlePassRewards live execution requires a detected game window")
+        ));
+
+        let blessing_of_the_welkin_moon =
+            bgi_task::plan_common_job(bgi_task::BLESSING_WELKIN_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &blessing_of_the_welkin_moon,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("BlessingOfTheWelkinMoon live execution requires a detected game window")
+        ));
+
+        let claim_encounter_points_rewards =
+            bgi_task::plan_common_job(bgi_task::CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &claim_encounter_points_rewards,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("ClaimEncounterPointsRewards live execution requires a detected game window")
+        ));
+
+        let switch_party = bgi_task::plan_common_job(
+            bgi_task::SWITCH_PARTY_TASK_KEY,
+            Some(&serde_json::json!({
+                "partyName": "Daily.*"
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &switch_party,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("SwitchParty live execution requires a detected game window")
+        ));
+
+        let wonderland_cycle = bgi_task::plan_common_job(bgi_task::WONDERLAND_CYCLE_TASK_KEY, None)
+            .unwrap()
+            .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &wonderland_cycle,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("WonderlandCycle live execution requires a detected game window")
+        ));
+
+        let relogin = bgi_task::plan_common_job(bgi_task::RELOGIN_TASK_KEY, None)
+            .unwrap()
+            .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &relogin,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("Relogin live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_quick_buy_live_plan_reports_missing_game_window() {
+        let error = execute_desktop_quick_buy_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("QuickBuy live execution requires a detected game window"));
+    }
+
+    #[test]
+    fn desktop_quick_buy_target_capture_point_uses_scaled_plan_coordinates() {
+        let plan = plan_quick_buy(QuickBuyExecutionConfig {
+            capture_size: VisionSize::new(1280, 720),
+        })
+        .unwrap();
+
+        assert_eq!(
+            quick_buy_target_capture_point(&plan.normal_purchase_rule.final_clicks[0]),
+            (1130, 680)
+        );
+        assert_eq!(
+            quick_buy_target_capture_point(&plan.serenitea_pot_purchase_rule.final_clicks[1]),
+            (640, 567)
+        );
+    }
+
+    #[test]
+    fn desktop_quick_serenitea_pot_live_plan_reports_missing_game_window() {
+        let error = execute_desktop_quick_serenitea_pot_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("QuickSereniteaPot live execution requires a detected game window"));
+    }
+
+    #[test]
+    fn desktop_quick_serenitea_pot_points_use_scaled_plan_coordinates() {
+        let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig {
+            capture_size: VisionSize::new(1280, 720),
+        })
+        .unwrap();
+
+        assert_eq!(
+            quick_serenitea_pot_screen_point_capture_point(&plan.bag_rule.gadget_tab_click),
+            (700, 33)
+        );
+        assert_eq!(
+            quick_serenitea_pot_screen_point_capture_point(&plan.interaction_rule.confirm_click),
+            (673, 507)
+        );
+    }
+
+    #[test]
+    fn desktop_auto_cook_live_plan_reports_missing_game_window() {
+        let error = execute_desktop_auto_cook_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("AutoCook live execution requires a detected game window"));
+    }
+
+    #[test]
+    fn desktop_script_dispatcher_live_plan_reports_auto_cook_missing_game_window() {
+        let plan = ScriptDispatcherExecutionPlan::AutoCook(plan_auto_cook(
+            AutoCookExecutionConfig::default(),
+        ));
+        let error = execute_desktop_script_dispatcher_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoCook live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_script_dispatcher_live_result_writes_auto_cook_execution_error() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "AutoCook".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let mut result = bgi_task::evaluate_task_invocation_plan(
+            plan,
+            TaskInvocationExecutionMode::ExecuteReady,
+        );
+
+        execute_desktop_script_dispatcher_live_result(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &mut result,
+        );
+
+        assert!(!result.executed);
+        assert_eq!(result.status, TaskInvocationExecutionStatus::Invalid);
+        assert!(result
+            .message
+            .contains("AutoCook live execution requires a detected game window"));
+        assert!(result.script_dispatcher_live_execution.is_none());
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_use_redeem_code_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: USE_REDEEM_CODE_TASK_KEY.to_string(),
+                config: serde_json::json!({
+                    "codes": ["ABCD1234EFGH"]
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("UseRedeemCode live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_result_writes_use_redeem_code_execution_error() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: USE_REDEEM_CODE_TASK_KEY.to_string(),
+                config: serde_json::json!({
+                    "codes": ["ABCD1234EFGH"]
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let mut result = bgi_task::evaluate_task_invocation_plan(
+            plan,
+            TaskInvocationExecutionMode::ExecuteReady,
+        );
+
+        execute_desktop_independent_task_live_result(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &mut result,
+        );
+
+        assert!(!result.executed);
+        assert_eq!(result.status, TaskInvocationExecutionStatus::Invalid);
+        assert!(result
+            .message
+            .contains("UseRedeemCode live execution requires a detected game window"));
+        assert!(result.independent_task_live_execution.is_none());
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_rejects_use_redeem_code_without_codes() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: USE_REDEEM_CODE_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("requires at least one redeem code")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_auto_music_performance_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: AUTO_MUSIC_GAME_TASK_KEY.to_string(),
+                config: serde_json::json!({
+                    "mode": "performance"
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoMusicGame performance live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_auto_music_album_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: AUTO_MUSIC_GAME_TASK_KEY.to_string(),
+                config: serde_json::json!({
+                    "executionMode": "album"
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoMusicGame album live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_rejects_unknown_auto_music_mode() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: AUTO_MUSIC_GAME_TASK_KEY.to_string(),
+                config: serde_json::json!({
+                    "mode": "practice"
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("unsupported AutoMusicGame live execution mode: practice")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_quick_buy_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: QUICK_BUY_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("QuickBuy live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_quick_serenitea_pot_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: QUICK_SERENITEA_POT_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("QuickSereniteaPot live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_auto_open_chest_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: AUTO_OPEN_CHEST_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+            TaskInvocationExecutionStatus::RustExecutionPlanReady,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoOpenChest live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_auto_open_chest_asset_scale_tracks_capture_width() {
+        assert_eq!(
+            desktop_auto_open_chest_asset_scale(VisionSize::new(1920, 1080)),
+            1.0
+        );
+        assert!(
+            (desktop_auto_open_chest_asset_scale(VisionSize::new(1280, 720)) - (2.0 / 3.0)).abs()
+                < f64::EPSILON
+        );
+    }
+
+    fn desktop_test_temp_root(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("bettergi-desktop-{name}-{suffix}"))
+    }
+
+    #[test]
+    fn desktop_auto_cook_asset_scale_tracks_capture_width() {
+        assert_eq!(
+            desktop_auto_cook_asset_scale(VisionSize::new(1920, 1080)),
+            1.0
+        );
+        assert!(
+            (desktop_auto_cook_asset_scale(VisionSize::new(1280, 720)) - (2.0 / 3.0)).abs()
+                < f64::EPSILON
+        );
+    }
+
+    #[test]
+    fn desktop_auto_cook_template_object_preserves_locator_settings() {
+        let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+        let object =
+            desktop_auto_cook_template_object(&plan.locators.cook_icon, plan.capture_size).unwrap();
+
+        assert_eq!(
+            object.name.as_deref(),
+            Some(plan.locators.cook_icon.asset.as_str())
+        );
+        assert_eq!(object.region_of_interest, plan.locators.cook_icon.roi);
+        assert_eq!(object.template.threshold, plan.locators.cook_icon.threshold);
+        assert_eq!(object.template.mode, plan.locators.cook_icon.match_mode);
+        assert_eq!(
+            object.template.use_3_channels,
+            plan.locators.cook_icon.use_3_channels
+        );
+        assert_eq!(
+            object.template.template_asset,
+            Some(
+                Path::new("GameTask")
+                    .join("Common/Element")
+                    .join("Assets")
+                    .join("1920x1080")
+                    .join("ui_left_top_cook_icon.png")
+            )
+        );
+    }
+
+    fn desktop_test_game_window(width: u32, height: u32) -> GameWindowMatch {
+        let bounds = bgi_capture::WindowRect::new(0, 0, width as i32, height as i32);
+        GameWindowMatch {
+            handle: WindowHandle(1),
+            process_id: None,
+            process_name: Some("GenshinImpact".to_string()),
+            class_name: None,
+            title: None,
+            kind: bgi_capture::GameWindowMatchKind::ProcessName,
+            metrics: Some(bgi_capture::GameWindowMetrics::from_legacy_capture_rect(
+                width, height, bounds,
+            )),
+        }
+    }
+
+    #[test]
+    fn desktop_auto_music_game_performance_live_plan_reports_missing_game_window() {
+        let error = execute_desktop_auto_music_game_performance_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error
+            .contains("AutoMusicGame performance live execution requires a detected game window"));
+    }
+
+    #[test]
+    fn desktop_auto_music_game_performance_live_rejects_non_16_9_window_before_sampling() {
+        let window = desktop_test_game_window(1024, 768);
+        let error = execute_desktop_auto_music_game_performance_live_plan(
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("requires a 16:9 game window"));
+    }
+
+    #[test]
+    fn desktop_auto_music_game_album_live_plan_reports_missing_game_window() {
+        let error = execute_desktop_auto_music_game_album_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("AutoMusicGame album live execution requires a detected game window")
+        );
+    }
+
+    #[test]
+    fn desktop_auto_music_game_album_live_rejects_non_16_9_window_before_capture() {
+        let window = desktop_test_game_window(1024, 768);
+        let error = execute_desktop_auto_music_game_album_live_plan(
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("requires a 16:9 game window"));
+    }
+
+    #[test]
+    fn desktop_auto_music_game_lane_points_use_scaled_capture_coordinates() {
+        let capture_size = VisionSize::new(1280, 720);
+        let asset_scale = desktop_auto_music_game_asset_scale(capture_size);
+        let plan = plan_auto_music_game(AutoMusicGameExecutionConfig {
+            capture_size,
+            asset_scale,
+            ..AutoMusicGameExecutionConfig::default()
+        });
+
+        assert!((asset_scale - (2.0 / 3.0)).abs() < f64::EPSILON);
+        assert_eq!(
+            desktop_auto_music_lane_capture_point(&plan.key_lanes[0], asset_scale),
+            (278, 614)
+        );
+        assert_eq!(
+            desktop_auto_music_lane_capture_point(&plan.key_lanes[5], asset_scale),
+            (995, 614)
+        );
+    }
+
+    #[test]
+    fn desktop_auto_music_game_album_points_use_scaled_capture_coordinates() {
+        let capture_size = VisionSize::new(1280, 720);
+
+        assert_eq!(
+            desktop_auto_music_1080p_capture_point(310, 220, capture_size),
+            (206, 146)
+        );
+        assert_eq!(
+            desktop_auto_music_1080p_capture_point(480, 600, capture_size),
+            (320, 400)
+        );
+        assert_eq!(
+            desktop_auto_music_1080p_capture_point(1400, 600, capture_size),
+            (933, 400)
+        );
+    }
+
+    #[test]
+    fn desktop_auto_music_game_template_object_preserves_album_locator_settings() {
+        let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+        let object = desktop_auto_music_template_object(
+            &plan.locators.album_music_complete,
+            VisionSize::new(1280, 720),
+        )
+        .unwrap();
+
+        assert_eq!(
+            object.name.as_deref(),
+            Some("AutoMusicGame:album_music_complate.png")
+        );
+        assert_eq!(
+            object.region_of_interest,
+            Some(Rect {
+                x: 600,
+                y: 213,
+                width: 66,
+                height: 53
+            })
+        );
+        assert_eq!(
+            object.template.template_asset,
+            Some(
+                Path::new("GameTask")
+                    .join("AutoMusicGame")
+                    .join("Assets")
+                    .join("1920x1080")
+                    .join("album_music_complate.png")
+            )
+        );
+        assert_eq!(
+            object.template.mode,
+            plan.locators.album_music_complete.match_mode
+        );
+        assert_eq!(object.template.threshold, 0.8);
+    }
+
+    #[test]
+    fn desktop_auto_music_game_template_object_applies_roi_rules() {
+        let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+        let object =
+            desktop_auto_music_template_object(&plan.locators.btn_list, VisionSize::new(1280, 720))
+                .unwrap();
+
+        assert_eq!(
+            object.region_of_interest,
+            Some(Rect {
+                x: 768,
+                y: 576,
+                width: 512,
+                height: 144
+            })
+        );
+    }
+
+    #[test]
+    fn desktop_auto_music_game_white_confirm_uses_common_asset() {
+        let object = desktop_auto_music_white_confirm_object().unwrap();
+
+        assert_eq!(
+            object.name.as_deref(),
+            Some("Common/Element:btn_white_confirm.png")
+        );
+        assert_eq!(object.region_of_interest, None);
+        assert_eq!(
+            object.template.template_asset,
+            Some(
+                Path::new("GameTask")
+                    .join("Common/Element")
+                    .join("Assets")
+                    .join("1920x1080")
+                    .join("btn_white_confirm.png")
+            )
+        );
+    }
+
+    #[test]
+    fn desktop_auto_music_game_album_all_songs_ocr_roi_and_text_match() {
+        let roi = desktop_auto_music_album_all_songs_ocr_roi(
+            VisionSize::new(1920, 1080),
+            Rect {
+                x: 0,
+                y: 0,
+                width: 150,
+                height: 120,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            roi,
+            Rect {
+                x: 150,
+                y: 0,
+                width: 307,
+                height: 120
+            }
+        );
+        assert!(desktop_auto_music_ocr_contains_all_songs(&[
+            OcrResultRegion {
+                rect: Rect::new(0, 0, 20, 20).unwrap(),
+                text: "全部歌曲".to_string(),
+                score: 0.9,
+            }
+        ]));
+        assert!(!desktop_auto_music_ocr_contains_all_songs(&[
+            OcrResultRegion {
+                rect: Rect::new(0, 0, 20, 20).unwrap(),
+                text: "主题专辑".to_string(),
+                score: 0.9,
+            }
+        ]));
+    }
+
+    #[test]
+    fn desktop_use_redeem_code_live_plan_reports_missing_game_window() {
+        let error = execute_desktop_use_redeem_code_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            vec![RedeemCodeEntry::new("GENSHINGIFT", None).unwrap()],
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("UseRedeemCode live execution requires a detected game window"));
+    }
+
+    #[test]
+    fn desktop_use_redeem_code_ocr_text_matching_supports_text_and_regex_locators() {
+        let page = bgi_vision::BvPage {
+            capture_size: VisionSize::new(1920, 1080),
+            ..bgi_vision::BvPage::default()
+        };
+        let text_locator = page
+            .locator_for_text("前往兑换", None)
+            .plan(BvLocatorOperation::WaitFor, Some(100));
+        assert!(desktop_redeem_code_text_matches_object(
+            &text_locator.recognition_object,
+            "前 往 兑 换"
+        )
+        .unwrap());
+
+        let mut regex_object =
+            bgi_vision::RecognitionObject::ocr_match(Rect::new(0, 0, 100, 40).unwrap(), ["unused"]);
+        regex_object.ocr.one_contain_match_text.clear();
+        regex_object.ocr.regex_match_text = vec![r"兑换(成功|奖励)".to_string()];
+        assert!(desktop_redeem_code_text_matches_object(&regex_object, "兑换 成功").unwrap());
+    }
+
+    #[test]
+    fn desktop_use_redeem_code_ocr_roi_and_match_offsets_regions() {
+        let page = bgi_vision::BvPage {
+            capture_size: VisionSize::new(1920, 1080),
+            ..bgi_vision::BvPage::default()
+        };
+        let full_screen_locator = page
+            .locator_for_text("兑换成功", None)
+            .plan(BvLocatorOperation::WaitFor, Some(100));
+        assert_eq!(
+            desktop_redeem_code_ocr_roi_for_locator(
+                VisionSize::new(1920, 1080),
+                &full_screen_locator
+            )
+            .unwrap(),
+            Rect::new(0, 0, 1920, 1080).unwrap()
+        );
+
+        let roi = Rect::new(900, 100, 500, 400).unwrap();
+        let object = page
+            .locator_for_text("兑换成功", Some(roi))
+            .plan(BvLocatorOperation::WaitFor, Some(100))
+            .recognition_object;
+        let regions = vec![
+            OcrResultRegion {
+                rect: Rect::new(30, 20, 40, 16).unwrap(),
+                text: "兑换".to_string(),
+                score: 0.9,
+            },
+            OcrResultRegion {
+                rect: Rect::new(75, 20, 40, 16).unwrap(),
+                text: "成功".to_string(),
+                score: 0.8,
+            },
+        ];
+        let matched = desktop_redeem_code_match_ocr_regions(&object, &regions, roi)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(matched.rect, Rect::new(930, 120, 85, 16).unwrap());
+        assert_eq!(matched.text, "兑换\n成功");
+    }
 }

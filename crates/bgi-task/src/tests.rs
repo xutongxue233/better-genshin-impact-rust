@@ -1,0 +1,27983 @@
+use super::*;
+use bgi_core::{
+    AutoCookConfig, AutoDomainConfig, AutoEatConfig, AutoFishingConfig, AutoGeniusInvokationConfig,
+    AutoMusicGameConfig, AutoPickConfig, AutoWoodConfig, GameUiCategory, GenshinAction,
+    KeyBindingsConfig, KeyId, MapMaskConfig, NotificationEventResult, NotificationPayload,
+    SkillCdConfig, TriggerDescriptor,
+};
+use bgi_input::{InputCancellationToken, InputEvent, MouseButton};
+use bgi_vision::{
+    BgrImage, BgrPixel, BvLocatorOperation, BvLocatorPlan, BvPageCommand, OcrResultRegion, Point,
+    PureRustVisionBackend, Rect, RgbPixel, Size, TemplateMatchMode,
+};
+use std::collections::VecDeque;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+#[test]
+fn selects_exclusive_trigger_before_other_enabled_triggers() {
+    let mut triggers = runtime_triggers(true);
+    let descriptor = triggers
+        .iter()
+        .find(|trigger| trigger.descriptor.key == "AutoPick")
+        .unwrap()
+        .descriptor
+        .clone();
+    triggers.push(RunnableTrigger {
+        descriptor: TriggerDescriptor {
+            key: "ExclusiveAutoPick",
+            exclusive: true,
+            ..descriptor
+        },
+        enabled: true,
+    });
+
+    let selection = select_triggers_for_tick(
+        &triggers,
+        &DispatcherRuntime {
+            current_ui: GameUiCategory::Dialog,
+            ..DispatcherRuntime::default()
+        },
+        Duration::from_secs(60),
+    );
+
+    assert_eq!(selection.reason, TaskSelectionReason::ExclusiveTrigger);
+    assert_eq!(selection.triggers.len(), 1);
+    assert_eq!(selection.triggers[0].descriptor.key, "ExclusiveAutoPick");
+}
+
+#[test]
+fn inactive_game_keeps_only_background_triggers() {
+    let triggers = runtime_triggers(true);
+    let selection = select_triggers_for_tick(
+        &triggers,
+        &DispatcherRuntime {
+            game_active: false,
+            current_ui: GameUiCategory::Dialog,
+            ..DispatcherRuntime::default()
+        },
+        Duration::from_secs(60),
+    );
+
+    assert_eq!(selection.reason, TaskSelectionReason::BackgroundTriggers);
+    assert!(selection
+        .triggers
+        .iter()
+        .all(|trigger| trigger.descriptor.background));
+}
+
+#[test]
+fn ui_grace_period_runs_all_candidate_triggers() {
+    let triggers = runtime_triggers(false);
+    let selection = select_triggers_for_tick(
+        &triggers,
+        &DispatcherRuntime {
+            current_ui: GameUiCategory::BigMap,
+            ..DispatcherRuntime::default()
+        },
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(selection.reason, TaskSelectionReason::UiGracePeriod);
+    assert!(selection
+        .triggers
+        .iter()
+        .any(|trigger| trigger.descriptor.key == "AutoPick"));
+    assert!(selection
+        .triggers
+        .iter()
+        .any(|trigger| trigger.descriptor.key == "AutoSkip"));
+}
+
+#[test]
+fn runner_preserves_party_name_for_continuous_groups() {
+    let mut runner = RunnerRuntime {
+        continuous_run_group: true,
+        party_name: Some("daily".to_string()),
+        ..RunnerRuntime::default()
+    };
+    runner.start_task("AutoDomain").unwrap();
+    runner.stop_task();
+
+    assert_eq!(runner.party_name.as_deref(), Some("daily"));
+    assert_eq!(runner.state, TaskRuntimeState::Stopped);
+}
+
+#[test]
+fn progress_percentage_clamps_completed_count() {
+    let progress = TaskProgress {
+        completed: 15,
+        total: Some(10),
+        ..TaskProgress::default()
+    };
+    assert_eq!(progress.percentage(), Some(100));
+}
+
+#[test]
+fn combat_script_parser_preserves_legacy_command_syntax() {
+    let script = parse_combat_script_context(
+        r#"
+            # comment
+            钟离 s(0.2), e(hold), wait(0.2), w(0.2)
+            夜兰 round(1,3-4), keydown(VK_W), wait(0.05), keyup(VK_W) | round(2), q
+            "#,
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(
+        script.avatar_names,
+        vec!["钟离".to_string(), "夜兰".to_string()]
+    );
+    assert_eq!(script.commands.len(), 8);
+    assert_eq!(script.commands[0].method, CombatCommandMethod::S);
+    assert_eq!(script.commands[0].args, vec!["0.2".to_string()]);
+    assert_eq!(script.commands[1].method, CombatCommandMethod::Skill);
+    assert_eq!(script.commands[1].args, vec!["hold".to_string()]);
+    assert_eq!(script.commands[4].method, CombatCommandMethod::KeyDown);
+    assert_eq!(script.commands[4].activating_rounds, vec![1, 3, 4]);
+    assert_eq!(script.commands[7].method, CombatCommandMethod::Burst);
+    assert_eq!(script.commands[7].activating_rounds, vec![2]);
+}
+
+#[test]
+fn combat_script_parser_merges_comma_arguments_inside_parentheses() {
+    let script =
+        parse_combat_script_context("那维莱特 moveby(1800, -2100), scroll(-1)", true).unwrap();
+
+    assert_eq!(script.commands.len(), 2);
+    assert_eq!(script.commands[0].method, CombatCommandMethod::MoveBy);
+    assert_eq!(
+        script.commands[0].args,
+        vec!["1800".to_string(), "-2100".to_string()]
+    );
+    assert_eq!(script.commands[1].method, CombatCommandMethod::Scroll);
+    assert_eq!(script.commands[1].args, vec!["-1".to_string()]);
+}
+
+#[test]
+fn combat_script_bag_selects_best_matching_team_script() {
+    let bag = CombatScriptBagPlan {
+        source_path: PathBuf::from("User").join("AutoFight"),
+        scripts: vec![
+            parse_combat_script_context("钟离 e", true).unwrap(),
+            parse_combat_script_context("钟离 e\n夜兰 q", true).unwrap(),
+        ],
+        parse_failures: Vec::new(),
+    };
+
+    let matched = match_combat_script(&bag, &["钟离".to_string(), "夜兰".to_string()]).unwrap();
+
+    assert!(matched.full_match);
+    assert_eq!(matched.matched_avatar_count, 2);
+    assert_eq!(matched.commands.len(), 2);
+}
+
+#[test]
+fn combat_team_selection_filters_commands_like_auto_fight_task() {
+    let bag = CombatScriptBagPlan {
+        source_path: PathBuf::from("User").join("AutoFight"),
+        scripts: vec![
+            parse_combat_script_context("钟离 e\n夜兰 q\n当前角色 keypress(q)", true).unwrap(),
+            parse_combat_script_context("钟离 e\n纳西妲 e\n班尼特 q", true).unwrap(),
+        ],
+        parse_failures: Vec::new(),
+    };
+
+    let selection = plan_combat_script_team_selection(
+        &bag,
+        &["钟离".to_string(), "纳西妲".to_string(), "行秋".to_string()],
+    );
+
+    assert_eq!(
+        selection.status,
+        CombatScriptTeamSelectionStatus::PartialFallback
+    );
+    assert_eq!(selection.matched_avatar_count, 2);
+    assert_eq!(
+        selection.command_avatar_names,
+        vec![
+            "钟离".to_string(),
+            "纳西妲".to_string(),
+            "班尼特".to_string()
+        ]
+    );
+    assert_eq!(
+        selection.executable_avatar_names,
+        vec!["钟离".to_string(), "纳西妲".to_string()]
+    );
+    assert_eq!(
+        selection.filtered_out_avatar_names,
+        vec!["班尼特".to_string()]
+    );
+    assert_eq!(selection.executable_commands.len(), 2);
+    assert!(selection
+        .executable_commands
+        .iter()
+        .all(|command| command.avatar != CURRENT_COMBAT_AVATAR_NAME));
+}
+
+#[test]
+fn combat_team_selection_reports_missing_team_context() {
+    let bag = CombatScriptBagPlan {
+        source_path: PathBuf::from("User").join("AutoFight"),
+        scripts: vec![parse_combat_script_context("钟离 e", true).unwrap()],
+        parse_failures: Vec::new(),
+    };
+
+    let selection = plan_combat_script_team_selection(&bag, &[]);
+
+    assert_eq!(
+        selection.status,
+        CombatScriptTeamSelectionStatus::NoTeamContext
+    );
+    assert!(selection.executable_commands.is_empty());
+}
+
+#[test]
+fn combat_avatar_catalog_standardizes_configured_team_aliases() {
+    let root = unique_test_root("combat-avatar-catalog");
+    write_test_combat_avatar_catalog(&root);
+    let catalog = read_combat_avatar_catalog(&root).unwrap();
+
+    assert_eq!(catalog.source_path, root.join(COMBAT_AVATAR_CATALOG_PATH));
+    assert_eq!(catalog.standard_name_for_alias("班爷").unwrap(), "班尼特");
+    assert_eq!(catalog.standard_name_for_alias("秋秋人").unwrap(), "行秋");
+    assert_eq!(
+        standardize_configured_team_avatar_names(&catalog, "钟离，叶天帝,秋秋人,班爷").unwrap(),
+        vec![
+            "钟离".to_string(),
+            "枫原万叶".to_string(),
+            "行秋".to_string(),
+            "班尼特".to_string()
+        ]
+    );
+
+    let wrong_count =
+        standardize_configured_team_avatar_names(&catalog, "钟离,夜兰,行秋").unwrap_err();
+    assert!(
+        matches!(wrong_count, TaskError::CombatStrategy(message) if message.contains("当前3个"))
+    );
+
+    let unknown =
+        standardize_configured_team_avatar_names(&catalog, "钟离,夜兰,不存在,班尼特").unwrap_err();
+    assert!(
+        matches!(unknown, TaskError::CombatStrategy(message) if message.contains("角色名称校验失败：不存在"))
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn combat_script_context_standardizes_avatar_aliases_when_catalog_is_available() {
+    let root = unique_test_root("combat-script-avatar-alias");
+    write_test_combat_avatar_catalog(&root);
+    let catalog = read_combat_avatar_catalog(&root).unwrap();
+
+    let script = parse_combat_script_context_with_catalog(
+        "帝君 e\n班爷 q\n当前角色 keypress(q)",
+        true,
+        Some(&catalog),
+    )
+    .unwrap();
+
+    assert_eq!(
+        script.avatar_names,
+        vec![
+            "钟离".to_string(),
+            "班尼特".to_string(),
+            CURRENT_COMBAT_AVATAR_NAME.to_string()
+        ]
+    );
+    assert_eq!(script.commands[0].avatar, "钟离");
+    assert_eq!(script.commands[1].avatar, "班尼特");
+    assert_eq!(script.commands[2].avatar, CURRENT_COMBAT_AVATAR_NAME);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_fight_finish_detection_matches_legacy_pixels() {
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_PROGRESS_PIXEL,
+        RgbPixel {
+            r: 230,
+            g: 220,
+            b: 40,
+        },
+    );
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL,
+        RgbPixel {
+            r: 248,
+            g: 250,
+            b: 251,
+        },
+    );
+
+    let result = detect_auto_fight_finished_from_image(&image).unwrap();
+
+    assert!(result.finished);
+    assert_eq!(
+        result.progress_pixel,
+        RgbPixel {
+            r: 230,
+            g: 220,
+            b: 40
+        }
+    );
+    assert_eq!(
+        result.white_tile_pixel,
+        RgbPixel {
+            r: 248,
+            g: 250,
+            b: 251
+        }
+    );
+    assert!(is_auto_fight_finish_yellow(RgbPixel {
+        r: 200,
+        g: 255,
+        b: 100
+    }));
+    assert!(is_auto_fight_finish_white(RgbPixel {
+        r: 240,
+        g: 255,
+        b: 255
+    }));
+}
+
+#[test]
+fn auto_fight_finish_detection_rejects_missing_or_non_matching_pixels() {
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_PROGRESS_PIXEL,
+        RgbPixel {
+            r: 180,
+            g: 220,
+            b: 40,
+        },
+    );
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL,
+        RgbPixel {
+            r: 248,
+            g: 250,
+            b: 251,
+        },
+    );
+
+    let result = detect_auto_fight_finished_from_image(&image).unwrap();
+    assert!(!result.finished);
+    assert!(!is_auto_fight_finish_yellow(RgbPixel {
+        r: 199,
+        g: 255,
+        b: 100
+    }));
+    assert!(!is_auto_fight_finish_white(RgbPixel {
+        r: 239,
+        g: 255,
+        b: 255
+    }));
+
+    let small = blank_bgr_image(Size::new(200, 100));
+    let error = detect_auto_fight_finished_from_image(&small).unwrap_err();
+    assert!(matches!(error, TaskError::VisionPlan(message) if message.contains("outside capture")));
+}
+
+#[test]
+fn auto_fight_finish_detection_plan_preserves_legacy_probe_sequence() {
+    let config = FightFinishDetectParam::default();
+
+    let plan = plan_auto_fight_finish_detection(&config, 1500, 450).unwrap();
+
+    assert_eq!(plan.pre_detect_delay_ms, 1500);
+    assert_eq!(plan.detect_delay_ms, 450);
+    assert_eq!(plan.progress_pixel, AUTO_FIGHT_FINISH_PROGRESS_PIXEL);
+    assert_eq!(plan.white_tile_pixel, AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL);
+    assert!(!plan.native_ready_without_capture);
+    assert_eq!(
+        plan.steps
+            .iter()
+            .filter(|step| step.enabled)
+            .map(|step| step.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            AutoFightFinishDetectionStepKind::PreDetectDelay,
+            AutoFightFinishDetectionStepKind::OpenPartySetup,
+            AutoFightFinishDetectionStepKind::WaitForPartySetup,
+            AutoFightFinishDetectionStepKind::CaptureFrame,
+            AutoFightFinishDetectionStepKind::SampleFinishPixels,
+            AutoFightFinishDetectionStepKind::DropFromPartySetup,
+            AutoFightFinishDetectionStepKind::CancelPartySwitchWhenFinished,
+        ]
+    );
+    let open_step = plan
+        .steps
+        .iter()
+        .find(|step| step.kind == AutoFightFinishDetectionStepKind::OpenPartySetup)
+        .unwrap();
+    assert_eq!(
+        open_step.input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::L.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::L.vk(),
+                extended: None
+            }
+        ]
+    );
+    let drop_step = plan
+        .steps
+        .iter()
+        .find(|step| step.kind == AutoFightFinishDetectionStepKind::DropFromPartySetup)
+        .unwrap();
+    assert_eq!(
+        drop_step.input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::X.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::X.vk(),
+                extended: None
+            }
+        ]
+    );
+    assert!(plan.steps.iter().any(|step| {
+        step.kind == AutoFightFinishDetectionStepKind::CaptureFrame && step.requires_capture
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.kind == AutoFightFinishDetectionStepKind::SampleFinishPixels && step.requires_vision
+    }));
+
+    let mut rotate_config = FightFinishDetectParam::default();
+    rotate_config.rotate_find_enemy_enabled = true;
+    let rotate_plan = plan_auto_fight_finish_detection(&rotate_config, 1500, 450).unwrap();
+    assert!(!rotate_plan.steps.iter().any(|step| {
+        step.enabled && step.kind == AutoFightFinishDetectionStepKind::PreDetectDelay
+    }));
+    assert!(rotate_plan
+        .steps
+        .iter()
+        .any(|step| step.enabled && step.kind == AutoFightFinishDetectionStepKind::SeekEnemy));
+}
+
+#[test]
+fn auto_fight_finish_detection_probe_executes_against_supplied_capture() {
+    let config = FightFinishDetectParam::default();
+    let plan = plan_auto_fight_finish_detection(&config, 1500, 450).unwrap();
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_PROGRESS_PIXEL,
+        RgbPixel {
+            r: 230,
+            g: 220,
+            b: 40,
+        },
+    );
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL,
+        RgbPixel {
+            r: 248,
+            g: 250,
+            b: 251,
+        },
+    );
+
+    let execution = execute_auto_fight_finish_detection_probe(
+        &plan,
+        &image,
+        AutoFightFinishDetectionExecutionMode::PlanOnly,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        execution.mode,
+        AutoFightFinishDetectionExecutionMode::PlanOnly
+    );
+    assert!(execution.detection.finished);
+    assert!(!execution.dispatched);
+    assert_eq!(
+        execution.before_capture_events,
+        vec![
+            InputEvent::Delay { milliseconds: 1500 },
+            InputEvent::KeyDown {
+                vk: KeyId::L.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::L.vk(),
+                extended: None
+            },
+            InputEvent::Delay { milliseconds: 450 }
+        ]
+    );
+    assert_eq!(
+        execution.after_detection_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::X.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::X.vk(),
+                extended: None
+            },
+            InputEvent::KeyDown {
+                vk: KeyId::L.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::L.vk(),
+                extended: None
+            }
+        ]
+    );
+}
+
+#[test]
+fn auto_fight_finish_detection_probe_skips_cancel_switch_when_unfinished() {
+    let config = FightFinishDetectParam::default();
+    let plan = plan_auto_fight_finish_detection(&config, 1500, 450).unwrap();
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_PROGRESS_PIXEL,
+        RgbPixel {
+            r: 180,
+            g: 220,
+            b: 40,
+        },
+    );
+    set_bgr_pixel(
+        &mut image,
+        AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL,
+        RgbPixel {
+            r: 248,
+            g: 250,
+            b: 251,
+        },
+    );
+
+    let execution = execute_auto_fight_finish_detection_probe(
+        &plan,
+        &image,
+        AutoFightFinishDetectionExecutionMode::PlanOnly,
+        None,
+    )
+    .unwrap();
+
+    assert!(!execution.detection.finished);
+    assert_eq!(
+        execution.after_detection_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::X.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::X.vk(),
+                extended: None
+            }
+        ]
+    );
+}
+
+#[test]
+fn auto_fight_finish_detection_live_probe_captures_between_event_groups() {
+    let config = FightFinishDetectParam::default();
+    let plan = plan_auto_fight_finish_detection(&config, 1500, 450).unwrap();
+
+    let execution = execute_auto_fight_finish_detection_live_probe(
+        &plan,
+        AutoFightFinishDetectionExecutionMode::PlanOnly,
+        None,
+        || {
+            let mut image = blank_bgr_image(Size::new(1920, 1080));
+            set_bgr_pixel(
+                &mut image,
+                AUTO_FIGHT_FINISH_PROGRESS_PIXEL,
+                RgbPixel {
+                    r: 230,
+                    g: 220,
+                    b: 40,
+                },
+            );
+            set_bgr_pixel(
+                &mut image,
+                AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL,
+                RgbPixel {
+                    r: 248,
+                    g: 250,
+                    b: 251,
+                },
+            );
+            Ok(image)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        execution.mode,
+        AutoFightFinishDetectionExecutionMode::PlanOnly
+    );
+    assert!(execution.captured);
+    assert!(!execution.dispatched);
+    assert_eq!(execution.dispatched_events, 0);
+    assert!(execution.detection.unwrap().finished);
+    assert_eq!(execution.before_capture_events.len(), 4);
+    assert_eq!(execution.after_detection_events.len(), 4);
+}
+
+#[test]
+fn auto_fight_finish_detection_live_probe_can_cancel_before_capture() {
+    let config = FightFinishDetectParam::default();
+    let plan = plan_auto_fight_finish_detection(&config, 1500, 450).unwrap();
+    let cancellation = InputCancellationToken::new();
+    cancellation.cancel();
+
+    let execution = execute_auto_fight_finish_detection_live_probe(
+        &plan,
+        AutoFightFinishDetectionExecutionMode::SendInput,
+        Some(&cancellation),
+        || panic!("capture must not run after pre-capture cancellation"),
+    )
+    .unwrap();
+
+    assert!(execution.dispatched);
+    assert!(execution.cancelled);
+    assert!(!execution.captured);
+    assert!(execution.detection.is_none());
+    assert!(execution.after_detection_events.is_empty());
+    assert_eq!(execution.dispatched_events, 0);
+}
+
+#[test]
+fn active_avatar_detection_uses_white_rect_majority() {
+    let mut image = blank_bgr_image(Size::new(24, 4));
+    let rects = small_avatar_index_rects();
+    fill_rect_gray(&mut image, rects[0], 252);
+    fill_rect_gray(&mut image, rects[1], 90);
+    fill_rect_gray(&mut image, rects[2], 252);
+    fill_rect_gray(&mut image, rects[3], 252);
+
+    let result = detect_active_combat_avatar_index_by_color(&image, &rects).unwrap();
+
+    assert_eq!(result.active_index, Some(2));
+    assert_eq!(
+        result.method,
+        CombatActiveAvatarDetectionMethod::WhiteRectMajority
+    );
+    assert_eq!(result.white_rect_count, 3);
+    assert_eq!(result.not_white_rect_index, Some(2));
+}
+
+#[test]
+fn active_avatar_detection_uses_edge_white_ratio_when_fill_is_ambiguous() {
+    let mut image = blank_bgr_image(Size::new(60, 12));
+    let rects = vec![
+        Rect::new(0, 0, 12, 12).unwrap(),
+        Rect::new(14, 0, 12, 12).unwrap(),
+        Rect::new(28, 0, 12, 12).unwrap(),
+        Rect::new(42, 0, 12, 12).unwrap(),
+    ];
+    for (index, rect) in rects.iter().copied().enumerate() {
+        fill_rect_gray(&mut image, rect, 100);
+        if index != 2 {
+            draw_rect_edge_gray(&mut image, rect, 255);
+        }
+    }
+
+    let result = detect_active_combat_avatar_index_by_color(&image, &rects).unwrap();
+
+    assert_eq!(result.active_index, Some(3));
+    assert_eq!(
+        result.method,
+        CombatActiveAvatarDetectionMethod::EdgeWhiteRatio
+    );
+    assert_eq!(result.edge_white_ratios.len(), 4);
+    assert!(result.edge_white_ratios[0] > 0.5);
+    assert!(result.edge_white_ratios[2] <= 0.5);
+}
+
+#[test]
+fn active_avatar_detection_uses_difference_vote_for_full_team() {
+    let mut image = blank_bgr_image(Size::new(24, 4));
+    let rects = small_avatar_index_rects();
+    for rect in rects.iter().copied() {
+        fill_rect_gray(&mut image, rect, 110);
+    }
+    fill_rect_gray(&mut image, rects[3], 120);
+
+    let result = detect_active_combat_avatar_index_by_color(&image, &rects).unwrap();
+
+    assert_eq!(result.active_index, Some(4));
+    assert_eq!(
+        result.method,
+        CombatActiveAvatarDetectionMethod::ImageDifferenceVote
+    );
+    assert_eq!(result.difference_votes, vec![1, 0, 0, 3]);
+}
+
+#[test]
+fn active_avatar_detection_defaults_single_avatar_to_active() {
+    let image = blank_bgr_image(Size::new(8, 4));
+    let rects = vec![Rect::new(1, 1, 3, 2).unwrap()];
+
+    let result = detect_active_combat_avatar_index_by_color(&image, &rects).unwrap();
+
+    assert_eq!(result.active_index, Some(1));
+    assert_eq!(
+        result.method,
+        CombatActiveAvatarDetectionMethod::SingleAvatar
+    );
+}
+
+#[test]
+fn active_avatar_detection_uses_arrow_template_when_color_is_unresolved() {
+    let root = unique_test_root("active-avatar-arrow");
+    let asset_path = root
+        .join("GameTask")
+        .join("Common")
+        .join("Element")
+        .join("Assets")
+        .join("1920x1080")
+        .join(AUTO_FIGHT_CURRENT_AVATAR_THRESHOLD_ASSET);
+    fs::create_dir_all(asset_path.parent().unwrap()).unwrap();
+    let template = BgrImage::new(
+        Size::new(2, 2),
+        vec![255, 255, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255],
+    )
+    .unwrap();
+    template.write_png(&asset_path).unwrap();
+    let mut image = blank_bgr_image(Size::new(48, 20));
+    blit_bgr_image(&mut image, &template, 6, 11);
+    let rects = vec![
+        Rect::new(32, 1, 6, 3).unwrap(),
+        Rect::new(32, 6, 6, 3).unwrap(),
+        Rect::new(32, 11, 6, 3).unwrap(),
+        Rect::new(32, 16, 6, 3).unwrap(),
+    ];
+    let result = detect_active_combat_avatar_index_by_color_then_arrow(
+        &root,
+        &image,
+        &rects,
+        Rect::new(0, 0, 16, 20).unwrap(),
+    )
+    .unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(result.active_index, Some(3));
+    assert_eq!(
+        result.method,
+        CombatActiveAvatarDetectionMethod::ArrowTemplate
+    );
+    assert_eq!(result.white_rect_count, 0);
+    assert_eq!(result.difference_votes, vec![0, 0, 0, 0]);
+}
+
+#[test]
+fn combat_avatar_index_rect_detection_finds_template_rects() {
+    let root = unique_test_root("avatar-index-templates");
+    let index_roi = Rect::new(0, 0, 16, 20).unwrap();
+    let arrow_roi = Rect::new(20, 0, 8, 20).unwrap();
+    let templates = write_test_index_templates(&root);
+    let mut image = blank_bgr_image(Size::new(32, 24));
+    for (index, template) in templates.iter().enumerate() {
+        blit_bgr_image(&mut image, template, 4, 2 + index as u32 * 5);
+    }
+
+    let detection =
+        detect_combat_avatar_index_rects_from_templates_in(&root, &image, index_roi, arrow_roi)
+            .unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(!detection.inferred_from_current_avatar_arrow);
+    assert_eq!(detection.resolved_rects.len(), 4);
+    assert_eq!(
+        detection.rects_by_index[0],
+        Some(Rect::new(4, 2, 3, 3).unwrap())
+    );
+    assert_eq!(
+        detection.rects_by_index[3],
+        Some(Rect::new(4, 17, 3, 3).unwrap())
+    );
+}
+
+#[test]
+fn combat_avatar_index_rect_detection_inferrs_missing_active_rect_from_arrow() {
+    let root = unique_test_root("avatar-index-arrow-infer");
+    let index_roi = Rect::new(0, 0, 24, 80).unwrap();
+    let arrow_roi = Rect::new(0, 0, 24, 80).unwrap();
+    let templates = write_test_index_templates(&root);
+    let arrow_template = write_test_current_avatar_arrow_template(&root);
+    let mut image = blank_bgr_image(Size::new(48, 216));
+    blit_bgr_image(&mut image, &templates[0], 4, 3);
+    blit_bgr_image(&mut image, &arrow_template, 8, 22);
+
+    let detection =
+        detect_combat_avatar_index_rects_from_templates_in(&root, &image, index_roi, arrow_roi)
+            .unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(detection.inferred_from_current_avatar_arrow);
+    assert_eq!(
+        detection.rects_by_index[0],
+        Some(Rect::new(4, 3, 3, 3).unwrap())
+    );
+    assert_eq!(
+        detection.rects_by_index[1],
+        Some(Rect::new(4, 22, 3, 3).unwrap())
+    );
+    assert_eq!(
+        detection.resolved_rects,
+        vec![
+            Rect::new(4, 3, 3, 3).unwrap(),
+            Rect::new(4, 22, 3, 3).unwrap()
+        ]
+    );
+}
+
+#[test]
+fn combat_multi_game_detection_matches_legacy_icon_count_rules() {
+    let solo = combat_multi_game_detection_from_icon_counts(0, false).unwrap();
+    assert_eq!(solo.status, CombatMultiGameStatus::default());
+    assert_eq!(solo.status.max_control_avatar_count().unwrap(), 4);
+
+    let solo_host = combat_multi_game_detection_from_icon_counts(0, true).unwrap();
+    assert_eq!(
+        solo_host.status,
+        CombatMultiGameStatus {
+            is_in_multi_game: true,
+            is_host: true,
+            player_count: 1
+        }
+    );
+    assert_eq!(solo_host.status.max_control_avatar_count().unwrap(), 4);
+
+    let guest = combat_multi_game_detection_from_icon_counts(2, false).unwrap();
+    assert_eq!(
+        guest.status,
+        CombatMultiGameStatus {
+            is_in_multi_game: true,
+            is_host: false,
+            player_count: 3
+        }
+    );
+    assert_eq!(guest.status.max_control_avatar_count().unwrap(), 1);
+
+    let host = combat_multi_game_detection_from_icon_counts(2, true).unwrap();
+    assert_eq!(
+        host.status,
+        CombatMultiGameStatus {
+            is_in_multi_game: true,
+            is_host: true,
+            player_count: 3
+        }
+    );
+    assert_eq!(host.status.max_control_avatar_count().unwrap(), 2);
+    assert!(combat_multi_game_detection_from_icon_counts(4, true).is_err());
+}
+
+#[test]
+fn combat_multi_game_rect_maps_match_legacy_auto_fight_assets() {
+    let size = Size::new(1920, 1080);
+    let host_three = CombatMultiGameStatus {
+        is_in_multi_game: true,
+        is_host: true,
+        player_count: 3,
+    };
+    assert_eq!(
+        combat_avatar_index_rects_for_multi_game_status(size, host_three).unwrap(),
+        vec![
+            Rect::new(1859, 459, 28, 24).unwrap(),
+            Rect::new(1859, 555, 28, 24).unwrap()
+        ]
+    );
+    assert_eq!(
+        combat_avatar_side_icon_rects_for_multi_game_status(size, host_three).unwrap(),
+        vec![
+            Rect::new(1765, 375, 76, 76).unwrap(),
+            Rect::new(1765, 470, 76, 76).unwrap()
+        ]
+    );
+
+    let guest_four = CombatMultiGameStatus {
+        is_in_multi_game: true,
+        is_host: false,
+        player_count: 4,
+    };
+    assert_eq!(
+        combat_avatar_index_rects_for_multi_game_status(size, guest_four).unwrap(),
+        vec![Rect::new(1859, 507, 28, 24).unwrap()]
+    );
+    assert_eq!(
+        combat_avatar_side_icon_rects_for_multi_game_status(size, guest_four).unwrap(),
+        vec![Rect::new(1765, 515, 76, 76).unwrap()]
+    );
+}
+
+#[test]
+fn active_avatar_rect_detection_uses_detected_multi_game_rects() {
+    let root = unique_test_root("active-avatar-multi-game");
+    let p_template = write_test_auto_fight_template(&root, AUTO_FIGHT_COOP_P_ASSET);
+    let one_p_template = write_test_auto_fight_template(&root, AUTO_FIGHT_COOP_ONE_P_ASSET);
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    blit_bgr_image(&mut image, &one_p_template, 12, 9);
+    blit_bgr_image(&mut image, &p_template, 1810, 230);
+    blit_bgr_image(&mut image, &p_template, 1810, 290);
+
+    let detection =
+        combat_avatar_index_rect_detection_for_active_avatar_detection(&root, &image).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(
+        detection.resolved_rects,
+        vec![
+            Rect::new(1859, 459, 28, 24).unwrap(),
+            Rect::new(1859, 555, 28, 24).unwrap()
+        ]
+    );
+    assert!(detection.message.contains("房主"));
+    assert!(!detection.inferred_from_current_avatar_arrow);
+}
+
+#[test]
+fn active_skill_readiness_uses_legacy_bottom_cooldown_components() {
+    let root = unique_test_root("active-skill-readiness");
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let ready = detect_combat_skill_readiness(&root, &image, 1, false).unwrap();
+    assert_eq!(ready.status, CombatSkillReadinessStatus::Ready);
+    assert_eq!(ready.ready, Some(true));
+    assert_eq!(ready.white_component_count, 0);
+    assert_eq!(
+        ready.cooldown_rect,
+        Some(Rect::new(1688, 988, 22, 12).unwrap())
+    );
+
+    let cooldown_rect = active_combat_skill_cooldown_rect(image.size, false).unwrap();
+    fill_rect_gray(
+        &mut image,
+        Rect::new(cooldown_rect.x, cooldown_rect.y, 2, 2).unwrap(),
+        255,
+    );
+    fill_rect_gray(
+        &mut image,
+        Rect::new(cooldown_rect.x + 8, cooldown_rect.y, 2, 2).unwrap(),
+        255,
+    );
+    let cooldown = detect_combat_skill_readiness(&root, &image, 1, false).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(
+        cooldown.status,
+        CombatSkillReadinessStatus::CooldownOrUnavailable
+    );
+    assert_eq!(cooldown.ready, Some(false));
+    assert_eq!(cooldown.white_component_count, 2);
+    assert_eq!(cooldown.legacy_connected_component_labels, 3);
+}
+
+#[test]
+fn burst_readiness_uses_legacy_active_burst_cooldown_rect() {
+    let root = unique_test_root("active-burst-readiness");
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let burst = detect_combat_skill_readiness(&root, &image, 1, true).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(burst.kind, CombatSkillReadinessKind::ElementalBurst);
+    assert_eq!(burst.status, CombatSkillReadinessStatus::Ready);
+    assert_eq!(
+        burst.cooldown_rect,
+        Some(Rect::new(1809, 968, 30, 15).unwrap())
+    );
+}
+
+#[test]
+fn inactive_skill_readiness_reports_unsupported_without_guessing() {
+    let root = unique_test_root("inactive-skill-readiness");
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let detection = detect_combat_skill_readiness(&root, &image, 2, false).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(
+        detection.status,
+        CombatSkillReadinessStatus::UnsupportedForInactiveAvatar
+    );
+    assert_eq!(detection.active_index, Some(1));
+    assert_eq!(detection.ready, None);
+    assert!(detection.cooldown_rect.is_none());
+}
+
+#[test]
+fn inactive_burst_readiness_uses_legacy_side_circle_probe() {
+    let root = unique_test_root("inactive-burst-readiness");
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let empty = detect_combat_skill_readiness(&root, &image, 2, true).unwrap();
+    assert_eq!(
+        empty.status,
+        CombatSkillReadinessStatus::CooldownOrUnavailable
+    );
+    assert_eq!(empty.ready, Some(false));
+    assert_eq!(
+        empty.side_burst_rect,
+        Some(Rect::new(1584, 316, 64, 84).unwrap())
+    );
+    assert!(!empty.side_burst_circle.as_ref().unwrap().detected);
+
+    let q_rect = combat_avatar_side_burst_rect_for_index(image.size, 2).unwrap();
+    draw_circle_gray(&mut image, (q_rect.center().x, q_rect.center().y), 29, 255);
+    let ready = detect_combat_skill_readiness(&root, &image, 2, true).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(ready.kind, CombatSkillReadinessKind::ElementalBurst);
+    assert_eq!(ready.status, CombatSkillReadinessStatus::Ready);
+    assert_eq!(ready.ready, Some(true));
+    let circle = ready.side_burst_circle.unwrap();
+    assert!(circle.detected);
+    assert!(circle.best_votes >= AUTO_FIGHT_SIDE_BURST_REQUIRED_CIRCLE_VOTES);
+    assert_eq!(
+        circle.best_center,
+        Some((q_rect.center().x, q_rect.center().y))
+    );
+}
+
+#[test]
+fn combat_team_recognition_classifies_side_icon_crops_into_team_plan() {
+    let root = unique_test_root("team-recognition");
+    write_test_combat_avatar_catalog(&root);
+    let image = blank_bgr_image(Size::new(1920, 1080));
+    let expected_rects = combat_avatar_side_icon_rects_for_index_rects(
+        image.size,
+        &default_combat_avatar_index_rects(image.size).unwrap(),
+    )
+    .unwrap();
+    let classes = vec![
+        ("Zhongli", 0.92),
+        ("YelanCostumeYu", 0.52),
+        ("Xingqiu", 0.83),
+        ("Bennett", 0.78),
+    ];
+    let mut classifier = RecordingAvatarSideClassifier {
+        classes,
+        calls: Vec::new(),
+    };
+
+    let recognition =
+        recognize_combat_team_from_avatar_side_icons(&root, &image, "", &mut classifier).unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(
+        recognition.team_avatar_names,
+        vec!["钟离", "夜兰", "行秋", "班尼特"]
+    );
+    assert_eq!(recognition.avatars[1].name_en, "Yelan");
+    assert_eq!(recognition.avatars[1].costume_name.as_deref(), Some("Yu"));
+    assert_eq!(recognition.avatars[1].display_name, "夜兰(玄玉瑶芳)");
+    assert_eq!(recognition.team_plan.avatars.len(), 4);
+    assert_eq!(recognition.team_plan.avatars[0].name_en, "Zhongli");
+    assert_eq!(classifier.calls, expected_rects);
+}
+
+#[test]
+fn combat_team_recognition_rejects_low_confidence_side_classification() {
+    let root = unique_test_root("team-recognition-low-confidence");
+    write_test_combat_avatar_catalog(&root);
+    let image = blank_bgr_image(Size::new(1920, 1080));
+    let mut classifier = RecordingAvatarSideClassifier {
+        classes: vec![("Zhongli", 0.69)],
+        calls: Vec::new(),
+    };
+
+    let error = recognize_combat_team_from_avatar_side_icons(&root, &image, "", &mut classifier)
+        .unwrap_err();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(error.to_string().contains("无法识别第1位角色"));
+}
+
+#[test]
+fn combat_command_execution_plan_maps_legacy_input_actions() {
+    let script = parse_combat_script_context(
+            "钟离 s(0.2), attack(0.4), wait(0.05), moveby(1800, -2100), keydown(VK_LBUTTON), keyup(VK_LBUTTON), scroll(-1)",
+            true,
+        )
+        .unwrap();
+
+    let plan = plan_combat_script_execution(&script).unwrap();
+
+    assert_eq!(plan.commands.len(), 7);
+    assert_eq!(
+        plan.commands[0].switch_policy,
+        CombatAvatarSwitchPolicy::EnsureSelectedBeforeAction
+    );
+    assert!(matches!(
+        plan.commands[0].action,
+        CombatCommandActionPlan::Walk {
+            ref direction,
+            duration_ms: 200
+        } if direction == "s"
+    ));
+    assert_eq!(
+        plan.commands[0].default_input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::S.vk(),
+                extended: None,
+            },
+            InputEvent::Delay { milliseconds: 200 },
+            InputEvent::KeyUp {
+                vk: KeyId::S.vk(),
+                extended: None,
+            }
+        ]
+    );
+    assert!(matches!(
+        plan.commands[1].action,
+        CombatCommandActionPlan::Attack {
+            duration_ms: 400,
+            click_interval_ms: COMBAT_ATTACK_INTERVAL_MILLISECONDS,
+            repeat_count: 3,
+        }
+    ));
+    assert_eq!(
+        plan.commands[2].default_input_events,
+        vec![InputEvent::Delay { milliseconds: 50 }]
+    );
+    assert_eq!(
+        plan.commands[3].default_input_events,
+        vec![InputEvent::MouseMoveRelative {
+            dx: 1800,
+            dy: -2100
+        }]
+    );
+    assert_eq!(
+        plan.commands[4].default_input_events,
+        vec![InputEvent::MouseButtonDown {
+            button: MouseButton::Left
+        }]
+    );
+    assert_eq!(
+        plan.commands[5].default_input_events,
+        vec![InputEvent::MouseButtonUp {
+            button: MouseButton::Left
+        }]
+    );
+    assert_eq!(
+        plan.commands[6].default_input_events,
+        vec![InputEvent::MouseWheel {
+            amount: -120,
+            horizontal: false,
+        }]
+    );
+    let evaluation = evaluate_combat_script_playback(&plan);
+    assert_eq!(evaluation.total_commands, 7);
+    assert_eq!(evaluation.context_bound_commands, 2);
+    assert_eq!(
+        evaluation.first_blocking_requirements,
+        vec![CombatExecutionContextRequirement::AvatarSelection]
+    );
+}
+
+#[test]
+fn combat_command_execution_plan_tracks_switch_policy_and_skill_options() {
+    let script = parse_combat_script_context(
+        "钟离 e(hold,wait), wait(0.1)\n夜兰 q\n当前角色 keypress(q)",
+        true,
+    )
+    .unwrap();
+
+    let plan = plan_combat_script_execution(&script).unwrap();
+
+    assert_eq!(
+        plan.commands[0].switch_policy,
+        CombatAvatarSwitchPolicy::EnsureSelectedBeforeAction
+    );
+    assert!(matches!(
+        plan.commands[0].action,
+        CombatCommandActionPlan::Skill {
+            hold: true,
+            variant: CombatSkillExecutionVariant::GenericHold,
+            cooldown_policy: CombatSkillCooldownPolicy::WaitUntilReady,
+            ..
+        }
+    ));
+    assert_eq!(
+        plan.commands[1].switch_policy,
+        CombatAvatarSwitchPolicy::NoSwitch
+    );
+    assert_eq!(
+        plan.commands[2].switch_policy,
+        CombatAvatarSwitchPolicy::SwitchOnAvatarChange
+    );
+    assert_eq!(
+        plan.commands[3].switch_policy,
+        CombatAvatarSwitchPolicy::CurrentAvatar
+    );
+    assert!(matches!(
+        plan.commands[3].action,
+        CombatCommandActionPlan::KeyPress {
+            key: CombatVirtualKeyPlan {
+                mapped_action: Some(GenshinAction::ElementalBurst),
+                ..
+            }
+        }
+    ));
+    assert_eq!(
+        plan.commands[3].default_input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::Q.vk(),
+                extended: None,
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::Q.vk(),
+                extended: None,
+            }
+        ]
+    );
+}
+
+#[test]
+fn combat_script_playback_plan_handles_static_current_avatar_macro() {
+    let script = parse_combat_script_context(
+        "当前角色 keydown(VK_LBUTTON), wait(0.05), moveby(200, -100), keyup(VK_LBUTTON)",
+        true,
+    )
+    .unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+
+    let execution =
+        execute_static_combat_script_inputs(&plan, CombatCommandPlaybackMode::PlanOnly, None)
+            .unwrap();
+
+    assert_eq!(execution.mode, CombatCommandPlaybackMode::PlanOnly);
+    assert_eq!(execution.total_commands, 4);
+    assert_eq!(execution.static_ready_commands, 4);
+    assert_eq!(execution.context_bound_commands, 0);
+    assert!(!execution.dispatched);
+    assert_eq!(
+        execution.input_events,
+        vec![
+            InputEvent::MouseButtonDown {
+                button: MouseButton::Left
+            },
+            InputEvent::Delay { milliseconds: 50 },
+            InputEvent::MouseMoveRelative { dx: 200, dy: -100 },
+            InputEvent::MouseButtonUp {
+                button: MouseButton::Left
+            }
+        ]
+    );
+}
+
+#[test]
+fn combat_script_playback_rejects_context_bound_commands_before_dispatch() {
+    let script = parse_combat_script_context("钟离 e(wait), wait(0.1)", true).unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+
+    let error =
+        execute_static_combat_script_inputs(&plan, CombatCommandPlaybackMode::PlanOnly, None)
+            .unwrap_err();
+
+    let TaskError::CombatStrategy(message) = error else {
+        panic!("expected combat strategy error");
+    };
+    assert!(message.contains("native combat context"));
+    assert!(message.contains("AvatarSelection"));
+    assert!(message.contains("SkillCooldown"));
+}
+
+#[test]
+fn team_context_combat_playback_resolves_avatar_switches() {
+    let script =
+        parse_combat_script_context("钟离 e, wait(0.05)\n夜兰 click(right)", true).unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+    let team_plan = CombatTeamPlan {
+        avatars: vec![
+            test_team_avatar(1, "钟离"),
+            test_team_avatar(2, "夜兰"),
+            test_team_avatar(3, "纳西妲"),
+            test_team_avatar(4, "班尼特"),
+        ],
+        command_avatar_names: vec!["钟离".to_string(), "夜兰".to_string()],
+        can_be_skipped_avatar_names: Vec::new(),
+        all_command_avatars_can_be_skipped: false,
+    };
+    let executable_commands = script.commands.clone();
+
+    let execution = execute_team_context_combat_script_inputs(
+        &plan,
+        &team_plan,
+        &executable_commands,
+        CombatCommandPlaybackMode::PlanOnly,
+        None,
+    )
+    .unwrap();
+
+    assert!(execution.dispatch_ready);
+    assert_eq!(execution.candidate_commands, 3);
+    assert_eq!(execution.playable_commands, 3);
+    assert_eq!(execution.blocked_command_index, None);
+    assert_eq!(execution.planned_commands[0].team_index, Some(1));
+    assert_eq!(
+        execution.planned_commands[0].resolved_context,
+        vec![CombatExecutionContextRequirement::AvatarSelection]
+    );
+    assert_eq!(
+        execution.planned_commands[0].switch_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::X.vk(),
+                extended: None,
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::X.vk(),
+                extended: None,
+            },
+            InputEvent::KeyDown {
+                vk: KeyId::D1.vk(),
+                extended: None,
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::D1.vk(),
+                extended: None,
+            },
+            InputEvent::Delay {
+                milliseconds: COMBAT_AVATAR_SWITCH_SETTLE_MILLISECONDS,
+            },
+        ]
+    );
+    assert_eq!(execution.planned_commands[1].switch_events, Vec::new());
+    assert_eq!(execution.planned_commands[2].team_index, Some(2));
+    assert_eq!(execution.planned_commands[2].switch_events.len(), 5);
+    assert!(execution.input_events.len() > execution.planned_commands[0].action_events.len());
+}
+
+#[test]
+fn team_context_combat_playback_keeps_native_blockers() {
+    let script = parse_combat_script_context("钟离 e(wait), wait(0.1)\n夜兰 q", true).unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+    let team_plan = CombatTeamPlan {
+        avatars: vec![
+            test_team_avatar(1, "钟离"),
+            test_team_avatar(2, "夜兰"),
+            test_team_avatar(3, "纳西妲"),
+            test_team_avatar(4, "班尼特"),
+        ],
+        command_avatar_names: vec!["钟离".to_string(), "夜兰".to_string()],
+        can_be_skipped_avatar_names: Vec::new(),
+        all_command_avatars_can_be_skipped: false,
+    };
+    let executable_commands = script.commands.clone();
+
+    let execution = execute_team_context_combat_script_inputs(
+        &plan,
+        &team_plan,
+        &executable_commands,
+        CombatCommandPlaybackMode::PlanOnly,
+        None,
+    )
+    .unwrap();
+
+    assert!(!execution.dispatch_ready);
+    assert_eq!(execution.playable_commands, 1);
+    assert_eq!(execution.blocked_command_index, Some(0));
+    assert_eq!(
+        execution.planned_commands[0].resolved_context,
+        vec![CombatExecutionContextRequirement::AvatarSelection]
+    );
+    assert_eq!(
+        execution.planned_commands[0].pending_context,
+        vec![CombatExecutionContextRequirement::SkillCooldown]
+    );
+    assert_eq!(
+        execution.blocked_requirements,
+        vec![CombatExecutionContextRequirement::SkillCooldown]
+    );
+    assert!(execution.planned_commands[2]
+        .pending_context
+        .contains(&CombatExecutionContextRequirement::BurstReadiness));
+}
+
+#[test]
+fn frame_team_playback_resolves_active_skill_and_burst_readiness() {
+    let root = unique_test_root("frame-team-playback");
+    let script = parse_combat_script_context("钟离 e(wait), q", true).unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+    let team_plan = CombatTeamPlan {
+        avatars: vec![
+            test_team_avatar(1, "钟离"),
+            test_team_avatar(2, "夜兰"),
+            test_team_avatar(3, "纳西妲"),
+            test_team_avatar(4, "班尼特"),
+        ],
+        command_avatar_names: vec!["钟离".to_string()],
+        can_be_skipped_avatar_names: Vec::new(),
+        all_command_avatars_can_be_skipped: false,
+    };
+    let executable_commands = script.commands.clone();
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let execution = plan_team_context_combat_script_playback_with_frame(
+        &root,
+        &image,
+        &plan,
+        &team_plan,
+        &executable_commands,
+    )
+    .unwrap();
+
+    assert!(execution.dispatch_ready);
+    assert_eq!(execution.blocked_command_index, None);
+    assert!(execution.planned_commands[0]
+        .resolved_context
+        .contains(&CombatExecutionContextRequirement::SkillCooldown));
+    assert!(execution.planned_commands[1]
+        .resolved_context
+        .contains(&CombatExecutionContextRequirement::BurstReadiness));
+    assert!(execution.planned_commands[0].switch_events.is_empty());
+
+    let cooldown_rect = active_combat_skill_cooldown_rect(image.size, false).unwrap();
+    fill_rect_gray(
+        &mut image,
+        Rect::new(cooldown_rect.x, cooldown_rect.y, 2, 2).unwrap(),
+        255,
+    );
+    fill_rect_gray(
+        &mut image,
+        Rect::new(cooldown_rect.x + 8, cooldown_rect.y, 2, 2).unwrap(),
+        255,
+    );
+    let blocked = plan_team_context_combat_script_playback_with_frame(
+        &root,
+        &image,
+        &plan,
+        &team_plan,
+        &executable_commands,
+    )
+    .unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(!blocked.dispatch_ready);
+    assert_eq!(blocked.blocked_command_index, Some(0));
+    assert_eq!(
+        blocked.blocked_requirements,
+        vec![CombatExecutionContextRequirement::SkillCooldown]
+    );
+}
+
+#[test]
+fn frame_team_playback_resolves_inactive_burst_readiness_from_side_circle() {
+    let root = unique_test_root("frame-team-inactive-burst");
+    let script = parse_combat_script_context("夜兰 q", true).unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+    let team_plan = CombatTeamPlan {
+        avatars: vec![
+            test_team_avatar(1, "钟离"),
+            test_team_avatar(2, "夜兰"),
+            test_team_avatar(3, "纳西妲"),
+            test_team_avatar(4, "班尼特"),
+        ],
+        command_avatar_names: vec!["夜兰".to_string()],
+        can_be_skipped_avatar_names: Vec::new(),
+        all_command_avatars_can_be_skipped: false,
+    };
+    let executable_commands = script.commands.clone();
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let blocked = plan_team_context_combat_script_playback_with_frame(
+        &root,
+        &image,
+        &plan,
+        &team_plan,
+        &executable_commands,
+    )
+    .unwrap();
+    assert!(!blocked.dispatch_ready);
+    assert!(blocked.planned_commands[0]
+        .pending_context
+        .contains(&CombatExecutionContextRequirement::BurstReadiness));
+
+    let q_rect = combat_avatar_side_burst_rect_for_index(image.size, 2).unwrap();
+    draw_circle_gray(&mut image, (q_rect.center().x, q_rect.center().y), 29, 255);
+    let ready = plan_team_context_combat_script_playback_with_frame(
+        &root,
+        &image,
+        &plan,
+        &team_plan,
+        &executable_commands,
+    )
+    .unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(ready.dispatch_ready);
+    assert_eq!(ready.blocked_command_index, None);
+    assert!(ready.planned_commands[0].switch_events.len() >= 5);
+    assert!(ready.planned_commands[0]
+        .resolved_context
+        .contains(&CombatExecutionContextRequirement::BurstReadiness));
+}
+
+#[test]
+fn action_scheduler_cd_parser_matches_legacy_boundaries_and_reverse_lookup() {
+    let config = "钟离,12;钟离的朋友,3;夜兰;钟离,9;纳西妲,bad";
+
+    assert_eq!(
+        parse_action_scheduler_cd_for_avatar("钟离", config),
+        Some(9.0)
+    );
+    assert_eq!(
+        parse_action_scheduler_cd_for_avatar("夜兰", config),
+        Some(-1.0)
+    );
+    assert_eq!(
+        parse_action_scheduler_cd_for_avatar("纳西妲", config),
+        Some(-1.0)
+    );
+    assert_eq!(parse_action_scheduler_cd_for_avatar("朋友", config), None);
+    assert_eq!(parse_action_scheduler_cd_for_avatar("不存在", config), None);
+}
+
+#[test]
+fn action_scheduler_plan_marks_configured_command_avatars() {
+    let script =
+        parse_combat_script_context("钟离 e\n夜兰 q\n当前角色 keypress(q)\n纳西妲 e", true)
+            .unwrap();
+
+    let plan = plan_combat_script_action_scheduler(&script, "钟离,12;纳西妲");
+
+    assert_eq!(
+        plan.command_avatar_names,
+        vec!["钟离".to_string(), "夜兰".to_string(), "纳西妲".to_string()]
+    );
+    assert_eq!(
+        plan.scheduler.configured_avatar_names,
+        vec!["钟离".to_string(), "纳西妲".to_string()]
+    );
+    assert_eq!(
+        plan.scheduler.skipped_avatar_names,
+        vec!["钟离".to_string(), "纳西妲".to_string()]
+    );
+    assert!(!plan.scheduler.all_command_avatars_can_be_skipped);
+    assert_eq!(plan.scheduler.entries[0].manual_skill_cd_seconds, 12.0);
+    assert!(plan.scheduler.entries[0].has_explicit_cd);
+    assert_eq!(plan.scheduler.entries[1].manual_skill_cd_seconds, -1.0);
+    assert!(!plan.scheduler.entries[1].has_explicit_cd);
+}
+
+#[test]
+fn auto_pick_plan_preserves_legacy_template_ocr_and_decision_rules() {
+    let plan = plan_auto_pick(AutoPickExecutionConfig {
+        external_config: AutoPickExternalConfig {
+            text_list: vec!["晶蝶".to_string()],
+            force_interaction: true,
+        },
+        ..AutoPickExecutionConfig::default()
+    });
+
+    assert_eq!(plan.task_key, AUTO_PICK_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert_eq!(plan.config_rule.pick_key, "F");
+    assert_eq!(plan.config_rule.pick_key_asset, AUTO_PICK_PICK_KEY_ASSET);
+    assert_eq!(
+        plan.config_rule.pick_key_region,
+        Rect {
+            x: 1090,
+            y: 330,
+            width: 60,
+            height: 420
+        }
+    );
+    assert_eq!(
+        plan.template_rule.l_key_template.asset,
+        AUTO_PICK_L_KEY_ASSET
+    );
+    assert_eq!(
+        plan.template_rule.l_key_template.region_of_interest,
+        Rect {
+            x: 1810,
+            y: 550,
+            width: 70,
+            height: 100
+        }
+    );
+    assert_eq!(
+        plan.template_rule.chat_icon_template.asset,
+        AUTO_PICK_CHAT_ICON_ASSET
+    );
+    assert_eq!(
+        plan.template_rule.settings_icon_template.asset,
+        AUTO_PICK_SETTINGS_ICON_ASSET
+    );
+    assert_eq!(plan.template_rule.chat_icon_template.region.width_1080p, 55);
+    assert_eq!(plan.text_region_rule.text_width_1080p, 285);
+    assert_eq!(plan.text_extraction_rule.binary_threshold_min, 160.0);
+    assert_eq!(plan.text_extraction_rule.binary_threshold_max, 255.0);
+    assert_eq!(plan.text_extraction_rule.projection_max_gap, 30);
+    assert_eq!(plan.text_extraction_rule.erode_iterations, 1);
+    assert_eq!(plan.text_extraction_rule.dilate_iterations, 2);
+    assert_eq!(plan.in_progress_rule.skip_when_average_gradient_below, -3.0);
+    assert_eq!(plan.scroll_rule.vertical_scroll_delta, 2);
+    assert_eq!(plan.scroll_rule.wait_after_scroll_ms, 50);
+    assert_eq!(plan.scroll_rule.probe_points.len(), 3);
+    assert_eq!(
+        plan.scroll_rule.probe_points[0].rgb,
+        AutoPickRgbColor {
+            r: 255,
+            g: 233,
+            b: 44
+        }
+    );
+    assert!(plan.ocr_cleanup_rule.remove_whitespace);
+    assert!(plan.ocr_cleanup_rule.auto_pair_corner_quotes);
+    assert!(plan.decision_rule.force_interaction);
+    assert_eq!(plan.decision_rule.min_text_len_to_pick, 2);
+    assert!(plan
+        .config_rule
+        .list_files
+        .default_black_list_json
+        .ends_with("default_pick_black_lists.json"));
+    assert_eq!(plan.external_config.text_list, vec!["晶蝶".to_string()]);
+    assert!(should_auto_pick_skip_text(
+        "需要长时间交互",
+        &plan.decision_rule.do_not_pick_rules
+    ));
+    assert!(should_auto_pick_skip_text(
+        "我在悬木人声望",
+        &plan.decision_rule.do_not_pick_rules
+    ));
+    assert!(should_auto_pick_skip_text(
+        "霜月坊",
+        &plan.decision_rule.do_not_pick_rules
+    ));
+    assert!(!should_auto_pick_skip_text(
+        "甜甜花",
+        &plan.decision_rule.do_not_pick_rules
+    ));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Paddle/Yap OCR")));
+    assert_eq!(
+        plan.tick_steps
+            .iter()
+            .map(|step| step.phase)
+            .collect::<Vec<_>>(),
+        vec![
+            AutoPickTickPhase::PauseGate,
+            AutoPickTickPhase::PickKeyDetection,
+            AutoPickTickPhase::ScrollFallback,
+            AutoPickTickPhase::ForceInteraction,
+            AutoPickTickPhase::LKeyGuard,
+            AutoPickTickPhase::ExcludedIconDetection,
+            AutoPickTickPhase::DirectPickWithoutLists,
+            AutoPickTickPhase::TextRegion,
+            AutoPickTickPhase::InProgressGuard,
+            AutoPickTickPhase::Ocr,
+            AutoPickTickPhase::TextCleanup,
+            AutoPickTickPhase::StaticDoNotPickFilter,
+            AutoPickTickPhase::WhiteList,
+            AutoPickTickPhase::ExcludedIconGuard,
+            AutoPickTickPhase::BlackList,
+            AutoPickTickPhase::Pick,
+        ]
+    );
+
+    let mut custom_config = AutoPickConfig::default();
+    custom_config.pick_key = "G".to_string();
+    custom_config.ocr_engine = "Yap".to_string();
+    custom_config.black_list_enabled = false;
+    custom_config.white_list_enabled = true;
+    let scaled = plan_auto_pick(AutoPickExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        auto_pick_config: custom_config,
+        ..AutoPickExecutionConfig::default()
+    });
+
+    assert_eq!(scaled.config_rule.pick_key, "G");
+    assert_eq!(scaled.config_rule.pick_key_asset, "AutoPick:G.png");
+    assert_eq!(scaled.config_rule.ocr_engine, AutoPickOcrEngine::Yap);
+    assert_eq!(
+        scaled.config_rule.pick_key_region,
+        Rect {
+            x: 726,
+            y: 220,
+            width: 40,
+            height: 280
+        }
+    );
+    assert_eq!(
+        scaled.template_rule.l_key_template.region_of_interest,
+        Rect {
+            x: 1207,
+            y: 366,
+            width: 46,
+            height: 66
+        }
+    );
+    assert!(!scaled.decision_rule.exact_black_list_enabled);
+    assert!(!scaled.decision_rule.fuzzy_black_list_enabled);
+    assert!(scaled.config_rule.white_list_enabled);
+    assert!(scaled.decision_rule.white_list_enabled);
+}
+
+#[test]
+fn auto_pick_ocr_text_cleanup_matches_legacy_processing_rules() {
+    let rule = plan_auto_pick(AutoPickExecutionConfig::default()).ocr_cleanup_rule;
+
+    assert_eq!(process_auto_pick_ocr_text("", &rule), "");
+    assert_eq!(
+        process_auto_pick_ocr_text(" \n\t甜 甜 花 12", &rule),
+        "甜甜花"
+    );
+    assert_eq!(
+        process_auto_pick_ocr_text("abc【神秘物件]xyz", &rule),
+        "「神秘物件」"
+    );
+    assert_eq!(
+        process_auto_pick_ocr_text("xx[未闭合中文", &rule),
+        "「未闭合中文」"
+    );
+    assert_eq!(
+        process_auto_pick_ocr_text("noise未配对]99", &rule),
+        "「未配对」"
+    );
+    assert_eq!(process_auto_pick_ocr_text("abc123", &rule), "");
+    assert_eq!(process_auto_pick_ocr_text("提示！???", &rule), "提示！");
+}
+
+#[test]
+fn auto_pick_text_decision_preserves_legacy_white_black_and_excluded_icon_order() {
+    let plan = plan_auto_pick(AutoPickExecutionConfig::default());
+    let rule = &plan.decision_rule;
+
+    assert_eq!(
+        decide_auto_pick_text("长时间交互", false, rule, [], [], []),
+        AutoPickTextDecision::Skip(AutoPickTextSkipReason::StaticDoNotPick)
+    );
+    assert_eq!(
+        decide_auto_pick_text("A", false, rule, [], [], []),
+        AutoPickTextDecision::Skip(AutoPickTextSkipReason::TextTooShort)
+    );
+    assert_eq!(
+        decide_auto_pick_text("摩拉", false, rule, [], ["摩拉"], []),
+        AutoPickTextDecision::Skip(AutoPickTextSkipReason::ExactBlackList)
+    );
+    assert_eq!(
+        decide_auto_pick_text("新鲜的薄荷", false, rule, [], [], ["薄荷"]),
+        AutoPickTextDecision::Skip(AutoPickTextSkipReason::FuzzyBlackList)
+    );
+    assert_eq!(
+        decide_auto_pick_text("甜甜花", false, rule, [], [], []),
+        AutoPickTextDecision::Pick
+    );
+
+    let mut white_rule = rule.clone();
+    white_rule.white_list_enabled = true;
+    assert_eq!(
+        decide_auto_pick_text("晶蝶", true, &white_rule, ["晶蝶"], ["晶蝶"], ["晶"]),
+        AutoPickTextDecision::Pick
+    );
+    assert_eq!(
+        decide_auto_pick_text("与机关交互", true, &white_rule, ["晶蝶"], [], []),
+        AutoPickTextDecision::Skip(AutoPickTextSkipReason::ExcludedIcon)
+    );
+}
+
+#[test]
+fn auto_pick_pre_ocr_decision_and_guards_match_legacy_boundaries() {
+    let plan = plan_auto_pick(AutoPickExecutionConfig::default());
+    let rule = &plan.decision_rule;
+
+    assert_eq!(
+        decide_auto_pick_pre_ocr(true, rule),
+        AutoPickPreOcrDecision::Skip(AutoPickPreOcrSkipReason::ExcludedIconWithoutWhiteList)
+    );
+    assert_eq!(
+        decide_auto_pick_pre_ocr(false, rule),
+        AutoPickPreOcrDecision::ContinueToOcr
+    );
+
+    let mut force_rule = rule.clone();
+    force_rule.force_interaction = true;
+    assert_eq!(
+        decide_auto_pick_pre_ocr(true, &force_rule),
+        AutoPickPreOcrDecision::Pick
+    );
+
+    let mut no_list_rule = rule.clone();
+    no_list_rule.exact_black_list_enabled = false;
+    no_list_rule.fuzzy_black_list_enabled = false;
+    assert_eq!(
+        decide_auto_pick_pre_ocr(false, &no_list_rule),
+        AutoPickPreOcrDecision::Pick
+    );
+
+    let mut white_rule = no_list_rule.clone();
+    white_rule.white_list_enabled = true;
+    assert_eq!(
+        decide_auto_pick_pre_ocr(true, &white_rule),
+        AutoPickPreOcrDecision::ContinueToOcr
+    );
+
+    let found_pick_rect = Rect {
+        x: 1000,
+        y: 340,
+        width: 60,
+        height: 40,
+    };
+    assert_eq!(
+        compute_auto_pick_text_rect(found_pick_rect, plan.capture_size, &plan.text_region_rule),
+        Some(Rect {
+            x: 1115,
+            y: 340,
+            width: 285,
+            height: 40,
+        })
+    );
+    assert_eq!(
+        compute_auto_pick_text_rect(
+            Rect {
+                x: 1700,
+                y: 340,
+                width: 60,
+                height: 40,
+            },
+            plan.capture_size,
+            &plan.text_region_rule
+        ),
+        None
+    );
+
+    assert!(should_auto_pick_skip_in_progress(
+        -3.1,
+        &plan.in_progress_rule
+    ));
+    assert!(!should_auto_pick_skip_in_progress(
+        -3.0,
+        &plan.in_progress_rule
+    ));
+
+    assert!(is_valid_auto_pick_text_bounds(
+        Rect {
+            x: 19,
+            y: 0,
+            width: 6,
+            height: 6,
+        },
+        &plan.text_extraction_rule
+    ));
+    assert!(!is_valid_auto_pick_text_bounds(
+        Rect {
+            x: 20,
+            y: 0,
+            width: 6,
+            height: 6,
+        },
+        &plan.text_extraction_rule
+    ));
+    assert_eq!(
+        auto_pick_text_only_crop_width(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 6,
+            },
+            100,
+            &plan.text_extraction_rule
+        ),
+        15
+    );
+    assert_eq!(
+        auto_pick_text_only_crop_width(
+            Rect {
+                x: 90,
+                y: 0,
+                width: 20,
+                height: 6,
+            },
+            100,
+            &plan.text_extraction_rule
+        ),
+        100
+    );
+
+    assert_eq!(
+        parse_auto_pick_text_list("摩拉\r\n甜甜花\n\n 晶蝶 "),
+        vec![
+            "摩拉".to_string(),
+            "甜甜花".to_string(),
+            " 晶蝶 ".to_string(),
+        ]
+    );
+    let parsed_set = parse_auto_pick_text_set("摩拉\n摩拉\r\n甜甜花");
+    assert_eq!(parsed_set.len(), 2);
+    assert!(parsed_set.contains("摩拉"));
+    assert!(parsed_set.contains("甜甜花"));
+}
+
+fn fake_auto_pick_observation(found_pick_rect: Option<Rect>) -> AutoPickTickObservation {
+    AutoPickTickObservation {
+        runner_pause_count: 0,
+        found_pick_rect,
+        scroll_icon_detected: false,
+        l_key_detected: false,
+        excluded_icon_detected: false,
+        average_text_gradient: None,
+        raw_ocr_text: Some("甜甜花".to_string()),
+    }
+}
+
+#[derive(Default)]
+struct FakeAutoPickRuntime {
+    observations: VecDeque<AutoPickTickObservation>,
+    lists: AutoPickRuntimeLists,
+    observed_plan_keys: Vec<String>,
+    list_plan_keys: Vec<String>,
+    key_presses: Vec<String>,
+    scrolls: Vec<i32>,
+    delays: Vec<u64>,
+}
+
+impl FakeAutoPickRuntime {
+    fn new(observations: impl IntoIterator<Item = AutoPickTickObservation>) -> Self {
+        Self {
+            observations: observations.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    fn with_lists(mut self, lists: AutoPickRuntimeLists) -> Self {
+        self.lists = lists;
+        self
+    }
+}
+
+impl AutoPickRuntime for FakeAutoPickRuntime {
+    fn observe_auto_pick_tick(
+        &mut self,
+        plan: &AutoPickExecutionPlan,
+    ) -> Result<AutoPickTickObservation> {
+        self.observed_plan_keys.push(plan.task_key.clone());
+        Ok(self
+            .observations
+            .pop_front()
+            .expect("fake auto-pick observation should be queued"))
+    }
+
+    fn auto_pick_lists(&mut self, plan: &AutoPickExecutionPlan) -> Result<AutoPickRuntimeLists> {
+        self.list_plan_keys.push(plan.task_key.clone());
+        Ok(self.lists.clone())
+    }
+
+    fn press_auto_pick_key(&mut self, key: &str) -> Result<()> {
+        self.key_presses.push(key.to_string());
+        Ok(())
+    }
+
+    fn scroll_auto_pick(&mut self, vertical_delta: i32) -> Result<()> {
+        self.scrolls.push(vertical_delta);
+        Ok(())
+    }
+
+    fn delay_auto_pick(&mut self, duration_ms: u64) -> Result<()> {
+        self.delays.push(duration_ms);
+        Ok(())
+    }
+}
+
+#[test]
+fn auto_pick_tick_decision_preserves_pause_scroll_force_and_l_key_gates() {
+    let pick_rect = Rect {
+        x: 1000,
+        y: 340,
+        width: 60,
+        height: 40,
+    };
+
+    let mut disabled_config = AutoPickConfig::default();
+    disabled_config.enabled = false;
+    let disabled_plan = plan_auto_pick(AutoPickExecutionConfig {
+        auto_pick_config: disabled_config,
+        ..AutoPickExecutionConfig::default()
+    });
+    assert_eq!(
+        decide_auto_pick_tick(
+            &disabled_plan,
+            fake_auto_pick_observation(Some(pick_rect)),
+            [],
+            [],
+            []
+        )
+        .action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::Disabled
+        }
+    );
+
+    let plan = plan_auto_pick(AutoPickExecutionConfig::default());
+    let mut paused = fake_auto_pick_observation(Some(pick_rect));
+    paused.runner_pause_count = 2;
+    assert_eq!(
+        decide_auto_pick_tick(&plan, paused, [], [], []).action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::Paused
+        }
+    );
+
+    let mut scroll_fallback = fake_auto_pick_observation(None);
+    scroll_fallback.scroll_icon_detected = true;
+    assert_eq!(
+        decide_auto_pick_tick(&plan, scroll_fallback, [], [], []).action,
+        AutoPickTickDecisionAction::Scroll {
+            vertical_delta: 2,
+            wait_after_scroll_ms: 50
+        }
+    );
+    assert_eq!(
+        decide_auto_pick_tick(&plan, fake_auto_pick_observation(None), [], [], []).action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::PickKeyMissing
+        }
+    );
+
+    let force_plan = plan_auto_pick(AutoPickExecutionConfig {
+        external_config: AutoPickExternalConfig {
+            text_list: Vec::new(),
+            force_interaction: true,
+        },
+        ..AutoPickExecutionConfig::default()
+    });
+    assert_eq!(
+        decide_auto_pick_tick(
+            &force_plan,
+            fake_auto_pick_observation(Some(pick_rect)),
+            [],
+            [],
+            []
+        )
+        .action,
+        AutoPickTickDecisionAction::Pick {
+            key: "F".to_string(),
+            reason: AutoPickTickPickReason::ForceInteraction,
+            text: None
+        }
+    );
+
+    let mut l_key = fake_auto_pick_observation(Some(pick_rect));
+    l_key.l_key_detected = true;
+    assert_eq!(
+        decide_auto_pick_tick(&plan, l_key, [], [], []).action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::LKeyDetected
+        }
+    );
+}
+
+#[test]
+fn auto_pick_tick_executor_dispatches_force_pick_keypress() {
+    let pick_rect = Rect {
+        x: 1000,
+        y: 340,
+        width: 60,
+        height: 40,
+    };
+    let plan = plan_auto_pick(AutoPickExecutionConfig {
+        external_config: AutoPickExternalConfig {
+            text_list: Vec::new(),
+            force_interaction: true,
+        },
+        ..AutoPickExecutionConfig::default()
+    });
+    let mut runtime = FakeAutoPickRuntime::new([fake_auto_pick_observation(Some(pick_rect))]);
+
+    let report = execute_auto_pick_tick_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(report.task_key, AUTO_PICK_TASK_KEY);
+    assert_eq!(runtime.key_presses, vec!["F".to_string()]);
+    assert!(runtime.scrolls.is_empty());
+    assert!(runtime.delays.is_empty());
+    assert_eq!(
+        report.executed_actions,
+        vec![AutoPickExecutedAction::KeyPress {
+            key: "F".to_string(),
+            reason: AutoPickTickPickReason::ForceInteraction,
+            text: None,
+        }]
+    );
+    assert_eq!(
+        runtime.observed_plan_keys,
+        vec![AUTO_PICK_TASK_KEY.to_string()]
+    );
+    assert!(runtime.list_plan_keys.is_empty());
+}
+
+#[test]
+fn auto_pick_tick_executor_scrolls_and_waits_when_pick_key_missing_with_scroll_icon() {
+    let plan = plan_auto_pick(AutoPickExecutionConfig::default());
+    let mut observation = fake_auto_pick_observation(None);
+    observation.scroll_icon_detected = true;
+    let mut runtime = FakeAutoPickRuntime::new([observation]);
+
+    let report = execute_auto_pick_tick_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(runtime.scrolls, vec![2]);
+    assert_eq!(runtime.delays, vec![50]);
+    assert!(runtime.key_presses.is_empty());
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoPickExecutedAction::MouseScroll { vertical_delta: 2 },
+            AutoPickExecutedAction::Delay { duration_ms: 50 },
+        ]
+    );
+}
+
+#[test]
+fn auto_pick_tick_executor_dispatches_whitelisted_pick_after_ocr() {
+    let pick_rect = Rect {
+        x: 1000,
+        y: 340,
+        width: 60,
+        height: 40,
+    };
+    let mut white_config = AutoPickConfig::default();
+    white_config.white_list_enabled = true;
+    let plan = plan_auto_pick(AutoPickExecutionConfig {
+        auto_pick_config: white_config,
+        ..AutoPickExecutionConfig::default()
+    });
+    let mut observation = fake_auto_pick_observation(Some(pick_rect));
+    observation.excluded_icon_detected = true;
+    observation.raw_ocr_text = Some(" 晶 蝶 ".to_string());
+    let mut runtime = FakeAutoPickRuntime::new([observation]).with_lists(AutoPickRuntimeLists {
+        white_list: vec!["晶蝶".to_string()],
+        exact_black_list: vec!["晶蝶".to_string()],
+        fuzzy_black_list: vec!["晶".to_string()],
+    });
+
+    let report = execute_auto_pick_tick_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(runtime.key_presses, vec!["F".to_string()]);
+    assert_eq!(runtime.list_plan_keys, vec![AUTO_PICK_TASK_KEY.to_string()]);
+    assert_eq!(report.decision.cleaned_text.as_deref(), Some("晶蝶"));
+    assert_eq!(
+        report.executed_actions,
+        vec![AutoPickExecutedAction::KeyPress {
+            key: "F".to_string(),
+            reason: AutoPickTickPickReason::TextAccepted,
+            text: Some("晶蝶".to_string()),
+        }]
+    );
+}
+
+#[test]
+fn auto_pick_tick_executor_skips_io_when_decision_skips() {
+    let plan = plan_auto_pick(AutoPickExecutionConfig::default());
+    let mut observation = fake_auto_pick_observation(Some(Rect {
+        x: 1000,
+        y: 340,
+        width: 60,
+        height: 40,
+    }));
+    observation.l_key_detected = true;
+    let mut runtime = FakeAutoPickRuntime::new([observation]);
+
+    let report = execute_auto_pick_tick_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.decision.action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::LKeyDetected,
+        }
+    );
+    assert!(report.executed_actions.is_empty());
+    assert!(runtime.key_presses.is_empty());
+    assert!(runtime.scrolls.is_empty());
+    assert!(runtime.delays.is_empty());
+}
+
+#[test]
+fn auto_pick_tick_decision_preserves_pre_ocr_and_text_decision_order() {
+    let pick_rect = Rect {
+        x: 1000,
+        y: 340,
+        width: 60,
+        height: 40,
+    };
+    let plan = plan_auto_pick(AutoPickExecutionConfig::default());
+
+    let mut excluded = fake_auto_pick_observation(Some(pick_rect));
+    excluded.excluded_icon_detected = true;
+    let report = decide_auto_pick_tick(&plan, excluded, [], [], []);
+    assert_eq!(
+        report.pre_ocr_decision,
+        Some(AutoPickPreOcrDecision::Skip(
+            AutoPickPreOcrSkipReason::ExcludedIconWithoutWhiteList
+        ))
+    );
+    assert_eq!(
+        report.action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::ExcludedIconWithoutWhiteList
+        }
+    );
+
+    let mut no_list_config = AutoPickConfig::default();
+    no_list_config.black_list_enabled = false;
+    let no_list_plan = plan_auto_pick(AutoPickExecutionConfig {
+        auto_pick_config: no_list_config,
+        ..AutoPickExecutionConfig::default()
+    });
+    let report = decide_auto_pick_tick(
+        &no_list_plan,
+        fake_auto_pick_observation(Some(pick_rect)),
+        [],
+        [],
+        [],
+    );
+    assert_eq!(report.pre_ocr_decision, Some(AutoPickPreOcrDecision::Pick));
+    assert_eq!(
+        report.action,
+        AutoPickTickDecisionAction::Pick {
+            key: "F".to_string(),
+            reason: AutoPickTickPickReason::DirectNoLists,
+            text: None
+        }
+    );
+
+    let report = decide_auto_pick_tick(
+        &plan,
+        fake_auto_pick_observation(Some(Rect {
+            x: 1700,
+            y: 340,
+            width: 60,
+            height: 40,
+        })),
+        [],
+        [],
+        [],
+    );
+    assert_eq!(
+        report.action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::TextRegionOutOfRange
+        }
+    );
+
+    let mut active_pickup = fake_auto_pick_observation(Some(pick_rect));
+    active_pickup.average_text_gradient = Some(-3.1);
+    let report = decide_auto_pick_tick(&plan, active_pickup, [], [], []);
+    assert_eq!(
+        report.action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::InProgress
+        }
+    );
+    assert!(report.text_rect.is_some());
+
+    let mut missing_ocr = fake_auto_pick_observation(Some(pick_rect));
+    missing_ocr.raw_ocr_text = None;
+    assert_eq!(
+        decide_auto_pick_tick(&plan, missing_ocr, [], [], []).action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::MissingOcrText
+        }
+    );
+
+    let mut blacklisted = fake_auto_pick_observation(Some(pick_rect));
+    blacklisted.raw_ocr_text = Some(" 甜 甜 花 ".to_string());
+    let report = decide_auto_pick_tick(&plan, blacklisted, [], ["甜甜花"], []);
+    assert_eq!(report.cleaned_text.as_deref(), Some("甜甜花"));
+    assert_eq!(
+        report.text_decision,
+        Some(AutoPickTextDecision::Skip(
+            AutoPickTextSkipReason::ExactBlackList
+        ))
+    );
+    assert_eq!(
+        report.action,
+        AutoPickTickDecisionAction::Skip {
+            reason: AutoPickTickSkipReason::TextRejected(AutoPickTextSkipReason::ExactBlackList)
+        }
+    );
+
+    let mut white_config = AutoPickConfig::default();
+    white_config.white_list_enabled = true;
+    let white_plan = plan_auto_pick(AutoPickExecutionConfig {
+        auto_pick_config: white_config,
+        ..AutoPickExecutionConfig::default()
+    });
+    let mut whitelisted_excluded = fake_auto_pick_observation(Some(pick_rect));
+    whitelisted_excluded.excluded_icon_detected = true;
+    whitelisted_excluded.raw_ocr_text = Some("晶蝶".to_string());
+    let report = decide_auto_pick_tick(
+        &white_plan,
+        whitelisted_excluded,
+        ["晶蝶"],
+        ["晶蝶"],
+        ["晶"],
+    );
+    assert_eq!(
+        report.pre_ocr_decision,
+        Some(AutoPickPreOcrDecision::ContinueToOcr)
+    );
+    assert_eq!(report.text_decision, Some(AutoPickTextDecision::Pick));
+    assert_eq!(
+        report.action,
+        AutoPickTickDecisionAction::Pick {
+            key: "F".to_string(),
+            reason: AutoPickTickPickReason::TextAccepted,
+            text: Some("晶蝶".to_string())
+        }
+    );
+}
+
+#[test]
+fn auto_eat_plan_preserves_legacy_low_hp_recovery_and_resurrection_rules() {
+    let defaults = AutoEatConfig::default();
+    assert!(!defaults.enabled);
+    assert!(defaults.show_notification);
+    assert_eq!(defaults.check_interval, 150);
+    assert_eq!(defaults.eat_interval, 1000);
+    assert_eq!(defaults.test_food_name, None);
+    assert_eq!(
+        defaults.default_atk_boosting_dish_name.as_deref(),
+        Some("炸萝卜丸子")
+    );
+    assert_eq!(defaults.default_adventurers_dish_name, None);
+    assert_eq!(defaults.default_def_boosting_dish_name, None);
+
+    let config = AutoEatExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "autoEatConfig": {
+            "enabled": true,
+            "showNotification": false,
+            "checkInterval": 222,
+            "eatInterval": 3333,
+            "testFoodName": "甜甜花酿鸡",
+            "defaultAtkBoostingDishName": "仙跳墙",
+            "defaultAdventurersDishName": "北地烟熏鸡",
+            "defaultDefBoostingDishName": "蟹黄豆腐"
+        }
+    })));
+    let plan = plan_auto_eat(config);
+
+    assert_eq!(plan.task_key, AUTO_EAT_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert!(plan.config_rule.enabled);
+    assert!(!plan.config_rule.show_notification);
+    assert_eq!(plan.config_rule.check_interval_ms, 222);
+    assert_eq!(plan.config_rule.eat_interval_ms, 3333);
+    assert_eq!(
+        plan.config_rule.test_food_name.as_deref(),
+        Some("甜甜花酿鸡")
+    );
+    assert_eq!(
+        plan.config_rule.default_atk_boosting_dish_name.as_deref(),
+        Some("仙跳墙")
+    );
+    assert_eq!(
+        plan.config_rule.default_adventurers_dish_name.as_deref(),
+        Some("北地烟熏鸡")
+    );
+    assert_eq!(
+        plan.config_rule.default_def_boosting_dish_name.as_deref(),
+        Some("蟹黄豆腐")
+    );
+    assert_eq!(plan.detection_rule.low_hp_source, "Bv.CurrentAvatarIsLowHp");
+    assert_eq!(
+        plan.detection_rule.low_hp_pixel_probe.point,
+        Point { x: 808, y: 1010 }
+    );
+    assert_eq!(
+        plan.detection_rule.low_hp_pixel_probe.expected_rgb,
+        RgbPixel {
+            r: 255,
+            g: 90,
+            b: 90
+        }
+    );
+    assert_eq!(plan.detection_rule.recovery_cache_ttl_ms, 30_000);
+    assert_eq!(plan.detection_rule.resurrection_cooldown_ms, 2_000);
+    assert_eq!(
+        plan.detection_rule.eat_action,
+        AUTO_EAT_QUICK_USE_GADGET_ACTION
+    );
+    assert_eq!(
+        plan.detection_rule.resurrection_action,
+        AUTO_EAT_QUICK_USE_GADGET_ACTION
+    );
+    assert!(plan.detection_rule.exceptions_are_logged_and_ignored);
+    assert_eq!(plan.state_rule.prev_execute_time_field, "_prevExecute");
+    assert_eq!(
+        plan.state_rule.last_recovery_check_time_field,
+        "_lastRecoveryCheckTime"
+    );
+    assert_eq!(
+        plan.state_rule.last_resurrection_time_field,
+        "_lastResurrectionTime"
+    );
+    assert_eq!(plan.state_rule.last_eat_time_field, "_lastEatTime");
+    assert_eq!(plan.state_rule.recovery_detected_field, "_recoveryDetected");
+
+    assert_eq!(plan.locators.recovery_icon.asset, AUTO_EAT_RECOVERY_ASSET);
+    assert_eq!(
+        plan.locators.recovery_icon.roi,
+        Rect {
+            x: 1810,
+            y: 778,
+            width: 23,
+            height: 23
+        }
+    );
+    assert_eq!(plan.locators.recovery_icon.threshold, 0.8);
+    assert_eq!(
+        plan.locators.recovery_icon.match_mode,
+        bgi_vision::TemplateMatchMode::CCoeffNormed
+    );
+    assert!(!plan.locators.recovery_icon.use_3_channels);
+    assert_eq!(
+        plan.locators.resurrection_icon.roi,
+        Rect {
+            x: 1810,
+            y: 778,
+            width: 18,
+            height: 19
+        }
+    );
+    assert_eq!(
+        plan.locators.resurrection_icon.asset,
+        AUTO_EAT_RESURRECTION_ASSET
+    );
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoEatTickPhase::LowHpRecovery
+            && step.condition == AutoEatTickCondition::WhenRecoveryCachedOrDetected
+            && matches!(
+                &step.action,
+                AutoEatTickAction::SimulateGenshinAction { action }
+                    if action == AUTO_EAT_QUICK_USE_GADGET_ACTION
+            )
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoEatTickPhase::Resurrection
+            && step.condition == AutoEatTickCondition::WhenResurrectionCooldownElapsed
+            && matches!(
+                &step.action,
+                AutoEatTickAction::SimulateGenshinAction { action }
+                    if action == AUTO_EAT_QUICK_USE_GADGET_ACTION
+            )
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("low-HP")));
+
+    let scaled = plan_auto_eat(AutoEatExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..AutoEatExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.detection_rule.low_hp_pixel_probe.point,
+        Point { x: 538, y: 673 }
+    );
+    assert_eq!(
+        scaled.locators.recovery_icon.roi,
+        Rect {
+            x: 1206,
+            y: 518,
+            width: 15,
+            height: 15
+        }
+    );
+    assert_eq!(
+        scaled.locators.resurrection_icon.roi,
+        Rect {
+            x: 1206,
+            y: 518,
+            width: 12,
+            height: 12
+        }
+    );
+}
+
+#[test]
+fn auto_eat_food_plan_preserves_legacy_inventory_food_flow_and_result_contract() {
+    let config = AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "foodName": "甜甜花酿鸡"
+    })))
+    .unwrap();
+    let plan = plan_auto_eat_food(config).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_EAT_FOOD_TASK_KEY);
+    assert_eq!(plan.script_task_name, AUTO_EAT_SCRIPT_TASK_NAME);
+    assert_eq!(plan.capture_size, Size::new(1280, 720));
+    assert!(!plan.executor_ready);
+    assert_eq!(plan.food_name.as_deref(), Some("甜甜花酿鸡"));
+    assert_eq!(
+        plan.mode,
+        AutoEatFoodPlanMode::InventoryFood {
+            food_name: "甜甜花酿鸡".to_string(),
+            source: AutoEatFoodNameSource::FoodNameConfig
+        }
+    );
+
+    let inventory_plan = plan.inventory_plan.as_ref().unwrap();
+    assert_eq!(inventory_plan.grid_screen_name, GridScreenName::Food);
+    assert!(matches!(
+        &inventory_plan.search_mode,
+        CountInventorySearchMode::Single { item_name } if item_name == "甜甜花酿鸡"
+    ));
+    assert_eq!(
+        inventory_plan.open_inventory_rule.tab_assets.checked_asset,
+        "Common/Element:bag_food_checked.png"
+    );
+    assert_eq!(
+        inventory_plan
+            .open_inventory_rule
+            .tab_assets
+            .unchecked_asset,
+        "Common/Element:bag_food_unchecked.png"
+    );
+    assert_eq!(
+        inventory_plan.grid_template.roi_1080p,
+        Rect {
+            x: 106,
+            y: 110,
+            width: 1171,
+            height: 845
+        }
+    );
+    assert_eq!(inventory_plan.grid_template.columns, 8);
+    assert_eq!(
+        inventory_plan.classifier_rule.model_name,
+        GRID_ICON_MODEL_NAME
+    );
+    assert_eq!(
+        inventory_plan.classifier_rule.model_path,
+        GRID_ICON_MODEL_PATH
+    );
+    assert_eq!(
+        inventory_plan.classifier_rule.prototype_csv_path,
+        GRID_ICON_PROTOTYPE_CSV_PATH
+    );
+    assert_eq!(
+        inventory_plan.classifier_rule.input_name,
+        GRID_ICON_INPUT_NAME
+    );
+    assert_eq!(inventory_plan.classifier_rule.feature_dimensions, 64);
+    assert_eq!(inventory_plan.classifier_rule.max_distance_squared, 100.0);
+    assert_eq!(inventory_plan.grid_icon_crop_rule.normalized_width, 125);
+    assert_eq!(inventory_plan.grid_icon_crop_rule.normalized_height, 153);
+    assert_eq!(inventory_plan.grid_icon_crop_rule.icon_crop.width, 125);
+    assert_eq!(inventory_plan.grid_icon_crop_rule.icon_crop.height, 125);
+    assert_eq!(inventory_plan.count_ocr_rule.crop_top_numerator, 128);
+    assert_eq!(inventory_plan.count_ocr_rule.crop_bottom_numerator, 150);
+    assert_eq!(inventory_plan.count_ocr_rule.crop_left_numerator, 5);
+    assert_eq!(inventory_plan.count_ocr_rule.crop_right_numerator, 120);
+    assert!(inventory_plan.count_ocr_rule.convert_full_width_digits);
+    assert_eq!(
+        inventory_plan.count_ocr_rule.ocr_failed_value,
+        COUNT_INVENTORY_OCR_FAILED
+    );
+    assert!(!inventory_plan.weapon_ore_prescroll_rule.enabled);
+
+    assert_eq!(plan.use_rule.target_grid_screen_name, GridScreenName::Food);
+    assert!(plan.use_rule.click_matched_item);
+    assert!(plan.use_rule.count_before_use);
+    assert_eq!(
+        plan.use_rule.after_item_click_wait_ms,
+        AUTO_EAT_FOOD_CONFIRM_DELAY_MS
+    );
+    assert_eq!(
+        plan.use_rule.confirm_button_asset,
+        AUTO_EAT_FOOD_WHITE_CONFIRM_ASSET
+    );
+    assert_eq!(
+        plan.result_contract.not_found_value,
+        COUNT_INVENTORY_SINGLE_NOT_FOUND
+    );
+    assert_eq!(
+        plan.result_contract.ocr_failed_value,
+        COUNT_INVENTORY_OCR_FAILED
+    );
+    assert_eq!(plan.result_contract.success_count_offset, -1);
+    assert!(plan.result_contract.missing_default_returns_none);
+    assert!(plan.result_contract.portable_bag_loop_returns_none);
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoEatFoodStepPhase::OpenFoodInventory
+            && matches!(step.action, AutoEatFoodStepAction::ReturnMainUi)
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoEatFoodStepPhase::UseFood
+            && matches!(
+                step.action,
+                AutoEatFoodStepAction::ConfirmUseFoodIfVisible { .. }
+            )
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoEatFoodStepPhase::Cleanup
+            && matches!(step.action, AutoEatFoodStepAction::ClearVisionDrawings)
+    }));
+
+    let realtime_catalog = find_task_catalog_entry(AUTO_EAT_TASK_KEY).unwrap();
+    assert_eq!(
+        realtime_catalog.launch_policy,
+        TaskLaunchPolicy::RealtimeTick
+    );
+    let food_catalog = find_task_catalog_entry(AUTO_EAT_FOOD_TASK_KEY).unwrap();
+    assert_eq!(
+        food_catalog.launch_policy,
+        TaskLaunchPolicy::ScriptDispatcher
+    );
+    assert_eq!(
+        food_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+}
+
+#[test]
+fn auto_eat_food_plan_resolves_effect_type_defaults_and_errors() {
+    let resolved = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodEffectType": 1,
+            "autoEatConfig": {
+                "defaultAtkBoostingDishName": "仙跳墙"
+            }
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        resolved.mode,
+        AutoEatFoodPlanMode::InventoryFood {
+            food_name: "仙跳墙".to_string(),
+            source: AutoEatFoodNameSource::FoodEffectDefault
+        }
+    );
+    assert_eq!(resolved.food_name.as_deref(), Some("仙跳墙"));
+
+    let nested = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "taskParam": {
+                "FoodEffectType": "DEFBoostingDish"
+            },
+            "autoEatConfig": {
+                "defaultDefBoostingDishName": "蟹黄豆腐"
+            }
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(nested.food_name.as_deref(), Some("蟹黄豆腐"));
+
+    let missing = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodEffectType": "AdventurersDish",
+            "autoEatConfig": {
+                "defaultAdventurersDishName": null
+            }
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        missing.mode,
+        AutoEatFoodPlanMode::MissingDefaultFood {
+            effect_type: AutoEatFoodEffectType::AdventurersDish,
+            ..
+        }
+    ));
+    assert!(missing.inventory_plan.is_none());
+    assert!(matches!(
+        decide_auto_eat_food_use(
+            &missing,
+            AutoEatFoodUseObservation {
+                matched_food_name: None,
+                count_ocr_text: None,
+                confirm_button_detected: false
+            }
+        )
+        .outcome,
+        AutoEatFoodUseOutcome::MissingDefaultSkipped
+    ));
+
+    let portable = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodName": "   "
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(portable.mode, AutoEatFoodPlanMode::PortableNutritionBagLoop);
+
+    let both = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodName": "甜甜花酿鸡",
+            "foodEffectType": 1
+        })))
+        .unwrap(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        both,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == AUTO_EAT_FOOD_TASK_KEY && message == "不能同时指定foodName和foodEffectType"
+    ));
+
+    let unsupported = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodEffectType": 0
+        })))
+        .unwrap(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        unsupported,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == AUTO_EAT_FOOD_TASK_KEY && message == "JS脚本入参错误：错误的foodEffectType"
+    ));
+}
+
+#[test]
+fn auto_eat_food_decision_preserves_legacy_return_values_and_full_width_ocr() {
+    let plan = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodName": "甜甜花酿鸡"
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let not_found = decide_auto_eat_food_use(
+        &plan,
+        AutoEatFoodUseObservation {
+            matched_food_name: None,
+            count_ocr_text: None,
+            confirm_button_detected: false,
+        },
+    );
+    assert_eq!(not_found.outcome, AutoEatFoodUseOutcome::NotFound);
+    assert_eq!(
+        not_found.return_value,
+        Some(COUNT_INVENTORY_SINGLE_NOT_FOUND)
+    );
+    assert!(not_found
+        .logs
+        .contains(&AutoEatFoodUseLog::Info("没有找到甜甜花酿鸡".to_string())));
+    assert!(not_found
+        .actions
+        .contains(&AutoEatFoodUseAction::ClearVisionDrawings));
+    assert!(not_found
+        .actions
+        .contains(&AutoEatFoodUseAction::ReturnMainUi));
+
+    let consumed = decide_auto_eat_food_use(
+        &plan,
+        AutoEatFoodUseObservation {
+            matched_food_name: Some("甜甜花酿鸡".to_string()),
+            count_ocr_text: Some("１２".to_string()),
+            confirm_button_detected: true,
+        },
+    );
+    assert_eq!(consumed.outcome, AutoEatFoodUseOutcome::Consumed);
+    assert_eq!(consumed.normalized_count_text.as_deref(), Some("12"));
+    assert_eq!(consumed.return_value, Some(11));
+    assert!(consumed
+        .actions
+        .contains(&AutoEatFoodUseAction::ClickMatchedFoodItem {
+            food_name: "甜甜花酿鸡".to_string()
+        }));
+    assert!(consumed
+        .actions
+        .contains(&AutoEatFoodUseAction::ClickWhiteConfirmIfPresent {
+            asset: AUTO_EAT_FOOD_WHITE_CONFIRM_ASSET.to_string(),
+            detected: true
+        }));
+    assert!(consumed.logs.contains(&AutoEatFoodUseLog::Info(
+        "吃了一份甜甜花酿鸡，真香！".to_string()
+    )));
+
+    let ocr_failed = decide_auto_eat_food_use(
+        &plan,
+        AutoEatFoodUseObservation {
+            matched_food_name: Some("甜甜花酿鸡".to_string()),
+            count_ocr_text: Some("abc".to_string()),
+            confirm_button_detected: false,
+        },
+    );
+    assert_eq!(
+        ocr_failed.outcome,
+        AutoEatFoodUseOutcome::OcrFailedButConsumed
+    );
+    assert_eq!(ocr_failed.return_value, Some(COUNT_INVENTORY_OCR_FAILED));
+    assert!(ocr_failed.logs.contains(&AutoEatFoodUseLog::Warning(
+        "无法识别食物数量：abc，依然尝试使用".to_string()
+    )));
+    assert!(ocr_failed
+        .actions
+        .contains(&AutoEatFoodUseAction::ClickWhiteConfirmIfPresent {
+            asset: AUTO_EAT_FOOD_WHITE_CONFIRM_ASSET.to_string(),
+            detected: false
+        }));
+}
+
+fn auto_eat_enabled_plan(check_interval: u64, eat_interval: u64) -> AutoEatExecutionPlan {
+    plan_auto_eat(AutoEatExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "autoEatConfig": {
+                "enabled": true,
+                "checkInterval": check_interval,
+                "eatInterval": eat_interval
+            }
+        }),
+    )))
+}
+
+fn fake_auto_eat_observation(
+    now_ms: u64,
+    current_avatar_low_hp: bool,
+    recovery_icon_detected: bool,
+    resurrection_icon_detected: bool,
+) -> AutoEatTickObservation {
+    AutoEatTickObservation {
+        now_ms,
+        current_avatar_low_hp,
+        recovery_icon_detected,
+        resurrection_icon_detected,
+    }
+}
+
+#[derive(Default)]
+struct FakeAutoEatRuntime {
+    observations: VecDeque<AutoEatTickObservation>,
+    observed_plan_keys: Vec<String>,
+    dispatched_actions: Vec<AutoEatTriggeredAction>,
+}
+
+impl FakeAutoEatRuntime {
+    fn new(observations: impl IntoIterator<Item = AutoEatTickObservation>) -> Self {
+        Self {
+            observations: observations.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+}
+
+impl AutoEatRuntime for FakeAutoEatRuntime {
+    fn observe_auto_eat_tick(
+        &mut self,
+        plan: &AutoEatExecutionPlan,
+    ) -> Result<AutoEatTickObservation> {
+        self.observed_plan_keys.push(plan.task_key.clone());
+        Ok(self
+            .observations
+            .pop_front()
+            .expect("fake auto-eat observation should be queued"))
+    }
+
+    fn dispatch_auto_eat_action(&mut self, action: &AutoEatTriggeredAction) -> Result<()> {
+        self.dispatched_actions.push(action.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn auto_eat_tick_decision_preserves_recovery_cache_and_eat_interval() {
+    let plan = auto_eat_enabled_plan(150, 1_000);
+    let mut state = AutoEatTriggerState::default();
+
+    let first = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(0, true, true, false),
+        &plan,
+    );
+    assert!(first.processed);
+    assert!(first.recovery_cache_cleared);
+    assert!(first.recovery_cache_updated);
+    assert_eq!(
+        first.actions,
+        vec![AutoEatTriggeredAction::Eat {
+            action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+        }]
+    );
+    assert_eq!(state.last_eat_time_ms, Some(0));
+    assert_eq!(state.last_recovery_check_time_ms, Some(0));
+    assert!(state.recovery_detected);
+
+    let throttled = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(100, true, false, false),
+        &plan,
+    );
+    assert_eq!(
+        throttled.skip_reason,
+        Some(AutoEatTickSkipReason::CheckIntervalNotElapsed)
+    );
+    assert_eq!(state.prev_execute_ms, Some(0));
+
+    let cached_but_on_cd = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(151, true, false, false),
+        &plan,
+    );
+    assert!(cached_but_on_cd.processed);
+    assert!(cached_but_on_cd.recovery_available);
+    assert!(cached_but_on_cd.actions.is_empty());
+    assert_eq!(state.last_eat_time_ms, Some(0));
+
+    let cached_and_ready = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(1_101, true, false, false),
+        &plan,
+    );
+    assert_eq!(
+        cached_and_ready.actions,
+        vec![AutoEatTriggeredAction::Eat {
+            action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+        }]
+    );
+    assert_eq!(state.last_eat_time_ms, Some(1_101));
+
+    let expired_without_icon = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(30_000, true, false, false),
+        &plan,
+    );
+    assert!(expired_without_icon.recovery_cache_cleared);
+    assert!(!expired_without_icon.recovery_available);
+    assert!(expired_without_icon.actions.is_empty());
+    assert!(!state.recovery_detected);
+    assert_eq!(state.last_recovery_check_time_ms, Some(30_000));
+}
+
+#[test]
+fn auto_eat_tick_executor_dispatches_eat_and_resurrection_actions() {
+    let plan = auto_eat_enabled_plan(150, 1_000);
+    let mut state = AutoEatTriggerState::default();
+    let mut runtime = FakeAutoEatRuntime::new([fake_auto_eat_observation(0, true, true, true)]);
+
+    let report = execute_auto_eat_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(report.task_key, AUTO_EAT_TASK_KEY);
+    assert!(report.decision.processed);
+    assert_eq!(
+        report.dispatched_actions,
+        vec![
+            AutoEatTriggeredAction::Eat {
+                action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+            },
+            AutoEatTriggeredAction::Resurrect {
+                action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+            },
+        ]
+    );
+    assert_eq!(runtime.dispatched_actions, report.dispatched_actions);
+    assert_eq!(
+        runtime.observed_plan_keys,
+        vec![AUTO_EAT_TASK_KEY.to_string()]
+    );
+    assert_eq!(state.last_eat_time_ms, Some(0));
+    assert_eq!(state.last_resurrection_time_ms, Some(0));
+}
+
+#[test]
+fn auto_eat_tick_executor_skips_dispatch_when_disabled_or_throttled() {
+    let disabled_plan = plan_auto_eat(AutoEatExecutionConfig::default());
+    let mut disabled_state = AutoEatTriggerState::default();
+    let mut disabled_runtime =
+        FakeAutoEatRuntime::new([fake_auto_eat_observation(5_000, true, true, true)]);
+
+    let disabled =
+        execute_auto_eat_tick_plan(&disabled_plan, &mut disabled_state, &mut disabled_runtime)
+            .unwrap();
+
+    assert_eq!(
+        disabled.decision.skip_reason,
+        Some(AutoEatTickSkipReason::Disabled)
+    );
+    assert!(disabled.dispatched_actions.is_empty());
+    assert!(disabled_runtime.dispatched_actions.is_empty());
+    assert_eq!(disabled_state, AutoEatTriggerState::default());
+
+    let throttled_plan = auto_eat_enabled_plan(150, 1_000);
+    let mut throttled_state = AutoEatTriggerState {
+        prev_execute_ms: Some(1_000),
+        ..AutoEatTriggerState::default()
+    };
+    let mut throttled_runtime =
+        FakeAutoEatRuntime::new([fake_auto_eat_observation(1_100, true, true, true)]);
+
+    let throttled = execute_auto_eat_tick_plan(
+        &throttled_plan,
+        &mut throttled_state,
+        &mut throttled_runtime,
+    )
+    .unwrap();
+
+    assert_eq!(
+        throttled.decision.skip_reason,
+        Some(AutoEatTickSkipReason::CheckIntervalNotElapsed)
+    );
+    assert!(throttled.dispatched_actions.is_empty());
+    assert!(throttled_runtime.dispatched_actions.is_empty());
+    assert_eq!(throttled_state.prev_execute_ms, Some(1_000));
+}
+
+#[test]
+fn auto_eat_tick_decision_preserves_resurrection_cooldown_and_dual_action() {
+    let plan = auto_eat_enabled_plan(150, 1_000);
+    let mut state = AutoEatTriggerState::default();
+
+    let first = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(0, false, false, true),
+        &plan,
+    );
+    assert_eq!(
+        first.actions,
+        vec![AutoEatTriggeredAction::Resurrect {
+            action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+        }]
+    );
+    assert_eq!(state.last_resurrection_time_ms, Some(0));
+
+    let on_cd = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(1_000, false, false, true),
+        &plan,
+    );
+    assert!(on_cd.actions.is_empty());
+    assert_eq!(state.last_resurrection_time_ms, Some(0));
+
+    let ready = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(2_000, false, false, true),
+        &plan,
+    );
+    assert_eq!(
+        ready.actions,
+        vec![AutoEatTriggeredAction::Resurrect {
+            action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+        }]
+    );
+    assert_eq!(state.last_resurrection_time_ms, Some(2_000));
+
+    let dual = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(4_100, true, true, true),
+        &plan,
+    );
+    assert_eq!(
+        dual.actions,
+        vec![
+            AutoEatTriggeredAction::Eat {
+                action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+            },
+            AutoEatTriggeredAction::Resurrect {
+                action: AUTO_EAT_QUICK_USE_GADGET_ACTION.to_string()
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_eat_tick_decision_skips_when_disabled_without_mutating_timing_state() {
+    let plan = plan_auto_eat(AutoEatExecutionConfig::default());
+    let mut state = AutoEatTriggerState::default();
+
+    let report = decide_auto_eat_tick(
+        &mut state,
+        fake_auto_eat_observation(5_000, true, true, true),
+        &plan,
+    );
+
+    assert_eq!(report.skip_reason, Some(AutoEatTickSkipReason::Disabled));
+    assert!(report.actions.is_empty());
+    assert_eq!(state, AutoEatTriggerState::default());
+}
+
+#[test]
+fn auto_cook_plan_preserves_legacy_ui_color_peak_and_input_rules() {
+    let defaults = AutoCookConfig::default();
+    assert_eq!(defaults.check_interval_ms, 10);
+    assert!(defaults.stop_task_when_recover_button_detected);
+
+    let config = AutoCookExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "assetScale": 2.0,
+        "autoCookConfig": {
+            "checkIntervalMs": 0,
+            "stopTaskWhenRecoverButtonDetected": false
+        }
+    })));
+    let plan = plan_auto_cook(config);
+
+    assert_eq!(plan.task_key, AUTO_COOK_TASK_KEY);
+    assert_eq!(plan.display_name, "自动烹饪");
+    assert_eq!(plan.capture_size, Size::new(1280, 720));
+    assert_eq!(plan.asset_scale, 2.0);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.config_rule.configured_check_interval_ms, 0);
+    assert_eq!(plan.config_rule.effective_check_interval_ms, 1);
+    assert_eq!(plan.config_rule.minimum_check_interval_ms, 1);
+    assert!(!plan.config_rule.stop_task_when_recover_button_detected);
+
+    assert_eq!(plan.ui_rule.ui_check_interval_ms, 400);
+    assert!(plan.ui_rule.reset_peak_when_ui_state_changes);
+    assert!(plan.ui_rule.reset_peak_when_not_in_cook_ui);
+    assert!(plan.ui_rule.click_white_confirm_when_present);
+    assert_eq!(plan.ui_rule.white_confirm_pre_click_delay_ms, 500);
+    assert!(plan.ui_rule.reset_peak_after_white_confirm);
+    assert!(!plan.ui_rule.stop_when_recover_button_detected);
+
+    assert_eq!(plan.locators.cook_icon.name, "UiLeftTopCookIcon");
+    assert_eq!(plan.locators.cook_icon.asset, AUTO_COOK_UI_COOK_ICON_ASSET);
+    assert_eq!(plan.locators.cook_icon.threshold, 0.8);
+    assert_eq!(
+        plan.locators.cook_icon.roi,
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 300,
+            height: 240
+        })
+    );
+    assert!(!plan.locators.cook_icon.use_3_channels);
+    assert_eq!(
+        plan.locators.white_recover_button.asset,
+        AUTO_COOK_BTN_WHITE_RECOVER_ASSET
+    );
+    assert_eq!(plan.locators.white_recover_button.threshold, 0.8);
+    assert_eq!(
+        plan.locators.white_recover_button.roi,
+        Some(Rect {
+            x: 1160,
+            y: 1900,
+            width: 180,
+            height: 190
+        })
+    );
+    assert!(plan.locators.white_recover_button.use_3_channels);
+    assert_eq!(
+        plan.locators.white_confirm_button.asset,
+        AUTO_COOK_BTN_WHITE_CONFIRM_ASSET
+    );
+    assert_eq!(plan.locators.white_confirm_button.threshold, 0.8);
+    assert_eq!(plan.locators.white_confirm_button.roi, None);
+    assert!(plan.locators.white_confirm_button.use_3_channels);
+
+    assert_eq!(
+        plan.cook_bar_rule.cook_color_rect_1080p,
+        Rect {
+            x: 600,
+            y: 660,
+            width: 730,
+            height: 190
+        }
+    );
+    assert_eq!(
+        plan.cook_bar_rule.scaled_cook_color_rect,
+        Rect {
+            x: 1200,
+            y: 1320,
+            width: 1460,
+            height: 380
+        }
+    );
+    assert_eq!(
+        plan.cook_bar_rule.target_rgb,
+        RgbPixel {
+            r: 255,
+            g: 192,
+            b: 64
+        }
+    );
+    assert!(plan.cook_bar_rule.converts_capture_bgr_to_rgb_before_match);
+    assert!(plan.cook_bar_rule.exact_color_match);
+
+    assert_eq!(plan.peak_rule.peak_min_count_1080p, 600);
+    assert_eq!(plan.peak_rule.scaled_peak_min_count, 1200);
+    assert_eq!(plan.peak_rule.peak_tolerance, 20);
+    assert_eq!(plan.peak_rule.peak_stable_frame_count, 3);
+    assert_eq!(plan.peak_rule.trigger_drop_count_1080p, 300);
+    assert_eq!(plan.peak_rule.scaled_trigger_drop_count, 600);
+    assert!(plan.peak_rule.reset_after_space_press);
+    assert_eq!(plan.input_rule.trigger_key_vk, AUTO_COOK_VK_SPACE);
+    assert_eq!(plan.input_rule.action, AutoCookInputAction::KeyPress);
+
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoCookTaskPhase::CookUiDetection
+            && step.action == AutoCookTaskAction::DetectCookUiIcon
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoCookTaskPhase::CookBarSampling
+            && step.action == AutoCookTaskAction::CountTargetCookColor
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoCookTaskPhase::Input
+            && step.action == AutoCookTaskAction::PressSpaceWhenPeakDrops
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("generic script-dispatcher live route")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("legacy C# hotkey/dispatcher entrypoints")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("SendInput Space")));
+
+    for asset_name in [
+        "ui_left_top_cook_icon.png",
+        "btn_white_recover.png",
+        "btn_white_confirm.png",
+    ] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join("Common")
+            .join("Element")
+            .join("Assets")
+            .join("1920x1080")
+            .join(asset_name)
+            .exists());
+    }
+}
+
+#[test]
+fn auto_cook_color_count_and_peak_state_match_legacy_thresholds() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+    let mut image = blank_bgr_image(Size::new(8, 8));
+    for (x, y) in [(2, 2), (3, 2), (2, 3), (7, 7)] {
+        set_bgr_pixel(
+            &mut image,
+            (x, y),
+            RgbPixel {
+                r: 255,
+                g: 192,
+                b: 64,
+            },
+        );
+    }
+    set_bgr_pixel(
+        &mut image,
+        (3, 3),
+        RgbPixel {
+            r: 255,
+            g: 192,
+            b: 65,
+        },
+    );
+
+    assert_eq!(
+        count_auto_cook_target_color(
+            &image,
+            Rect {
+                x: 2,
+                y: 2,
+                width: 3,
+                height: 3
+            },
+            plan.cook_bar_rule.target_rgb,
+        )
+        .unwrap(),
+        3
+    );
+
+    let mut state = AutoCookPeakState::default();
+    assert_eq!(
+        update_auto_cook_peak_state(&mut state, 610, &plan.peak_rule),
+        AutoCookPeakAction::None
+    );
+    assert_eq!(state.peak_candidate, Some(610));
+    assert_eq!(
+        update_auto_cook_peak_state(&mut state, 620, &plan.peak_rule),
+        AutoCookPeakAction::None
+    );
+    assert_eq!(
+        update_auto_cook_peak_state(&mut state, 625, &plan.peak_rule),
+        AutoCookPeakAction::BuiltPeak { peak: 625 }
+    );
+    assert_eq!(state.peak_color_count, Some(625));
+    assert_eq!(
+        update_auto_cook_peak_state(&mut state, 326, &plan.peak_rule),
+        AutoCookPeakAction::None
+    );
+    assert_eq!(
+        update_auto_cook_peak_state(&mut state, 325, &plan.peak_rule),
+        AutoCookPeakAction::PressSpace {
+            peak: 625,
+            current: 325
+        }
+    );
+    assert_eq!(state, AutoCookPeakState::default());
+}
+
+#[derive(Default)]
+struct FakeAutoCookRuntime {
+    frames: VecDeque<AutoCookRuntimeFrame>,
+    confirm_clicks: u32,
+    confirm_pre_click_delays: Vec<u64>,
+    pressed_keys: Vec<u16>,
+    delays: Vec<u64>,
+}
+
+impl FakeAutoCookRuntime {
+    fn new(frames: impl IntoIterator<Item = AutoCookRuntimeFrame>) -> Self {
+        Self {
+            frames: frames.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+}
+
+impl AutoCookRuntime for FakeAutoCookRuntime {
+    fn next_auto_cook_frame(&mut self) -> Result<Option<AutoCookRuntimeFrame>> {
+        Ok(self.frames.pop_front())
+    }
+
+    fn delay_auto_cook_white_confirm_pre_click(&mut self, duration_ms: u64) -> Result<()> {
+        self.confirm_pre_click_delays.push(duration_ms);
+        Ok(())
+    }
+
+    fn click_auto_cook_white_confirm(&mut self) -> Result<()> {
+        self.confirm_clicks += 1;
+        Ok(())
+    }
+
+    fn press_auto_cook_key(&mut self, vk: u16) -> Result<()> {
+        self.pressed_keys.push(vk);
+        Ok(())
+    }
+
+    fn delay_auto_cook_loop(&mut self, duration_ms: u64) -> Result<()> {
+        self.delays.push(duration_ms);
+        Ok(())
+    }
+}
+
+fn fake_auto_cook_frame(
+    now_ms: u64,
+    in_cook_ui: bool,
+    recover_button_detected: bool,
+    white_confirm_button_detected: bool,
+    target_color_count: u32,
+) -> AutoCookRuntimeFrame {
+    AutoCookRuntimeFrame {
+        now_ms,
+        in_cook_ui,
+        recover_button_detected,
+        white_confirm_button_detected,
+        target_color_count,
+    }
+}
+
+#[test]
+fn auto_cook_executor_builds_peak_presses_space_and_clicks_confirm_with_fake_runtime() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+    let mut runtime = FakeAutoCookRuntime::new([
+        fake_auto_cook_frame(0, false, false, false, 0),
+        fake_auto_cook_frame(10, true, false, false, 610),
+        fake_auto_cook_frame(20, true, false, false, 620),
+        fake_auto_cook_frame(30, true, false, false, 625),
+        fake_auto_cook_frame(40, true, false, false, 325),
+        fake_auto_cook_frame(410, true, false, true, 700),
+    ]);
+
+    let report = execute_auto_cook_plan(&plan, &mut runtime, 0).unwrap();
+
+    assert_eq!(report.status, AutoCookExecutionStatus::RuntimeEnded);
+    assert_eq!(report.state.frames_processed, 6);
+    assert_eq!(report.state.space_press_count, 1);
+    assert_eq!(report.state.white_confirm_click_count, 1);
+    assert_eq!(runtime.pressed_keys, vec![AUTO_COOK_VK_SPACE]);
+    assert_eq!(runtime.confirm_clicks, 1);
+    assert_eq!(runtime.confirm_pre_click_delays, vec![500]);
+    assert_eq!(runtime.delays.len(), 6);
+    assert!(report.events.contains(&AutoCookExecutionEvent::PeakBuilt {
+        iteration: 3,
+        peak: 625
+    }));
+    assert!(report
+        .events
+        .contains(&AutoCookExecutionEvent::SpacePressed {
+            iteration: 4,
+            peak: 625,
+            current: 325,
+            vk: AUTO_COOK_VK_SPACE
+        }));
+    assert!(report
+        .events
+        .contains(&AutoCookExecutionEvent::WhiteConfirmPreClickDelay {
+            iteration: 5,
+            duration_ms: 500
+        }));
+    assert!(report
+        .events
+        .contains(&AutoCookExecutionEvent::WhiteConfirmClicked { iteration: 5 }));
+    assert!(report.events.contains(&AutoCookExecutionEvent::PeakReset {
+        iteration: 5,
+        reason: AutoCookPeakResetReason::WhiteConfirmClicked
+    }));
+}
+
+#[test]
+fn auto_cook_executor_stops_before_sampling_when_recover_button_is_detected() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+    let mut runtime = FakeAutoCookRuntime::new([fake_auto_cook_frame(0, true, true, false, 800)]);
+
+    let report = execute_auto_cook_plan(&plan, &mut runtime, 0).unwrap();
+
+    assert_eq!(
+        report.status,
+        AutoCookExecutionStatus::RecoverButtonDetected
+    );
+    assert_eq!(report.state.frames_processed, 1);
+    assert!(runtime.delays.is_empty());
+    assert!(runtime.pressed_keys.is_empty());
+    assert!(report
+        .events
+        .contains(&AutoCookExecutionEvent::RecoverButtonDetected { iteration: 0 }));
+    assert!(!report
+        .events
+        .iter()
+        .any(|event| matches!(event, AutoCookExecutionEvent::ColorCounted { .. })));
+}
+
+#[test]
+fn auto_cook_executor_gates_recover_and_confirm_until_ui_check_interval() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+    let mut runtime = FakeAutoCookRuntime::new([
+        fake_auto_cook_frame(0, true, false, false, 610),
+        fake_auto_cook_frame(100, true, true, true, 620),
+        fake_auto_cook_frame(399, true, true, true, 625),
+        fake_auto_cook_frame(400, true, true, true, 700),
+    ]);
+
+    let report = execute_auto_cook_plan(&plan, &mut runtime, 0).unwrap();
+
+    assert_eq!(
+        report.status,
+        AutoCookExecutionStatus::RecoverButtonDetected
+    );
+    assert_eq!(runtime.confirm_clicks, 0);
+    assert!(runtime.confirm_pre_click_delays.is_empty());
+    assert!(report
+        .events
+        .contains(&AutoCookExecutionEvent::RecoverButtonDetected { iteration: 3 }));
+    assert!(!report
+        .events
+        .iter()
+        .any(|event| matches!(event, AutoCookExecutionEvent::WhiteConfirmClicked { .. })));
+}
+
+#[test]
+fn auto_cook_executor_continues_when_recover_stop_is_disabled() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "autoCookConfig": {
+                "stopTaskWhenRecoverButtonDetected": false
+            }
+        }),
+    )));
+    let mut runtime = FakeAutoCookRuntime::new([
+        fake_auto_cook_frame(0, true, true, false, 610),
+        fake_auto_cook_frame(10, true, false, false, 620),
+        fake_auto_cook_frame(20, true, false, false, 625),
+        fake_auto_cook_frame(30, true, false, false, 325),
+    ]);
+
+    let report = execute_auto_cook_plan(&plan, &mut runtime, 0).unwrap();
+
+    assert_eq!(report.status, AutoCookExecutionStatus::RuntimeEnded);
+    assert_eq!(runtime.pressed_keys, vec![AUTO_COOK_VK_SPACE]);
+    assert_eq!(report.state.space_press_count, 1);
+    assert!(!report
+        .events
+        .iter()
+        .any(|event| matches!(event, AutoCookExecutionEvent::RecoverButtonDetected { .. })));
+}
+
+#[test]
+fn auto_cook_executor_respects_iteration_limit_after_loop_delay() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+    let mut runtime = FakeAutoCookRuntime::new([
+        fake_auto_cook_frame(0, true, false, false, 610),
+        fake_auto_cook_frame(10, true, false, false, 620),
+    ]);
+
+    let report = execute_auto_cook_plan(&plan, &mut runtime, 1).unwrap();
+
+    assert_eq!(
+        report.status,
+        AutoCookExecutionStatus::IterationLimitReached
+    );
+    assert_eq!(report.state.frames_processed, 1);
+    assert_eq!(report.state.delay_count, 1);
+    assert_eq!(runtime.frames.len(), 1);
+}
+
+#[test]
+fn auto_cook_executor_resets_peak_on_cook_ui_transition_without_false_space_press() {
+    let plan = plan_auto_cook(AutoCookExecutionConfig::default());
+    let mut runtime = FakeAutoCookRuntime::new([
+        fake_auto_cook_frame(0, true, false, false, 610),
+        fake_auto_cook_frame(10, true, false, false, 620),
+        fake_auto_cook_frame(20, true, false, false, 625),
+        fake_auto_cook_frame(400, false, false, false, 0),
+    ]);
+
+    let report = execute_auto_cook_plan(&plan, &mut runtime, 0).unwrap();
+
+    assert_eq!(report.status, AutoCookExecutionStatus::RuntimeEnded);
+    assert!(!report.state.in_cook_ui);
+    assert_eq!(report.state.peak_state, AutoCookPeakState::default());
+    assert_eq!(report.state.space_press_count, 0);
+    assert!(runtime.pressed_keys.is_empty());
+    assert!(report.events.contains(&AutoCookExecutionEvent::PeakBuilt {
+        iteration: 2,
+        peak: 625
+    }));
+    assert!(report.events.contains(&AutoCookExecutionEvent::PeakReset {
+        iteration: 3,
+        reason: AutoCookPeakResetReason::CookUiTransition
+    }));
+    assert!(report.events.contains(&AutoCookExecutionEvent::PeakReset {
+        iteration: 3,
+        reason: AutoCookPeakResetReason::NotInCookUi
+    }));
+    assert!(!report
+        .events
+        .iter()
+        .any(|event| matches!(event, AutoCookExecutionEvent::SpacePressed { .. })));
+}
+
+#[test]
+fn auto_wood_plan_preserves_legacy_params_assets_ocr_and_refresh_rules() {
+    let defaults = AutoWoodConfig::default();
+    assert_eq!(defaults.after_z_sleep_delay, 0);
+    assert!(!defaults.wood_count_ocr_enabled);
+    assert!(defaults.use_wonderland_refresh);
+
+    assert_eq!(normalize_round_num(0), 9999);
+    assert_eq!(normalize_round_num(3), 3);
+    assert_eq!(normalize_daily_max_count(0), 9999);
+    assert_eq!(normalize_daily_max_count(9999), 9999);
+    assert_eq!(normalize_daily_max_count(2000), 2000);
+
+    let config = AutoWoodExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 2.0,
+        "woodRoundNum": 0,
+        "woodDailyMaxCount": 0,
+        "autoWoodConfig": {
+            "afterZSleepDelay": 250,
+            "woodCountOcrEnabled": true,
+            "useWonderlandRefresh": false
+        }
+    })));
+    let plan = plan_auto_wood(config);
+
+    assert_eq!(plan.task_key, AUTO_WOOD_TASK_KEY);
+    assert_eq!(plan.display_name, "自动伐木");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 2.0);
+    assert!(!plan.executor_ready);
+    assert_eq!(plan.param_rule.raw_round_num, 0);
+    assert_eq!(plan.param_rule.normalized_round_num, 9999);
+    assert_eq!(plan.param_rule.raw_daily_max_count, 0);
+    assert_eq!(plan.param_rule.normalized_daily_max_count, 9999);
+    assert_eq!(plan.param_rule.unlimited_sentinel, 9999);
+    assert_eq!(plan.config_rule.after_z_sleep_delay_ms, 250);
+    assert!(plan.config_rule.wood_count_ocr_enabled);
+    assert!(!plan.config_rule.use_wonderland_refresh);
+    assert!(plan.config_rule.press_two_esc_is_legacy_commented_out);
+
+    assert!(plan.startup_rule.prevents_system_sleep);
+    assert!(plan.startup_rule.restores_execution_state_on_finish);
+    assert!(plan.startup_rule.refreshes_third_party_login_mode);
+    assert!(plan.startup_rule.activates_game_window_before_loop);
+    assert!(plan.startup_rule.clears_draw_content_after_each_round);
+    assert_eq!(plan.startup_rule.post_round_sleep_ms, 500);
+
+    assert_eq!(
+        plan.locators.wood_count_upper_rect,
+        Rect {
+            x: 200,
+            y: 900,
+            width: 600,
+            height: 500
+        }
+    );
+    assert_eq!(
+        plan.locators.the_boon_of_the_elder_tree.asset,
+        AUTO_WOOD_THE_BOON_ASSET
+    );
+    assert_eq!(
+        plan.locators.the_boon_of_the_elder_tree.roi,
+        Some(Rect {
+            x: 1440,
+            y: 540,
+            width: 480,
+            height: 540
+        })
+    );
+    assert_eq!(plan.locators.the_boon_of_the_elder_tree.threshold, 0.8);
+    assert_eq!(plan.locators.menu_bag.asset, AUTO_WOOD_MENU_BAG_ASSET);
+    assert_eq!(
+        plan.locators.menu_bag.roi,
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 960,
+            height: 1080
+        })
+    );
+    assert_eq!(plan.locators.confirm.asset, AUTO_WOOD_CONFIRM_ASSET);
+    assert_eq!(plan.locators.confirm.roi, None);
+    assert_eq!(plan.locators.enter_game.asset, AUTO_WOOD_ENTER_GAME_ASSET);
+    assert_eq!(
+        plan.locators.enter_game.roi,
+        Some(Rect {
+            x: 0,
+            y: 540,
+            width: 1920,
+            height: 540
+        })
+    );
+
+    assert!(plan.press_gadget_rule.focuses_game_window_before_press);
+    assert!(plan.press_gadget_rule.first_round_requires_boon_template);
+    assert!(plan.press_gadget_rule.missing_first_boon_ends_normally);
+    assert_eq!(plan.press_gadget_rule.later_round_retry_interval_ms, 1_000);
+    assert_eq!(plan.press_gadget_rule.later_round_retry_attempts, 120);
+    assert_eq!(
+        plan.press_gadget_rule.action,
+        AutoWoodInputAction::QuickUseGadget
+    );
+    assert_eq!(plan.press_gadget_rule.later_round_post_press_sleep_ms, 500);
+    assert_eq!(plan.press_gadget_rule.post_press_base_sleep_ms, 300);
+    assert_eq!(plan.press_gadget_rule.post_press_extra_sleep_ms, 250);
+
+    assert!(plan.ocr_rule.enabled);
+    assert_eq!(plan.ocr_rule.engine, "Paddle");
+    assert_eq!(
+        plan.ocr_rule.wood_count_rect,
+        Rect {
+            x: 200,
+            y: 900,
+            width: 600,
+            height: 500
+        }
+    );
+    assert_eq!(plan.ocr_rule.first_ocr_timeout_ms, 3_500);
+    assert_eq!(plan.ocr_rule.first_ocr_interval_ms, 300);
+    assert_eq!(plan.ocr_rule.later_ocr_interval_ms, 100);
+    assert_eq!(plan.ocr_rule.empty_statistics_stop_count, 3);
+    assert!(plan.ocr_rule.first_empty_disables_ocr_when_no_metrics);
+    assert!(plan.ocr_rule.first_detection_requires_obtained_text);
+    assert!(plan.ocr_rule.first_detection_requires_multiply_mark);
+    assert_eq!(plan.ocr_rule.parse_regex, r"([^\d\n]+)[×x](\d+)");
+    assert!(plan.ocr_rule.unknown_wood_discarded);
+    assert!(plan.ocr_rule.reached_max_uses_min_total_count);
+    assert_eq!(plan.ocr_rule.known_woods.len(), 25);
+    assert!(plan.ocr_rule.known_woods.contains(&"竹节".to_string()));
+    assert!(plan.ocr_rule.known_woods.contains(&"白栗栎木".to_string()));
+
+    assert!(plan.refresh_rule.skips_refresh_on_last_round);
+    assert_eq!(
+        plan.refresh_rule.default_strategy,
+        AutoWoodRefreshStrategy::LegacyExitEnter
+    );
+    assert_eq!(
+        plan.refresh_rule.wonderland_common_job_key,
+        "WonderlandCycle"
+    );
+    assert!(plan.refresh_rule.manual_gc_after_refresh);
+    assert!(plan.legacy_exit_enter_rule.opens_menu_with_escape);
+    assert_eq!(plan.legacy_exit_enter_rule.menu_open_sleep_ms, 800);
+    assert_eq!(
+        plan.legacy_exit_enter_rule.menu_bag_retry_interval_ms,
+        1_200
+    );
+    assert_eq!(plan.legacy_exit_enter_rule.menu_bag_retry_attempts, 5);
+    assert!(
+        plan.legacy_exit_enter_rule
+            .retries_escape_when_menu_bag_missing
+    );
+    assert_eq!(
+        plan.legacy_exit_enter_rule
+            .exit_button_click
+            .x_scale_offset_1080p,
+        50.0
+    );
+    assert_eq!(plan.legacy_exit_enter_rule.after_exit_click_sleep_ms, 500);
+    assert_eq!(plan.legacy_exit_enter_rule.enter_game_loop_attempts, 50);
+    assert_eq!(
+        plan.legacy_exit_enter_rule.enter_game_click_1080p.x_1080p,
+        960.0
+    );
+    assert_eq!(
+        plan.legacy_exit_enter_rule.enter_game_click_1080p.y_1080p,
+        630.0
+    );
+    assert_eq!(
+        plan.legacy_exit_enter_rule
+            .enter_game_after_seen_missing_sleep_ms,
+        5_000
+    );
+    assert!(
+        plan.legacy_exit_enter_rule
+            .throws_when_enter_game_never_seen
+    );
+
+    assert!(
+        plan.third_party_login_rule
+            .detects_bilibili_by_yuanshen_config_channel_14
+    );
+    assert_eq!(
+        plan.third_party_login_rule
+            .login_retry_attempts_before_give_up,
+        20
+    );
+    assert_eq!(plan.third_party_login_rule.login_retry_interval_ms, 500);
+    assert_eq!(
+        plan.third_party_login_rule.agreement_window_title_contains,
+        "协议"
+    );
+    assert_eq!(
+        plan.third_party_login_rule.login_window_title_contains,
+        "登录"
+    );
+    assert_eq!(
+        plan.third_party_login_rule
+            .agreement_click_relative_to_center,
+        (70, 75)
+    );
+    assert_eq!(
+        plan.third_party_login_rule.login_click_relative_to_center,
+        (0, 90)
+    );
+
+    assert!(plan.loop_rule.checks_ocr_before_each_round);
+    assert!(plan.loop_rule.breaks_when_ocr_empty_count_reached);
+    assert!(plan.loop_rule.breaks_when_daily_max_reached);
+    assert!(plan.loop_rule.cancellation_checked_before_round);
+    assert_eq!(
+        plan.loop_rule.felling_sequence,
+        vec![
+            "PressZ".to_string(),
+            "OptionalWoodCountOcr".to_string(),
+            "RefreshCooldownUnlessLastRound".to_string(),
+            "ManualGc".to_string()
+        ]
+    );
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoWoodTaskPhase::PressGadget
+            && step.action == AutoWoodTaskAction::QuickUseGadget
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoWoodTaskPhase::Refresh
+            && step.action == AutoWoodTaskAction::RunWonderlandCycle
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoWoodTaskPhase::LegacyExitEnter
+            && step.action == AutoWoodTaskAction::ClickEnterGame
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Paddle OCR")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Bilibili")));
+
+    for asset_name in [
+        "TheBoonOfTheElderTree.png",
+        "menu_bag.png",
+        "confirm.png",
+        "exit_welcome.png",
+    ] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join("AutoWood")
+            .join("Assets")
+            .join("1920x1080")
+            .join(asset_name)
+            .exists());
+    }
+}
+
+#[test]
+fn auto_domain_plan_preserves_legacy_entry_combat_reward_and_resin_rules() {
+    let defaults = AutoDomainConfig::default();
+    assert_eq!(defaults.fight_end_delay, 5.0);
+    assert!(defaults.walk_to_f);
+    assert_eq!(defaults.left_right_move_times, 3);
+    assert_eq!(
+        defaults.resin_priority_list,
+        vec!["浓缩树脂".to_string(), "原粹树脂".to_string()]
+    );
+    assert_eq!(defaults.revive_retry_count, 3);
+    assert!(!defaults.reward_recognition_enabled);
+
+    assert_eq!(normalize_domain_round_num(0), 9999);
+    assert_eq!(normalize_domain_round_num(4), 4);
+
+    let config = AutoDomainExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 2.0,
+        "domainRoundNum": 0,
+        "strategyName": "daily",
+        "autoDomainConfig": {
+            "fightEndDelay": 7.5,
+            "shortMovement": true,
+            "walkToF": false,
+            "leftRightMoveTimes": 5,
+            "autoEat": true,
+            "partyName": "daily party",
+            "domainName": "太山府",
+            "autoArtifactSalvage": true,
+            "sundaySelectedValue": "2",
+            "specifyResinUse": true,
+            "resinPriorityList": ["脆弱树脂", "原粹树脂"],
+            "originalResinUseCount": 1,
+            "originalResin20UseCount": 2,
+            "originalResin40UseCount": 3,
+            "condensedResinUseCount": 4,
+            "transientResinUseCount": 5,
+            "fragileResinUseCount": 6,
+            "reviveRetryCount": 4,
+            "rewardRecognitionEnabled": true
+        },
+        "maxArtifactStar": "3"
+    })));
+    let plan = plan_auto_domain(config).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_DOMAIN_TASK_KEY);
+    assert_eq!(plan.display_name, "自动秘境");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 2.0);
+    assert!(!plan.executor_ready);
+    assert_eq!(plan.param.domain_round_num, 9999);
+    assert_eq!(plan.param.combat_strategy_path, "User/AutoFight/daily.txt");
+    assert_eq!(plan.param.party_name, "daily party");
+    assert_eq!(plan.param.domain_name, "太山府");
+    assert_eq!(plan.param.sunday_selected_value, "2");
+    assert!(plan.param.auto_artifact_salvage);
+    assert_eq!(plan.param.max_artifact_star, "3");
+    assert!(plan.param.specify_resin_use);
+    assert!(plan.param.reward_recognition_enabled);
+    assert_eq!(plan.param_rule.raw_domain_round_num, 9999);
+    assert_eq!(plan.param_rule.normalized_domain_round_num, 9999);
+    assert_eq!(plan.param_rule.unlimited_round_sentinel, 9999);
+    assert_eq!(
+        plan.param_rule.auto_team_strategy_directory,
+        "User/AutoFight/"
+    );
+
+    assert_eq!(plan.config_rule.fight_end_delay_seconds, 7.5);
+    assert!(plan.config_rule.short_movement);
+    assert!(!plan.config_rule.walk_to_f);
+    assert_eq!(plan.config_rule.left_right_move_times, 5);
+    assert!(plan.config_rule.auto_eat_enabled);
+    assert!(plan.config_rule.auto_artifact_salvage_enabled);
+    assert!(plan.config_rule.specify_resin_use);
+    assert_eq!(plan.config_rule.revive_retry_count, 4);
+    assert!(plan.config_rule.reward_recognition_enabled);
+
+    assert!(plan.startup_rule.requires_16_to_9_resolution);
+    assert!(plan.startup_rule.destroys_auto_fight_assets_before_start);
+    assert!(plan.startup_rule.creates_bgi_tree_yolo_predictor);
+    assert!(plan.startup_rule.parses_combat_script_bag_before_start);
+    assert!(
+        plan.startup_rule
+            .adds_auto_eat_realtime_trigger_when_enabled
+    );
+    assert_eq!(plan.startup_rule.waits_for_main_ui_after_domain_seconds, 30);
+    assert_eq!(plan.retry_rule.revive_retry_count, 4);
+    assert!(plan.retry_rule.retry_only_when_domain_name_configured);
+    assert_eq!(plan.retry_rule.retry_delay_ms, 2_000);
+
+    assert_eq!(
+        plan.locators.resin_switch_button.asset,
+        AUTO_DOMAIN_RESIN_SWITCH_ASSET
+    );
+    assert_eq!(
+        plan.locators.resin_switch_button.roi,
+        Some(Rect {
+            x: 1920,
+            y: 860,
+            width: 800,
+            height: 260
+        })
+    );
+    assert_eq!(plan.locators.resin_switch_button.threshold, 0.8);
+    assert_eq!(
+        plan.locators.resin_switch_button_disabled.asset,
+        AUTO_DOMAIN_RESIN_SWITCH_DISABLED_ASSET
+    );
+    assert_eq!(
+        plan.locators.confirm_button.roi,
+        Some(Rect {
+            x: 960,
+            y: 540,
+            width: 960,
+            height: 540
+        })
+    );
+    assert_eq!(
+        plan.locators.artifact_flower.roi,
+        Some(Rect {
+            x: 960,
+            y: 0,
+            width: 960,
+            height: 1080
+        })
+    );
+    assert_eq!(
+        plan.locators.click_any_close_tip.roi,
+        Some(Rect {
+            x: 0,
+            y: 540,
+            width: 1920,
+            height: 540
+        })
+    );
+    assert_eq!(
+        plan.locators.exit_button.roi,
+        Some(Rect {
+            x: 0,
+            y: 540,
+            width: 960,
+            height: 540
+        })
+    );
+    assert_eq!(
+        plan.locators.abnormal_icon.roi,
+        Some(Rect {
+            x: 0,
+            y: 86,
+            width: 76,
+            height: 75
+        })
+    );
+    assert_eq!(
+        plan.locators.in_domain_icon.roi,
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 480,
+            height: 270
+        })
+    );
+    assert_eq!(
+        plan.locators.party_choose_view.roi,
+        Some(Rect {
+            x: 0,
+            y: 840,
+            width: 274,
+            height: 240
+        })
+    );
+
+    assert!(plan.domain_entry_rule.teleports_when_domain_name_configured);
+    assert_eq!(plan.domain_entry_rule.post_teleport_delay_ms, 1_000);
+    assert_eq!(plan.domain_entry_rule.door_pick_retry_attempts, 20);
+    assert_eq!(plan.domain_entry_rule.door_pick_retry_interval_ms, 500);
+    assert_eq!(plan.domain_entry_rule.enter_domain_retry_attempts, 10);
+    assert_eq!(plan.domain_entry_rule.enter_domain_retry_interval_ms, 1_000);
+    assert!(plan
+        .domain_entry_rule
+        .special_domain_movements
+        .iter()
+        .any(|rule| rule.domain_name == "无妄引咎密宫"));
+
+    assert!(
+        plan.sunday_reward_rule
+            .enabled_when_sunday_after_4_or_monday_before_4
+    );
+    assert!(
+        plan.sunday_reward_rule
+            .enabled_when_limited_open_ocr_matches
+    );
+    assert_eq!(plan.sunday_reward_rule.scroll_steps, 100);
+    assert_eq!(plan.sunday_reward_rule.scroll_step_delay_ms, 10);
+    assert_eq!(
+        plan.sunday_reward_rule.selected_value_click_offsets[1],
+        AutoDomainSundayClickOffset {
+            selected_value: 2,
+            y_offset_capture_height_ratio: -0.1
+        }
+    );
+
+    assert!(plan.combat_rule.initializes_team_on_first_round);
+    assert!(plan.combat_rule.switches_to_first_script_avatar);
+    assert_eq!(plan.combat_rule.switch_avatar_sleep_ms, 200);
+    assert_eq!(plan.combat_rule.walk_to_f_timeout_ms, 60_000);
+    assert_eq!(plan.combat_rule.walk_forward_start_delay_ms, 30);
+    assert!(plan.combat_rule.sprint_when_walk_to_f_disabled);
+    assert_eq!(plan.combat_rule.domain_end_detection_interval_ms, 1_000);
+    assert_eq!(plan.combat_rule.fight_end_delay_ms, 7_500);
+    assert_eq!(plan.combat_rule.auto_eat_low_hp_check_interval_ms, 500);
+
+    assert_eq!(plan.petrified_tree_rule.yolo_model, "BgiTree");
+    assert!(plan.petrified_tree_rule.middle_click_before_search);
+    assert_eq!(plan.petrified_tree_rule.after_middle_click_delay_ms, 900);
+    assert!(plan.petrified_tree_rule.locks_camera_to_east);
+    assert_eq!(
+        plan.petrified_tree_rule.continuous_east_count_before_move,
+        5
+    );
+    assert_eq!(plan.petrified_tree_rule.no_detect_switch_threshold, 40);
+    assert_eq!(plan.petrified_tree_rule.left_right_move_times, 5);
+    assert!(plan.petrified_tree_rule.short_movement);
+
+    assert_eq!(plan.reward_rule.prompt_initial_delay_ms, 300);
+    assert_eq!(plan.reward_rule.resin_prompt_retry_attempts, 10);
+    assert_eq!(plan.reward_rule.resin_prompt_retry_interval_ms, 500);
+    assert_eq!(plan.reward_rule.after_prompt_detected_delay_ms, 800);
+    assert!(plan.reward_rule.default_mode_uses_condensed_before_original);
+    assert_eq!(plan.reward_rule.default_mode_min_original_resin, 20);
+    assert!(plan.reward_rule.specified_mode_uses_record_order);
+    assert_eq!(
+        plan.reward_rule.original_resin_type_switch_retry_attempts,
+        10
+    );
+    assert_eq!(
+        plan.reward_rule
+            .original_resin_type_switch_retry_interval_ms,
+        500
+    );
+    assert_eq!(plan.reward_rule.use_button_double_click_gap_ms, 60);
+    assert!(plan.reward_rule.reward_recognition_enabled);
+    assert_eq!(plan.reward_rule.continuation_poll_attempts, 30);
+    assert_eq!(plan.reward_rule.continuation_poll_interval_ms, 300);
+    assert_eq!(plan.reward_rule.no_resin_challenge_fallback_delay_ms, 900);
+    assert_eq!(
+        plan.reward_rule.exit_domain_sequence.first_escape_delay_ms,
+        500
+    );
+    assert_eq!(
+        plan.reward_rule.exit_domain_sequence.second_escape_delay_ms,
+        800
+    );
+    assert!(plan
+        .reward_rule
+        .stop_reasons
+        .contains(&AutoDomainStopReason::SpecifiedResinUnavailable));
+
+    assert!(plan.resin_rule.specify_resin_use);
+    assert_eq!(
+        plan.resin_rule.default_priority_list,
+        vec!["浓缩树脂".to_string(), "原粹树脂".to_string()]
+    );
+    assert_eq!(
+        plan.resin_rule.configured_priority_list,
+        vec!["脆弱树脂".to_string(), "原粹树脂".to_string()]
+    );
+    assert_eq!(
+        plan.resin_rule.specified_records,
+        vec![
+            AutoDomainResinUseRecord {
+                name: "浓缩树脂".to_string(),
+                remain_count: 4,
+                max_count: 4,
+            },
+            AutoDomainResinUseRecord {
+                name: "原粹树脂40".to_string(),
+                remain_count: 3,
+                max_count: 3,
+            },
+            AutoDomainResinUseRecord {
+                name: "原粹树脂20".to_string(),
+                remain_count: 2,
+                max_count: 2,
+            },
+            AutoDomainResinUseRecord {
+                name: "原粹树脂".to_string(),
+                remain_count: 1,
+                max_count: 1,
+            },
+            AutoDomainResinUseRecord {
+                name: "须臾树脂".to_string(),
+                remain_count: 5,
+                max_count: 5,
+            },
+            AutoDomainResinUseRecord {
+                name: "脆弱树脂".to_string(),
+                remain_count: 6,
+                max_count: 6,
+            },
+        ]
+    );
+    assert_eq!(plan.resin_rule.original_resin_alias_for_button, "原粹树脂");
+
+    assert!(plan.artifact_salvage_rule.enabled);
+    assert_eq!(plan.artifact_salvage_rule.max_artifact_star, "3");
+    assert_eq!(plan.artifact_salvage_rule.invalid_star_falls_back_to, 4);
+    assert!(plan.artifact_salvage_rule.starts_auto_artifact_salvage_task);
+
+    assert_eq!(plan.steps.len(), 18);
+    assert_eq!(plan.steps[0].phase, AutoDomainTaskPhase::Startup);
+    assert_eq!(
+        plan.steps[0].action,
+        AutoDomainTaskAction::InitializeAssetsAndConfig
+    );
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("BgiTree YOLO")));
+
+    let mut invalid_param = AutoDomainParam::default();
+    invalid_param.specify_resin_use = true;
+    let error = build_domain_resin_records(&invalid_param).unwrap_err();
+    assert!(
+        matches!(error, TaskError::InvalidTaskConfig { key, .. } if key == AUTO_DOMAIN_TASK_KEY)
+    );
+
+    for asset_name in ["resin_switch_btn.png", "resin_switch_btn_no_active.png"] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join("AutoDomain")
+            .join("Assets")
+            .join("1920x1080")
+            .join(asset_name)
+            .exists());
+    }
+}
+
+#[test]
+fn auto_genius_invokation_plan_preserves_legacy_strategy_assets_and_duel_rules() {
+    let defaults = AutoGeniusInvokationConfig::default();
+    assert_eq!(defaults.strategy_name, "1.莫娜砂糖琴");
+    assert_eq!(defaults.sleep_delay, 0);
+    assert_eq!(defaults.default_character_card_rects.len(), 3);
+    assert_eq!(defaults.active_character_card_space, 41);
+
+    assert_eq!(
+        normalize_auto_genius_strategy_path("folder/deck")
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/"),
+        "User/AutoGeniusInvokation/folder/deck.txt"
+    );
+    assert!(normalize_auto_genius_strategy_path("../deck").is_err());
+
+    let strategy_text = r#"
+        // sample
+        角色定义:
+        角色1=刻晴|雷{技能3消耗=1雷骰子+2任意,技能2消耗=3雷骰子,技能1消耗=1雷骰子+2任意}
+        角色2=莫娜|水{技能3消耗=3水骰子,技能2消耗=3水骰子,技能1消耗=1水骰子+2任意}
+        角色3=甘雨|冰{技能4消耗=1冰骰子,技能3消耗=1冰骰子,技能2消耗=5冰骰子,技能1消耗=1冰骰子+2任意}
+        ---
+        策略定义:
+        刻晴 使用 技能2 骰子减少1
+        莫娜 使用 技能1
+        甘雨 使用 技能4 骰子增加2
+    "#;
+    let parsed = parse_auto_genius_strategy(strategy_text).unwrap();
+    assert_eq!(
+        parsed.stage_order,
+        vec!["角色定义:".to_string(), "策略定义:".to_string()]
+    );
+    assert_eq!(parsed.skipped_line_count, 4);
+    assert_eq!(parsed.characters.len(), 3);
+    assert_eq!(parsed.characters[0].name, "刻晴");
+    assert_eq!(
+        parsed.characters[0].element,
+        Some(AutoGeniusElementalType::Electro)
+    );
+    assert_eq!(parsed.characters[0].skills[1].index, 2);
+    assert_eq!(parsed.characters[0].skills[1].specific_element_cost, 3);
+    assert_eq!(parsed.characters[0].skills[1].all_cost, 3);
+    assert_eq!(parsed.action_commands.len(), 3);
+    assert_eq!(parsed.action_commands[0].character_name, "刻晴");
+    assert_eq!(parsed.action_commands[0].target_index, 2);
+    assert_eq!(parsed.action_commands[0].dice_delta, -1);
+    assert_eq!(parsed.action_commands[0].all_cost, Some(2));
+    assert_eq!(
+        parsed.action_commands[2].dice_element,
+        Some(AutoGeniusElementalType::Cryo)
+    );
+
+    let config = AutoGeniusInvokationExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 2.0,
+        "strategyName": "test",
+        "strategy": strategy_text,
+        "autoGeniusInvokationConfig": {
+            "strategyName": "ignored-by-top-level",
+            "sleepDelay": 250,
+            "activeCharacterCardSpace": 41
+        }
+    })));
+    let plan = plan_auto_genius_invokation(".", config).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_GENIUS_INVOKATION_TASK_KEY);
+    assert_eq!(plan.display_name, "自动七圣召唤");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 2.0);
+    assert!(!plan.executor_ready);
+    assert_eq!(plan.config_rule.strategy_name, "test");
+    assert_eq!(plan.config_rule.sleep_delay_ms, 250);
+    assert_eq!(plan.config_rule.sleep_delay_max_ms, 5_000);
+    assert_eq!(
+        plan.config_rule.default_character_card_rects[0],
+        Rect {
+            x: 1334,
+            y: 1264,
+            width: 330,
+            height: 564
+        }
+    );
+    assert_eq!(
+        plan.config_rule.my_dice_count_rect,
+        Rect {
+            x: 136,
+            y: 1284,
+            width: 50,
+            height: 62
+        }
+    );
+    assert_eq!(
+        plan.config_rule.character_card_extend_hp_rect,
+        Rect {
+            x: -40,
+            y: 0,
+            width: 120,
+            height: 110
+        }
+    );
+    assert!(plan.strategy_source.inline_strategy);
+    assert_eq!(
+        plan.strategy_source.user_strategy_directory,
+        "User/AutoGeniusInvokation"
+    );
+    assert_eq!(
+        plan.strategy_source.default_card_config_asset,
+        AUTO_GENIUS_INVOKATION_DEFAULT_CARD_ASSET
+    );
+    assert_eq!(plan.strategy.action_commands.len(), 3);
+
+    assert!(plan.startup_rule.skips_task_runner_main_ui_wait);
+    assert!(plan.startup_rule.requires_exact_1920x1080);
+    assert!(plan.startup_rule.destroys_asset_singleton_before_start);
+    assert!(plan.startup_rule.prepares_initial_hand);
+    assert!(plan.startup_rule.detects_character_rects_with_fallback);
+    assert!(plan.startup_rule.chooses_first_action_character);
+
+    assert_eq!(
+        plan.locators.round_end_button.roi,
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 384,
+            height: 1080
+        })
+    );
+    assert_eq!(
+        plan.locators.elemental_tuning_confirm_button.roi,
+        Some(Rect {
+            x: 0,
+            y: 540,
+            width: 1920,
+            height: 540
+        })
+    );
+    assert_eq!(plan.locators.elemental_tuning_confirm_button.threshold, 0.9);
+    assert_eq!(
+        plan.locators.elemental_dice_lack_warning.roi,
+        Some(Rect {
+            x: 960,
+            y: 0,
+            width: 960,
+            height: 1080
+        })
+    );
+    assert_eq!(
+        plan.locators.in_character_pick.roi,
+        Some(Rect {
+            x: 960,
+            y: 540,
+            width: 960,
+            height: 540
+        })
+    );
+    assert_eq!(plan.locators.roll_phase_dice_assets.len(), 8);
+    assert!(plan
+        .locators
+        .roll_phase_dice_assets
+        .iter()
+        .any(|asset| asset.asset.ends_with("roll_omni.png")));
+    assert_eq!(plan.locators.action_phase_dice_assets.len(), 8);
+    assert!(plan
+        .locators
+        .grayscale_assets
+        .contains(&"AutoGeniusInvokation:other/满能量.png".to_string()));
+
+    assert_eq!(plan.dice_rule.roll_phase_threshold, 0.73);
+    assert_eq!(plan.dice_rule.roll_phase_expected_count, 8);
+    assert_eq!(plan.dice_rule.roll_phase_expected_upper_count, 4);
+    assert_eq!(plan.dice_rule.roll_phase_retry_attempts, 35);
+    assert_eq!(plan.dice_rule.roll_phase_retry_interval_ms, 500);
+    assert_eq!(plan.dice_rule.action_phase_threshold, 0.7);
+    assert_eq!(plan.dice_rule.action_phase_count_retry_attempts, 20);
+    assert_eq!(
+        plan.dice_rule
+            .action_phase_expected_8_actual_9_omni_retry_limit,
+        5
+    );
+
+    assert_eq!(plan.action_rule.first_round_card_count, 5);
+    assert_eq!(plan.action_rule.next_round_card_increment, 2);
+    assert_eq!(plan.action_rule.switch_character_dice_cost, 1);
+    assert_eq!(plan.action_rule.switch_animation_sleep_ms, 800);
+    assert_eq!(plan.action_rule.skill_popup_sleep_ms, 1_200);
+    assert_eq!(plan.action_rule.skill_confirm_sleep_ms, 500);
+    assert_eq!(plan.action_rule.elemental_tuning_hand_layouts.len(), 10);
+    assert_eq!(
+        plan.action_rule.elemental_tuning_hand_layouts[0],
+        AutoGeniusHandLayout {
+            card_count: 10,
+            start_x_1080p: 570.0,
+            spacing_1080p: 120.0
+        }
+    );
+    assert!(plan.action_rule.keqing_skill_2_alternates_card_count);
+
+    assert_eq!(
+        plan.ocr_rule.dice_count_rect,
+        Rect {
+            x: 136,
+            y: 1284,
+            width: 50,
+            height: 62
+        }
+    );
+    assert!(plan.ocr_rule.dice_ocr_without_detector);
+    assert_eq!(plan.ocr_rule.invalid_dice_count_sentinel, -10);
+    assert!(plan.ocr_rule.active_character_fallback_by_exclusion);
+    assert!(plan.ocr_rule.active_character_fallback_by_template_shape);
+
+    assert_eq!(plan.wait_rule.wait_my_turn_max_attempts, 60);
+    assert_eq!(plan.wait_rule.wait_my_turn_required_consecutive_hits, 3);
+    assert_eq!(plan.wait_rule.default_after_action_wait_ms, 10_000);
+    assert_eq!(plan.wait_rule.burst_after_action_wait_ms, 15_000);
+    assert_eq!(plan.wait_rule.mona_switch_after_action_wait_ms, 3_000);
+    assert!(
+        plan.exception_rule
+            .normal_end_is_logged_without_rethrow_in_duel
+    );
+    assert!(plan.exception_rule.outer_task_boundary_catches_all_and_logs);
+    assert_eq!(plan.exception_rule.check_task_pause_retry_attempts, 100);
+    assert_eq!(plan.steps.len(), 17);
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("default tcg_character_card fallback")));
+
+    let asset_root = task_asset_root()
+        .join("GameTask")
+        .join("AutoGeniusInvokation")
+        .join("Assets");
+    assert!(asset_root.join("tcg_character_card.json").exists());
+    assert!(asset_root
+        .join("1920x1080")
+        .join("other")
+        .join("确定.png")
+        .exists());
+    assert!(asset_root
+        .join("1920x1080")
+        .join("dice")
+        .join("roll_omni.png")
+        .exists());
+}
+
+#[test]
+fn auto_track_path_plan_preserves_legacy_way_file_tracking_and_jump_rules() {
+    let root = unique_test_root("auto-track-path-plan");
+    let way_file = root.join("log").join("way").join("way2.json");
+    write_test_file(
+        &way_file,
+        r#"{
+  "WayPointList": [
+    {
+      "Pt": { "X": 10.0, "Y": 20.0 },
+      "MatchPt": { "X": 100.0, "Y": 200.0 },
+      "Index": 0,
+      "Type": "Normal"
+    },
+    {
+      "Pt": { "X": 11.0, "Y": 22.0 },
+      "MatchPt": { "X": 110.0, "Y": 220.0 },
+      "Index": 1,
+      "Type": "KeyPoint"
+    },
+    {
+      "Pt": { "X": 12.0, "Y": 24.0 },
+      "MatchPt": { "X": 120.0, "Y": 240.0 },
+      "Index": 2,
+      "Type": "Collection"
+    }
+  ]
+}"#,
+    );
+
+    let config = AutoTrackPathExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "pathFile": "log/way/way2.json",
+        "tpConfig": {
+            "mapZoomEnabled": false,
+            "mapZoomOutDistance": 1200,
+            "mapZoomInDistance": 450,
+            "stepIntervalMilliseconds": 30,
+            "maxZoomLevel": 4.5,
+            "minZoomLevel": 2.5,
+            "tolerance": 180.0,
+            "maxIterations": 25,
+            "maxMouseMove": 350,
+            "mapScaleFactor": 2.4,
+            "hpRestoreDuration": 6.0
+        }
+    })));
+    let plan = plan_auto_track_path(&root, config).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_TRACK_PATH_TASK_KEY);
+    assert_eq!(plan.display_name, "自动路线");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.path_file, "log/way/way2.json");
+    assert!(!plan.executor_ready);
+
+    assert!(!plan.config_rule.map_zoom_enabled);
+    assert_eq!(plan.config_rule.map_zoom_out_distance, 1200);
+    assert_eq!(plan.config_rule.map_zoom_in_distance, 450);
+    assert_eq!(plan.config_rule.step_interval_milliseconds, 30);
+    assert_eq!(plan.config_rule.max_zoom_level, 4.5);
+    assert_eq!(plan.config_rule.min_zoom_level, 2.5);
+    assert_eq!(plan.config_rule.tolerance, 180.0);
+    assert_eq!(plan.config_rule.max_iterations, 25);
+    assert_eq!(plan.config_rule.max_mouse_move, 350);
+    assert_eq!(plan.config_rule.map_scale_factor, 2.4);
+    assert_eq!(plan.config_rule.hp_restore_duration, 6.0);
+
+    assert_eq!(plan.path_summary.waypoint_count, 3);
+    assert_eq!(
+        plan.path_summary.first_point,
+        Some(AutoTrackPathPointPlan {
+            index: 0,
+            pt_x: 10.0,
+            pt_y: 20.0,
+            match_x: 100.0,
+            match_y: 200.0
+        })
+    );
+    assert_eq!(
+        plan.path_summary.last_point,
+        Some(AutoTrackPathPointPlan {
+            index: 2,
+            pt_x: 12.0,
+            pt_y: 24.0,
+            match_x: 120.0,
+            match_y: 240.0
+        })
+    );
+    assert_eq!(plan.path_summary.key_point_indices, vec![1, 2]);
+    assert_eq!(
+        plan.path_summary.key_point_types,
+        vec![
+            "KeyPoint".to_string(),
+            "Fighting".to_string(),
+            "Collection".to_string()
+        ]
+    );
+
+    assert!(plan.startup_rule.uses_task_semaphore_non_blocking);
+    assert!(plan.startup_rule.activates_game_window);
+    assert!(plan.startup_rule.treats_normal_end_as_manual_interrupt);
+    assert!(plan.startup_rule.clears_draw_content_on_finish);
+    assert!(plan.startup_rule.releases_task_semaphore_on_finish);
+
+    assert!(plan.teleport_rule.teleports_to_first_waypoint);
+    assert_eq!(plan.teleport_rule.post_teleport_sleep_ms, 1_000);
+    assert_eq!(plan.teleport_rule.wait_minimap_retry_attempts, 100);
+    assert_eq!(plan.teleport_rule.wait_minimap_retry_interval_ms, 1_000);
+    assert_eq!(
+        plan.teleport_rule.paimon_menu_locator_asset,
+        "Common/Element:paimon_menu.png"
+    );
+    assert_eq!(
+        plan.teleport_rule.mini_map_crop_from_paimon,
+        Rect {
+            x: 24,
+            y: -15,
+            width: 210,
+            height: 210
+        }
+    );
+
+    assert_eq!(plan.angle_calibration_rule.char_moving_unit, 500);
+    assert_eq!(plan.angle_calibration_rule.mouse_move_x, 500);
+    assert_eq!(plan.angle_calibration_rule.after_mouse_move_sleep_ms, 500);
+    assert_eq!(plan.angle_calibration_rule.move_forward_hold_ms, 100);
+    assert_eq!(plan.angle_calibration_rule.after_forward_sleep_ms, 1_000);
+    assert!(plan.angle_calibration_rule.fails_when_angle_offset_zero);
+
+    assert_eq!(plan.tracking_rule.nearest_lookahead_points, 20);
+    assert_eq!(plan.tracking_rule.stop_distance, 10.0);
+    assert_eq!(plan.tracking_rule.rotation_unit, 500);
+    assert!(plan
+        .tracking_rule
+        .rotation_formula
+        .contains("angle_offset_unit"));
+    assert_eq!(plan.tracking_rule.after_mouse_move_sleep_ms, 100);
+    assert_eq!(plan.tracking_rule.after_angle_recheck_sleep_ms, 100);
+    assert!(plan.tracking_rule.move_forward_after_rotation);
+    assert_eq!(plan.tracking_rule.post_forward_sleep_ms, 50);
+    assert!(plan.tracking_rule.release_forward_when_reaching_point);
+    assert!(plan.tracking_rule.cancels_track_when_last_point_reached);
+
+    assert!(plan.status_refresh_rule.captures_motion_status);
+    assert_eq!(plan.status_refresh_rule.interval_ms, 60);
+    assert!(
+        plan.status_refresh_rule
+            .main_ui_required_by_minimap_detection
+    );
+    assert!(plan.jump_rule.only_jumps_when_motion_normal);
+    assert_eq!(plan.jump_rule.first_jump_interval_ms, 300);
+    assert_eq!(plan.jump_rule.second_jump_followup_sleep_ms, 3_500);
+    assert_eq!(plan.jump_rule.interrupted_motion_sleep_ms, 1_600);
+    assert_eq!(plan.steps.len(), 12);
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("CharacterOrientation")));
+
+    assert!(normalize_auto_track_path_file("log/way/way2.json").is_ok());
+    assert!(normalize_auto_track_path_file("../way2.json").is_err());
+    assert!(normalize_auto_track_path_file("").is_err());
+
+    assert!(task_asset_root()
+        .join("GameTask")
+        .join("AutoTrackPath")
+        .join("Assets")
+        .join("tp.json")
+        .exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_boss_plan_preserves_legacy_boss_data_routes_resin_combat_and_reward_rules() {
+    let root = unique_test_root("auto-boss-plan");
+    write_test_file(
+        &root.join("User").join("AutoFight").join("boss.txt"),
+        "钟离 e, wait(0.2)",
+    );
+    for route in ["纯水精灵前往.json", "纯水精灵战斗后快速前往.json"] {
+        write_test_file(
+            &root
+                .join("GameTask")
+                .join("AutoBoss")
+                .join("Assets")
+                .join("Pathing")
+                .join(route),
+            r#"{"positions":[]}"#,
+        );
+    }
+
+    let config = AutoBossExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 1.25,
+        "autoBossConfig": {
+            "bossName": "纯水精灵",
+            "strategyName": "boss",
+            "teamName": "Boss Team",
+            "specifyRunCount": true,
+            "runCount": 2,
+            "useTransientResin": true,
+            "useFragileResin": true,
+            "reviveRetryCount": 4,
+            "returnToStatueAfterEachRound": true,
+            "rewardRecognitionEnabled": true
+        }
+    })));
+    let plan = plan_auto_boss(&root, config).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_BOSS_TASK_KEY);
+    assert_eq!(plan.display_name, "自动首领讨伐");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 1.25);
+    assert_eq!(plan.param.boss_name, "纯水精灵");
+    assert_eq!(plan.param.strategy_name, "boss");
+    assert_eq!(plan.param.combat_strategy_path, "User/AutoFight/boss.txt");
+    assert_eq!(plan.param.team_name, "Boss Team");
+    assert!(plan.param.specify_run_count);
+    assert_eq!(plan.param.run_count, 2);
+    assert!(plan.param.use_transient_resin);
+    assert!(plan.param.use_fragile_resin);
+    assert_eq!(plan.param.revive_retry_count, 4);
+    assert!(plan.param.return_to_statue_after_each_round);
+    assert!(plan.param.reward_recognition_enabled);
+    assert!(!plan.executor_ready);
+
+    assert!(plan.boss_data.selected_boss_supported);
+    assert_eq!(
+        plan.boss_data.selected_boss_country.as_deref(),
+        Some("璃月")
+    );
+    assert!(plan.boss_data.selected_boss_talk_to_start);
+    assert!(!plan.boss_data.selected_boss_no_pathing_support);
+    assert!(plan.boss_data.supported_boss_count >= 40);
+    assert!(auto_boss_is_supported("蕴光月幻蝶"));
+    assert!(!auto_boss_is_supported("不存在的首领"));
+    assert!(auto_boss_is_no_pathing_support("蕴光月幻蝶"));
+    assert_eq!(
+        auto_boss_required_route_files("蕴光月幻蝶"),
+        vec!["蕴光月幻蝶强制传送.json", "蕴光月幻蝶键鼠前往.json"]
+    );
+
+    assert!(plan.validation_rule.requires_boss_name);
+    assert!(plan.validation_rule.requires_supported_boss);
+    assert!(
+        plan.validation_rule
+            .requires_existing_combat_strategy_file_or_directory
+    );
+    assert_eq!(
+        plan.validation_rule.requires_existing_route_files,
+        vec!["纯水精灵前往.json", "纯水精灵战斗后快速前往.json"]
+    );
+    assert!(plan.validation_rule.requires_16_to_9_resolution);
+    assert!(plan.validation_rule.warns_below_1920x1080);
+
+    assert!(plan.startup_rule.parses_combat_script_bag_before_start);
+    assert!(
+        plan.startup_rule
+            .outer_retry_exception_respects_revive_retry_count
+    );
+    assert_eq!(plan.startup_rule.retry_delay_ms, 2_000);
+    assert!(plan.startup_rule.releases_all_keys_on_finish);
+    assert!(plan.startup_rule.releases_left_mouse_on_finish);
+
+    assert!(plan.loop_rule.prepares_main_ui_before_loop);
+    assert!(plan.loop_rule.switches_party_when_team_name_configured);
+    assert!(plan.loop_rule.specified_run_count_stops_after_rewards);
+    assert!(
+        !plan
+            .loop_rule
+            .unspecified_run_count_runs_until_resin_exhausted
+    );
+    assert!(plan.loop_rule.return_to_statue_after_each_round_option);
+    assert_eq!(plan.loop_rule.statue_delay_ms, 3_000);
+
+    assert_eq!(
+        plan.pathing_rule.pathing_asset_directory,
+        "GameTask/AutoBoss/Assets/Pathing"
+    );
+    assert_eq!(
+        plan.pathing_rule.first_navigation_files,
+        vec!["纯水精灵前往.json"]
+    );
+    assert!(
+        !plan
+            .pathing_rule
+            .no_pathing_support_uses_force_teleport_and_key_mouse
+    );
+    assert!(plan.pathing_rule.normal_boss_uses_go_to_route);
+    assert!(plan.pathing_rule.pathing_party_skip_party_switch);
+    assert!(!plan.pathing_rule.pathing_party_auto_fight_enabled);
+
+    assert_eq!(plan.resin_rule.original_resin_cost, 40);
+    assert_eq!(plan.resin_rule.resin_recovery_interval_minutes, 8);
+    assert!(plan.resin_rule.precheck_opens_big_map);
+    assert_eq!(
+        plan.resin_rule.resin_icon_search_rect,
+        Rect {
+            x: 1200,
+            y: 25,
+            width: 250,
+            height: 50
+        }
+    );
+    assert!(plan.resin_rule.precheck_failure_falls_back_to_reward_prompt);
+
+    assert_eq!(plan.supplemental_resin_rule.enabled_resin_options.len(), 2);
+    assert_eq!(
+        plan.supplemental_resin_rule.enabled_resin_options[0].name,
+        "须臾树脂"
+    );
+    assert_eq!(
+        plan.supplemental_resin_rule.enabled_resin_options[1].asset,
+        AUTO_BOSS_FRAGILE_RESIN_ASSET
+    );
+    assert_eq!(plan.supplemental_resin_rule.max_quick_use_quantity, 20);
+    assert!(plan
+        .supplemental_resin_rule
+        .target_quantity_formula
+        .contains("/ 60"));
+
+    assert_eq!(plan.combat_rule.team_initialization_retry_attempts, 5);
+    assert!(
+        plan.combat_rule
+            .switches_to_first_script_avatar_before_fight
+    );
+    assert!(plan.combat_rule.auto_fight_finish_detection_enabled);
+    assert!(!plan.combat_rule.pick_drops_after_fight_enabled);
+    assert!(!plan.combat_rule.kazuha_pickup_enabled);
+    assert_eq!(plan.combat_rule.battle_threshold_for_loot, -1);
+    assert_eq!(
+        plan.combat_rule.only_pick_elite_drops_mode,
+        "DisableAutoPickupForNonElite"
+    );
+    assert!(plan.combat_rule.calls_combat_scenes_after_task);
+
+    assert_eq!(plan.reward_navigation_rule.navigation_timeout_seconds, 15);
+    assert_eq!(
+        plan.reward_navigation_rule.reward_prompt_ocr_rect,
+        Rect {
+            x: 1210,
+            y: 300,
+            width: 200,
+            height: 400
+        }
+    );
+    assert_eq!(plan.reward_navigation_rule.jump_every_forward_bursts, 2);
+    assert_eq!(plan.reward_rule.use_original_resin_timeout_ms, 3_000);
+    assert!(plan.reward_rule.reward_recognition_enabled);
+    assert_eq!(plan.reward_rule.reward_ready_retry_attempts, 20);
+    assert_eq!(plan.reward_rule.close_result_retry_attempts, 20);
+
+    assert!(
+        plan.reposition_rule
+            .talk_to_start_uses_after_fight_quick_route
+    );
+    assert!(
+        !plan
+            .reposition_rule
+            .no_pathing_support_reruns_special_navigation
+    );
+    assert!(!plan.reposition_rule.normal_boss_replays_last_route_position);
+    assert_eq!(
+        plan.reposition_rule.normal_boss_post_reposition_delay_ms,
+        4_000
+    );
+
+    assert_eq!(
+        plan.locators.original_resin_top_icon.asset,
+        AUTO_BOSS_ORIGINAL_RESIN_TOP_ICON_ASSET
+    );
+    assert_eq!(plan.locators.reward_box.threshold, 0.8);
+    assert_eq!(
+        plan.locators.reward_box.match_mode,
+        TemplateMatchMode::CCoeffNormed
+    );
+    assert_eq!(plan.steps.len(), 12);
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("CombatScenes")));
+
+    let asset_root = task_asset_root()
+        .join("GameTask")
+        .join("AutoBoss")
+        .join("Assets");
+    assert!(asset_root
+        .join("1920x1080")
+        .join("original_resin_top_icon.png")
+        .exists());
+    assert!(asset_root
+        .join("Pathing")
+        .join("纯水精灵前往.json")
+        .exists());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_boss_plan_rejects_legacy_invalid_resin_mode_and_missing_routes() {
+    let root = unique_test_root("auto-boss-invalid");
+    fs::create_dir_all(root.join("User").join("AutoFight")).unwrap();
+    write_test_file(
+        &root
+            .join("GameTask")
+            .join("AutoBoss")
+            .join("Assets")
+            .join("Pathing")
+            .join("爆炎树前往.json"),
+        r#"{"positions":[]}"#,
+    );
+
+    let invalid_resin = AutoBossExecutionConfig::from_value(Some(&serde_json::json!({
+        "bossName": "爆炎树",
+        "strategyName": "根据队伍自动选择",
+        "specifyRunCount": false,
+        "useTransientResin": true
+    })));
+    let error = plan_auto_boss(&root, invalid_resin).unwrap_err();
+    assert!(matches!(
+        error,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == AUTO_BOSS_TASK_KEY && message.contains("只有指定讨伐次数模式")
+    ));
+
+    let missing_route = AutoBossExecutionConfig::from_value(Some(&serde_json::json!({
+        "bossName": "纯水精灵",
+        "strategyName": "根据队伍自动选择"
+    })));
+    write_test_file(
+        &root
+            .join("GameTask")
+            .join("AutoBoss")
+            .join("Assets")
+            .join("Pathing")
+            .join("纯水精灵前往.json"),
+        r#"{"positions":[]}"#,
+    );
+    let error = plan_auto_boss(&root, missing_route).unwrap_err();
+    assert!(matches!(
+        error,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == AUTO_BOSS_TASK_KEY && message.contains("战斗后快速前往")
+    ));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_music_game_plan_preserves_legacy_lane_pixels_album_and_skip_main_ui_rules() {
+    let default_plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    assert_eq!(
+        default_plan.config_rule.normalized_music_level,
+        AUTO_MUSIC_GAME_DEFAULT_MUSIC_LEVEL
+    );
+    assert_eq!(default_plan.album_rule.selected_difficulties.len(), 1);
+    assert_eq!(
+        default_plan.album_rule.selected_difficulties[0].name,
+        "传说"
+    );
+    assert_eq!(
+        default_plan.album_rule.selected_difficulties[0].click_x_1080p,
+        1400
+    );
+
+    let config = AutoMusicGameExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 1.5,
+        "autoMusicGameConfig": {
+            "mustCanorusLevel": true,
+            "musicLevel": "所有"
+        }
+    })));
+    let plan = plan_auto_music_game(config);
+
+    assert_eq!(plan.task_key, AUTO_MUSIC_GAME_TASK_KEY);
+    assert_eq!(plan.display_name, "自动音游");
+    assert_eq!(plan.album_display_name, "自动音游专辑");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 1.5);
+    assert!(plan.config_rule.must_canorus_level);
+    assert_eq!(plan.config_rule.configured_music_level, "所有");
+    assert_eq!(plan.config_rule.normalized_music_level, "所有");
+    assert_eq!(plan.config_rule.empty_music_level_defaults_to, "传说");
+    assert_eq!(plan.config_rule.all_music_level_value, "所有");
+    assert!(!plan.executor_ready);
+
+    assert!(plan.startup_rule.checks_game_resolution);
+    assert!(plan.startup_rule.logs_close_task_reminder);
+    assert!(plan.startup_rule.warns_default_style_unusable);
+    assert_eq!(plan.startup_rule.default_style_name, "轻漾涟漪");
+    assert_eq!(
+        plan.startup_rule.required_hutao_style_name,
+        "疏影引蝶映梅红"
+    );
+    assert_eq!(plan.startup_rule.required_coin_count, 600);
+    assert!(plan.startup_rule.task_runner_skips_main_ui_wait);
+    assert!(plan.startup_rule.releases_all_keys_on_finish);
+
+    assert!(plan.performance_rule.uses_six_parallel_lane_tasks);
+    assert!(
+        plan.performance_rule
+            .converts_1080p_points_to_game_capture_region
+    );
+    assert_eq!(plan.performance_rule.poll_interval_ms, 5);
+    assert_eq!(plan.performance_rule.press_when_blue_below, 220);
+    assert_eq!(
+        plan.performance_rule.release_when_blue_greater_or_equal,
+        220
+    );
+    assert!(plan.performance_rule.holds_key_until_release_threshold);
+    assert!(plan
+        .performance_rule
+        .win32_get_pixel_source
+        .contains("Gdi32.GetPixel"));
+
+    assert_eq!(plan.key_lanes.len(), 6);
+    assert_eq!(plan.key_lanes[0].key, "A");
+    assert_eq!(plan.key_lanes[0].x_1080p, 417);
+    assert_eq!(plan.key_lanes[1].x_1080p, 628);
+    assert_eq!(plan.key_lanes[5].key, "L");
+    assert_eq!(plan.key_lanes[5].x_1080p, 1493);
+    assert!(plan
+        .key_lanes
+        .iter()
+        .all(|lane| lane.y_1080p == AUTO_MUSIC_GAME_SAMPLE_Y_1080P));
+
+    assert_eq!(plan.album_rule.selected_difficulties.len(), 4);
+    assert_eq!(plan.album_rule.default_difficulties.len(), 4);
+    assert_eq!(plan.album_rule.default_difficulties[1].name, "困难");
+    assert_eq!(plan.album_rule.default_difficulties[1].click_x_1080p, 800);
+    assert_eq!(
+        plan.album_rule.songs_per_difficulty_loop_count,
+        AUTO_MUSIC_GAME_SONGS_PER_DIFFICULTY_LOOP_COUNT
+    );
+    assert!(plan.album_rule.checks_album_icon_before_start);
+    assert!(plan.album_rule.rejects_all_songs_page_by_ocr);
+    assert!(plan.album_rule.canorus_level_skip_when_enabled);
+    assert!(!plan.album_rule.complete_reward_skip_when_canorus_disabled);
+    assert_eq!(plan.album_rule.next_song_click_x_1080p, 310);
+    assert_eq!(plan.album_rule.next_song_click_y_1080p, 220);
+    assert_eq!(plan.album_rule.album_check_interval_ms, 5_000);
+    assert!(plan.album_rule.completion_check_uses_btn_list);
+    assert_eq!(plan.album_rule.after_song_finished_sleep_ms, 2_000);
+    assert_eq!(plan.album_rule.after_start_performance_sleep_ms, 500);
+
+    assert_eq!(
+        plan.locators.ui_left_top_album_icon.asset,
+        AUTO_MUSIC_UI_LEFT_TOP_ALBUM_ICON_ASSET
+    );
+    assert_eq!(
+        plan.locators.ui_left_top_album_icon.roi,
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 150,
+            height: 120
+        })
+    );
+    assert_eq!(
+        plan.locators.btn_pause.roi_rule.as_deref(),
+        Some("CaptureRect.CutRightTop(0.2, 0.2)")
+    );
+    assert_eq!(
+        plan.locators.album_music_complete.roi,
+        Some(Rect {
+            x: 900,
+            y: 320,
+            width: 100,
+            height: 80
+        })
+    );
+    assert_eq!(plan.locators.music_canorus_levels.len(), 4);
+    assert_eq!(
+        plan.locators.music_canorus_levels[3].roi,
+        Some(Rect {
+            x: 450,
+            y: 690,
+            width: 200,
+            height: 60
+        })
+    );
+    assert_eq!(
+        plan.locators.music_canorus_levels[0].match_mode,
+        TemplateMatchMode::CCoeffNormed
+    );
+    assert_eq!(plan.steps.len(), 9);
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop manual performance live command")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("injectable AutoAlbumTask executor")));
+
+    let asset_root = task_asset_root()
+        .join("GameTask")
+        .join("AutoMusicGame")
+        .join("Assets")
+        .join("1920x1080");
+    assert!(asset_root.join("ui_left_top_album_icon.png").exists());
+    assert!(asset_root.join("music_canorus.png").exists());
+}
+
+#[test]
+fn auto_music_game_lane_state_preserves_legacy_blue_threshold_press_and_release() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let lane = &plan.key_lanes[0];
+    let decisions = auto_music_lane_sample_decisions(
+        lane,
+        &[220, 219, 100, 219, 220, 255, 221, 0, 0, 220],
+        &plan.performance_rule,
+    );
+
+    assert_eq!(
+        decisions
+            .iter()
+            .map(|decision| decision.action)
+            .collect::<Vec<_>>(),
+        vec![
+            AutoMusicLaneAction::None,
+            AutoMusicLaneAction::KeyDown,
+            AutoMusicLaneAction::None,
+            AutoMusicLaneAction::None,
+            AutoMusicLaneAction::KeyUp,
+            AutoMusicLaneAction::None,
+            AutoMusicLaneAction::None,
+            AutoMusicLaneAction::KeyDown,
+            AutoMusicLaneAction::None,
+            AutoMusicLaneAction::KeyUp,
+        ]
+    );
+    assert!(decisions[1].key_down_after);
+    assert!(decisions[3].key_down_after);
+    assert!(!decisions[4].key_down_after);
+    assert_eq!(decisions[1].key, "A");
+    assert_eq!(decisions[4].blue, 220);
+}
+
+#[test]
+fn auto_music_game_lane_states_are_independent_per_key() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let lane_a = &plan.key_lanes[0];
+    let lane_s = &plan.key_lanes[1];
+    let mut state_a = AutoMusicLaneState::default();
+    let mut state_s = AutoMusicLaneState::default();
+
+    let a_down = update_auto_music_lane_state(&mut state_a, lane_a, 10, &plan.performance_rule);
+    let s_bright = update_auto_music_lane_state(&mut state_s, lane_s, 255, &plan.performance_rule);
+    let a_hold = update_auto_music_lane_state(&mut state_a, lane_a, 30, &plan.performance_rule);
+    let s_down = update_auto_music_lane_state(&mut state_s, lane_s, 0, &plan.performance_rule);
+    let a_up = update_auto_music_lane_state(&mut state_a, lane_a, 220, &plan.performance_rule);
+
+    assert_eq!(a_down.action, AutoMusicLaneAction::KeyDown);
+    assert_eq!(s_bright.action, AutoMusicLaneAction::None);
+    assert_eq!(a_hold.action, AutoMusicLaneAction::None);
+    assert_eq!(s_down.action, AutoMusicLaneAction::KeyDown);
+    assert_eq!(a_up.action, AutoMusicLaneAction::KeyUp);
+    assert!(!state_a.key_down);
+    assert!(state_s.key_down);
+    assert_eq!(a_down.key, "A");
+    assert_eq!(s_down.key, "S");
+}
+
+fn auto_music_performance_frame<const N: usize>(
+    samples: [(&str, u8); N],
+) -> AutoMusicPerformanceFrame {
+    AutoMusicPerformanceFrame {
+        lane_blues: samples
+            .into_iter()
+            .map(|(key, blue)| AutoMusicLaneBlueSample {
+                key: key.to_string(),
+                blue,
+            })
+            .collect(),
+    }
+}
+
+#[derive(Default)]
+struct FakeAutoMusicPerformanceRuntime {
+    frames: VecDeque<AutoMusicPerformanceFrame>,
+    cancel_before_frame: Option<usize>,
+    frame_error_after_requests: Option<usize>,
+    frames_requested: usize,
+    key_downs: Vec<String>,
+    key_ups: Vec<String>,
+    poll_delays: Vec<u64>,
+    release_calls: Vec<Vec<String>>,
+}
+
+impl FakeAutoMusicPerformanceRuntime {
+    fn new(frames: impl IntoIterator<Item = AutoMusicPerformanceFrame>) -> Self {
+        Self {
+            frames: frames.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    fn with_cancel_before_frame(mut self, frame_index: usize) -> Self {
+        self.cancel_before_frame = Some(frame_index);
+        self
+    }
+
+    fn with_frame_error_after_requests(mut self, frame_count: usize) -> Self {
+        self.frame_error_after_requests = Some(frame_count);
+        self
+    }
+}
+
+impl AutoMusicPerformanceRuntime for FakeAutoMusicPerformanceRuntime {
+    fn is_auto_music_performance_cancelled(&mut self) -> Result<bool> {
+        Ok(self.cancel_before_frame == Some(self.frames_requested))
+    }
+
+    fn next_auto_music_performance_frame(&mut self) -> Result<Option<AutoMusicPerformanceFrame>> {
+        if self.frame_error_after_requests == Some(self.frames_requested) {
+            return Err(TaskError::CommonJobExecution(
+                "test auto music frame failure".to_string(),
+            ));
+        }
+        let frame = self.frames.pop_front();
+        if frame.is_some() {
+            self.frames_requested += 1;
+        }
+        Ok(frame)
+    }
+
+    fn auto_music_key_down(&mut self, key: &str) -> Result<()> {
+        self.key_downs.push(key.to_string());
+        Ok(())
+    }
+
+    fn auto_music_key_up(&mut self, key: &str) -> Result<()> {
+        self.key_ups.push(key.to_string());
+        Ok(())
+    }
+
+    fn delay_auto_music_poll(&mut self, duration_ms: u64) -> Result<()> {
+        self.poll_delays.push(duration_ms);
+        Ok(())
+    }
+
+    fn release_all_auto_music_keys(&mut self, held_keys_before_release: &[String]) -> Result<()> {
+        self.release_calls.push(held_keys_before_release.to_vec());
+        Ok(())
+    }
+}
+
+#[test]
+fn auto_music_game_performance_samples_emit_input_events_and_cleanup() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let frames = [
+        auto_music_performance_frame([("A", 0), ("S", 255)]),
+        auto_music_performance_frame([("A", 0), ("S", 10)]),
+        auto_music_performance_frame([("A", 220), ("S", 10)]),
+        auto_music_performance_frame([("A", 255), ("S", 220)]),
+    ];
+
+    let report = execute_auto_music_performance_samples(&plan, &frames, None);
+
+    assert_eq!(
+        report.stop_reason,
+        AutoMusicPerformanceStopReason::SamplesExhausted
+    );
+    assert_eq!(report.frames_processed, 4);
+    assert!(report.held_keys_before_release.is_empty());
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::LaneKeyDown {
+            frame_index: 0,
+            key: "A".to_string(),
+            blue: 0,
+        }));
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::LaneKeyDown {
+            frame_index: 1,
+            key: "S".to_string(),
+            blue: 10,
+        }));
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::LaneKeyUp {
+            frame_index: 2,
+            key: "A".to_string(),
+            blue: 220,
+        }));
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::LaneKeyUp {
+            frame_index: 3,
+            key: "S".to_string(),
+            blue: 220,
+        }));
+    assert_eq!(
+        report
+            .events
+            .iter()
+            .filter(|event| matches!(event, AutoMusicPerformanceEvent::PollDelay { .. }))
+            .count(),
+        4
+    );
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::ReleaseAllKeys {
+            held_keys_before_release: Vec::new(),
+            reason: AutoMusicPerformanceStopReason::SamplesExhausted,
+        }));
+}
+
+#[test]
+fn auto_music_game_performance_runtime_dispatches_input_delay_and_cleanup() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let mut runtime = FakeAutoMusicPerformanceRuntime::new([
+        auto_music_performance_frame([("A", 0), ("S", 255)]),
+        auto_music_performance_frame([("A", 0), ("S", 10)]),
+        auto_music_performance_frame([("A", 220), ("S", 10)]),
+        auto_music_performance_frame([("A", 255), ("S", 220)]),
+    ]);
+
+    let report = execute_auto_music_performance_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.stop_reason,
+        AutoMusicPerformanceStopReason::SamplesExhausted
+    );
+    assert_eq!(report.frames_processed, 4);
+    assert_eq!(runtime.key_downs, vec!["A".to_string(), "S".to_string()]);
+    assert_eq!(runtime.key_ups, vec!["A".to_string(), "S".to_string()]);
+    assert_eq!(runtime.poll_delays, vec![5, 5, 5, 5]);
+    assert_eq!(runtime.release_calls, vec![Vec::<String>::new()]);
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::ReleaseAllKeys {
+            held_keys_before_release: Vec::new(),
+            reason: AutoMusicPerformanceStopReason::SamplesExhausted,
+        }));
+}
+
+#[test]
+fn auto_music_game_performance_samples_release_held_keys_on_cancel() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let frames = [
+        auto_music_performance_frame([("A", 0), ("S", 255)]),
+        auto_music_performance_frame([("A", 220), ("S", 255)]),
+    ];
+
+    let report = execute_auto_music_performance_samples(&plan, &frames, Some(1));
+
+    assert_eq!(
+        report.stop_reason,
+        AutoMusicPerformanceStopReason::CancelledBeforeFrame
+    );
+    assert_eq!(report.frames_processed, 1);
+    assert_eq!(report.held_keys_before_release, vec!["A".to_string()]);
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::LaneKeyDown {
+            frame_index: 0,
+            key: "A".to_string(),
+            blue: 0,
+        }));
+    assert!(!report.events.iter().any(|event| matches!(
+        event,
+        AutoMusicPerformanceEvent::LaneKeyUp { key, .. } if key == "A"
+    )));
+    assert!(report
+        .events
+        .contains(&AutoMusicPerformanceEvent::ReleaseAllKeys {
+            held_keys_before_release: vec!["A".to_string()],
+            reason: AutoMusicPerformanceStopReason::CancelledBeforeFrame,
+        }));
+}
+
+#[test]
+fn auto_music_game_performance_runtime_releases_held_keys_on_cancel() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let mut runtime = FakeAutoMusicPerformanceRuntime::new([
+        auto_music_performance_frame([("A", 0), ("S", 255)]),
+        auto_music_performance_frame([("A", 220), ("S", 255)]),
+    ])
+    .with_cancel_before_frame(1);
+
+    let report = execute_auto_music_performance_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.stop_reason,
+        AutoMusicPerformanceStopReason::CancelledBeforeFrame
+    );
+    assert_eq!(report.frames_processed, 1);
+    assert_eq!(runtime.key_downs, vec!["A".to_string()]);
+    assert!(runtime.key_ups.is_empty());
+    assert_eq!(runtime.poll_delays, vec![5]);
+    assert_eq!(runtime.release_calls, vec![vec!["A".to_string()]]);
+    assert_eq!(report.held_keys_before_release, vec!["A".to_string()]);
+}
+
+#[test]
+fn auto_music_game_performance_runtime_releases_held_keys_after_frame_error() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let mut runtime = FakeAutoMusicPerformanceRuntime::new([
+        auto_music_performance_frame([("A", 0), ("S", 255)]),
+        auto_music_performance_frame([("A", 220), ("S", 255)]),
+    ])
+    .with_frame_error_after_requests(1);
+
+    let error = execute_auto_music_performance_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message)
+            if message.contains("test auto music frame failure")
+    ));
+    assert_eq!(runtime.key_downs, vec!["A".to_string()]);
+    assert!(runtime.key_ups.is_empty());
+    assert_eq!(runtime.poll_delays, vec![5]);
+    assert_eq!(runtime.release_calls, vec![vec!["A".to_string()]]);
+}
+
+#[test]
+fn auto_music_game_performance_runtime_releases_all_keys_when_frames_end_immediately() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let mut runtime = FakeAutoMusicPerformanceRuntime::new([]);
+
+    let report = execute_auto_music_performance_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.stop_reason,
+        AutoMusicPerformanceStopReason::SamplesExhausted
+    );
+    assert_eq!(report.frames_processed, 0);
+    assert!(runtime.key_downs.is_empty());
+    assert!(runtime.key_ups.is_empty());
+    assert!(runtime.poll_delays.is_empty());
+    assert_eq!(runtime.release_calls, vec![Vec::<String>::new()]);
+}
+
+struct FakeAutoMusicAlbumRuntime {
+    page_status: AutoMusicAlbumPageStatus,
+    completion_results: VecDeque<bool>,
+    cancel_after_checks: Option<usize>,
+    cancel_checks: usize,
+    completion_locator_names: Vec<String>,
+    next_clicks: Vec<(i32, i32)>,
+    white_confirms: usize,
+    difficulty_clicks: Vec<String>,
+    delays: Vec<u64>,
+    performance_calls: Vec<(String, u64)>,
+    wait_album_page_calls: usize,
+}
+
+impl Default for FakeAutoMusicAlbumRuntime {
+    fn default() -> Self {
+        Self {
+            page_status: AutoMusicAlbumPageStatus::ThemeAlbum,
+            completion_results: VecDeque::new(),
+            cancel_after_checks: None,
+            cancel_checks: 0,
+            completion_locator_names: Vec::new(),
+            next_clicks: Vec::new(),
+            white_confirms: 0,
+            difficulty_clicks: Vec::new(),
+            delays: Vec::new(),
+            performance_calls: Vec::new(),
+            wait_album_page_calls: 0,
+        }
+    }
+}
+
+impl FakeAutoMusicAlbumRuntime {
+    fn with_page_status(mut self, page_status: AutoMusicAlbumPageStatus) -> Self {
+        self.page_status = page_status;
+        self
+    }
+
+    fn with_completion_results(mut self, results: impl IntoIterator<Item = bool>) -> Self {
+        self.completion_results = results.into_iter().collect();
+        self
+    }
+
+    fn with_cancel_after_checks(mut self, cancel_after_checks: usize) -> Self {
+        self.cancel_after_checks = Some(cancel_after_checks);
+        self
+    }
+}
+
+impl AutoMusicAlbumRuntime for FakeAutoMusicAlbumRuntime {
+    fn is_auto_music_album_cancelled(&mut self) -> Result<bool> {
+        let cancelled = self.cancel_after_checks == Some(self.cancel_checks);
+        self.cancel_checks += 1;
+        Ok(cancelled)
+    }
+
+    fn check_auto_music_album_page(
+        &mut self,
+        _icon_locator: &AutoMusicTemplateLocator,
+    ) -> Result<AutoMusicAlbumPageStatus> {
+        Ok(self.page_status)
+    }
+
+    fn is_auto_music_song_completed(&mut self, locator: &AutoMusicTemplateLocator) -> Result<bool> {
+        self.completion_locator_names.push(locator.name.clone());
+        Ok(self.completion_results.pop_front().unwrap_or(false))
+    }
+
+    fn click_auto_music_next_song(&mut self, x_1080p: i32, y_1080p: i32) -> Result<()> {
+        self.next_clicks.push((x_1080p, y_1080p));
+        Ok(())
+    }
+
+    fn click_auto_music_white_confirm(&mut self) -> Result<()> {
+        self.white_confirms += 1;
+        Ok(())
+    }
+
+    fn click_auto_music_difficulty(&mut self, difficulty: &AutoMusicDifficultyRule) -> Result<()> {
+        self.difficulty_clicks.push(difficulty.name.clone());
+        Ok(())
+    }
+
+    fn delay_auto_music_album(&mut self, duration_ms: u64) -> Result<()> {
+        self.delays.push(duration_ms);
+        Ok(())
+    }
+
+    fn execute_auto_music_song(
+        &mut self,
+        difficulty: &AutoMusicDifficultyRule,
+        song_index: u64,
+    ) -> Result<AutoMusicPerformanceReport> {
+        self.performance_calls
+            .push((difficulty.name.clone(), song_index));
+        Ok(AutoMusicPerformanceReport {
+            task_key: AUTO_MUSIC_GAME_TASK_KEY.to_string(),
+            stop_reason: AutoMusicPerformanceStopReason::SamplesExhausted,
+            frames_processed: 4,
+            held_keys_before_release: Vec::new(),
+            events: Vec::new(),
+        })
+    }
+
+    fn wait_auto_music_album_page(
+        &mut self,
+        _icon_locator: &AutoMusicTemplateLocator,
+    ) -> Result<()> {
+        self.wait_album_page_calls += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn auto_music_game_album_executor_skips_completed_songs_and_performs_unfinished_song() {
+    let mut plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    plan.album_rule.selected_difficulties = vec![plan.album_rule.default_difficulties[0].clone()];
+    plan.album_rule.songs_per_difficulty_loop_count = 2;
+    let mut runtime = FakeAutoMusicAlbumRuntime::default().with_completion_results([true, false]);
+
+    let report = execute_auto_music_album_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(report.task_key, AUTO_MUSIC_GAME_TASK_KEY);
+    assert_eq!(report.status, AutoMusicAlbumExecutionStatus::Completed);
+    assert_eq!(report.difficulty_count, 1);
+    assert_eq!(report.songs_checked, 2);
+    assert_eq!(report.skipped_songs, 1);
+    assert_eq!(report.performed_songs, 1);
+    assert_eq!(
+        runtime.completion_locator_names,
+        vec![
+            "AlbumMusicComplate".to_string(),
+            "AlbumMusicComplate".to_string()
+        ]
+    );
+    assert_eq!(runtime.next_clicks, vec![(310, 220), (310, 220)]);
+    assert_eq!(runtime.white_confirms, 2);
+    assert_eq!(runtime.difficulty_clicks, vec!["普通".to_string()]);
+    assert_eq!(runtime.performance_calls, vec![("普通".to_string(), 2)]);
+    assert_eq!(runtime.wait_album_page_calls, 1);
+    assert_eq!(runtime.delays, vec![800, 800, 200, 500, 2_000, 800]);
+    assert!(report.events.contains(&AutoMusicAlbumEvent::SongSkipped {
+        difficulty: "普通".to_string(),
+        song_index: 1,
+        reason: AutoMusicAlbumSkipReason::AllRewardsComplete,
+    }));
+    assert!(report
+        .events
+        .contains(&AutoMusicAlbumEvent::PerformanceCompleted {
+            difficulty: "普通".to_string(),
+            song_index: 2,
+            stop_reason: AutoMusicPerformanceStopReason::SamplesExhausted,
+            frames_processed: 4,
+        }));
+}
+
+#[test]
+fn auto_music_game_album_executor_uses_canorus_locator_when_required() {
+    let mut plan = plan_auto_music_game(AutoMusicGameExecutionConfig {
+        auto_music_game_config: AutoMusicGameConfig {
+            must_canorus_level: true,
+            music_level: "大师".to_string(),
+            ..AutoMusicGameConfig::default()
+        },
+        ..AutoMusicGameExecutionConfig::default()
+    });
+    plan.album_rule.songs_per_difficulty_loop_count = 1;
+    let mut runtime = FakeAutoMusicAlbumRuntime::default().with_completion_results([true]);
+
+    let report = execute_auto_music_album_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(report.status, AutoMusicAlbumExecutionStatus::Completed);
+    assert_eq!(report.songs_checked, 1);
+    assert_eq!(report.skipped_songs, 1);
+    assert_eq!(report.performed_songs, 0);
+    assert_eq!(
+        runtime.completion_locator_names,
+        vec!["MusicCanorusLevel3".to_string()]
+    );
+    assert_eq!(runtime.next_clicks, vec![(310, 220)]);
+    assert_eq!(runtime.white_confirms, 0);
+    assert!(runtime.performance_calls.is_empty());
+    assert!(report.events.contains(&AutoMusicAlbumEvent::SongSkipped {
+        difficulty: "大师".to_string(),
+        song_index: 1,
+        reason: AutoMusicAlbumSkipReason::CanorusLevelComplete,
+    }));
+}
+
+#[test]
+fn auto_music_game_album_executor_rejects_all_songs_page() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    let mut runtime = FakeAutoMusicAlbumRuntime::default()
+        .with_page_status(AutoMusicAlbumPageStatus::AllSongsPage);
+
+    let error = execute_auto_music_album_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message) if message.contains("全部歌曲页面")
+    ));
+}
+
+#[test]
+fn auto_music_game_album_executor_rejects_unknown_music_level() {
+    let plan = plan_auto_music_game(AutoMusicGameExecutionConfig {
+        auto_music_game_config: AutoMusicGameConfig {
+            music_level: "不存在".to_string(),
+            ..AutoMusicGameConfig::default()
+        },
+        ..AutoMusicGameExecutionConfig::default()
+    });
+    let mut runtime = FakeAutoMusicAlbumRuntime::default();
+
+    let error = execute_auto_music_album_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(plan.album_rule.selected_difficulties.is_empty());
+    assert!(matches!(
+        error,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == AUTO_MUSIC_GAME_TASK_KEY && message.contains("不存在")
+    ));
+    assert_eq!(runtime.cancel_checks, 0);
+}
+
+#[test]
+fn auto_music_game_album_executor_returns_cancelled_report_before_song_work() {
+    let mut plan = plan_auto_music_game(AutoMusicGameExecutionConfig::default());
+    plan.album_rule.selected_difficulties = vec![plan.album_rule.default_difficulties[0].clone()];
+    plan.album_rule.songs_per_difficulty_loop_count = 1;
+    let mut runtime = FakeAutoMusicAlbumRuntime::default().with_cancel_after_checks(1);
+
+    let report = execute_auto_music_album_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(report.status, AutoMusicAlbumExecutionStatus::Cancelled);
+    assert_eq!(report.songs_checked, 0);
+    assert_eq!(report.skipped_songs, 0);
+    assert_eq!(report.performed_songs, 0);
+    assert!(runtime.completion_locator_names.is_empty());
+    assert!(runtime.next_clicks.is_empty());
+    assert!(report.events.contains(&AutoMusicAlbumEvent::Cancelled {
+        difficulty: Some("普通".to_string()),
+        song_index: Some(1),
+    }));
+}
+
+#[test]
+fn auto_track_plan_preserves_legacy_mission_distance_teleport_and_blue_point_rules() {
+    let config = AutoTrackExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 1.25,
+        "autoSkipConfig": {
+            "enabled": false,
+            "runBackgroundEnabled": true
+        }
+    })));
+    let plan = plan_auto_track(config);
+
+    assert_eq!(plan.task_key, AUTO_TRACK_TASK_KEY);
+    assert_eq!(plan.display_name, "自动追踪");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 1.25);
+    assert!(!plan.executor_ready);
+
+    assert!(plan.config_rule.coupled_to_auto_skip_config_section);
+    assert!(
+        plan.config_rule
+            .auto_skip_enabled_value_is_not_checked_by_legacy_task
+    );
+    assert!(plan.startup_rule.uses_task_semaphore_non_blocking);
+    assert!(plan.startup_rule.activates_game_window);
+    assert!(plan.startup_rule.uses_global_cancellation_context);
+    assert!(plan.startup_rule.clears_draw_content_on_finish);
+    assert!(plan.startup_rule.releases_task_semaphore_on_finish);
+
+    assert!(plan.main_ui_rule.requires_paimon_menu_template);
+    assert_eq!(plan.main_ui_rule.not_in_main_ui_sleep_ms, 5_000);
+    assert_eq!(plan.main_ui_rule.mouse_move_y_before_ocr, 7_000);
+    assert_eq!(plan.main_ui_rule.waits_for_mission_text_animation_ms, 2_000);
+
+    assert_eq!(
+        plan.mission_text_rule.ocr_roi_from_paimon_menu,
+        AutoTrackRelativeRectRule {
+            x_from_source_left: 0,
+            y_from_source_top: 195,
+            width_1080p: 300,
+            height_1080p: 100
+        }
+    );
+    assert_eq!(plan.mission_text_rule.distance_text_max_len, 7);
+    assert_eq!(plan.mission_text_rule.distance_text_contains, "m");
+    assert_eq!(plan.mission_text_rule.missing_text_sleep_ms, 5_000);
+    assert_eq!(plan.mission_text_rule.distance_not_found_sentinel, -1);
+    assert_eq!(plan.mission_text_rule.long_distance_threshold_meters, 150);
+    assert!(
+        plan.mission_text_rule
+            .mission_distance_rect_saved_for_arrival_ocr
+    );
+
+    assert_eq!(
+        plan.teleport_rule.opens_quest_menu_action,
+        "GIActions.OpenQuestMenu"
+    );
+    assert_eq!(plan.teleport_rule.open_quest_menu_sleep_ms, 800);
+    assert!(plan
+        .teleport_rule
+        .track_toggle_button_rule
+        .contains("capture_width - 250"));
+    assert_eq!(plan.teleport_rule.track_toggle_first_second_sleep_ms, 200);
+    assert_eq!(plan.teleport_rule.track_toggle_after_second_sleep_ms, 1_500);
+    assert_eq!(plan.teleport_rule.map_choose_icon_assets.len(), 10);
+    assert_eq!(
+        plan.teleport_rule.map_choose_icon_assets[0].asset,
+        "QuickTeleport:TeleportWaypoint.png"
+    );
+    assert_eq!(plan.teleport_rule.map_choose_icon_assets[0].threshold, 0.8);
+    assert_eq!(
+        plan.teleport_rule.map_choose_icon_assets[1].asset,
+        "QuickTeleport:StatueOfTheSeven.png"
+    );
+    assert_eq!(plan.teleport_rule.map_choose_icon_assets[1].threshold, 0.8);
+    assert!(
+        plan.teleport_rule
+            .matches_map_choose_icons_on_full_grayscale_capture
+    );
+    assert!(
+        plan.teleport_rule
+            .deduplicates_matches_by_painting_matched_area
+    );
+    assert!(plan.teleport_rule.chooses_nearest_teleport_to_screen_center);
+    assert!(
+        plan.teleport_rule
+            .nearest_teleport_distance_uses_match_top_left
+    );
+    assert_eq!(plan.teleport_rule.post_teleport_click_sleep_ms, 2_000);
+    assert!(plan.teleport_rule.big_map_still_open_is_warning);
+    assert_eq!(plan.teleport_rule.wait_main_ui_retry_attempts, 100);
+    assert_eq!(plan.teleport_rule.wait_main_ui_retry_interval_ms, 1_000);
+
+    assert_eq!(
+        plan.tracking_rule.quest_navigation_action,
+        "GIActions.QuestNavigation"
+    );
+    assert_eq!(plan.tracking_rule.post_quest_navigation_sleep_ms, 3_000);
+    assert_eq!(plan.tracking_rule.keep_top_down_mouse_move_y, 500);
+    assert_eq!(plan.tracking_rule.loop_sleep_ms, 100);
+    assert_eq!(plan.tracking_rule.force_above_center_move_x, -50);
+    assert_eq!(plan.tracking_rule.rotation_divisor, 8);
+    assert_eq!(plan.tracking_rule.minimum_abs_rotation, 10);
+    assert!(
+        plan.tracking_rule
+            .start_forward_when_rotation_zero_or_direction_crosses
+    );
+    assert_eq!(plan.tracking_rule.arrival_abs_rotation_less_than, 50);
+    assert_eq!(plan.tracking_rule.arrival_abs_y_from_center_less_than, 200);
+    assert_eq!(plan.tracking_rule.arrival_distance_meters, 3);
+    assert!(
+        plan.tracking_rule
+            .arrival_ocr_uses_saved_mission_distance_rect
+    );
+    assert!(plan.tracking_rule.arrival_distance_ocr_only_affects_log);
+    assert!(plan.tracking_rule.releases_forward_on_arrival);
+
+    assert_eq!(
+        plan.locators.paimon_menu.asset,
+        AUTO_TRACK_PAIMON_MENU_ASSET
+    );
+    assert_eq!(
+        plan.locators.paimon_menu.roi,
+        Some(Rect {
+            x: 0,
+            y: 0,
+            width: 480,
+            height: 270
+        })
+    );
+    assert_eq!(
+        plan.locators.blue_track_point.asset,
+        AUTO_TRACK_BLUE_TRACK_POINT_ASSET
+    );
+    assert_eq!(
+        plan.locators.blue_track_point.roi,
+        Some(Rect {
+            x: 375,
+            y: 0,
+            width: 1170,
+            height: 1080
+        })
+    );
+    assert_eq!(plan.locators.blue_track_point.threshold, 0.6);
+    assert!(plan.locators.blue_track_point.draw_on_window);
+    assert_eq!(plan.steps.len(), 13);
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("QuickTeleport")));
+
+    let common_asset_root = task_asset_root()
+        .join("GameTask")
+        .join("Common")
+        .join("Element")
+        .join("Assets")
+        .join("1920x1080");
+    assert!(common_asset_root.join("paimon_menu.png").exists());
+    assert!(common_asset_root.join("blue_track_point_28x.png").exists());
+    assert!(task_asset_root()
+        .join("GameTask")
+        .join("QuickTeleport")
+        .join("Assets")
+        .join("1920x1080")
+        .join("TeleportWaypoint.png")
+        .exists());
+}
+
+fn write_test_ley_line_static_data(root: &Path) {
+    write_test_file(
+        &root
+            .join("GameTask")
+            .join("AutoLeyLineOutcrop")
+            .join("Assets")
+            .join("config.json"),
+        r#"{
+  "errorThreshold": 40,
+  "mapPositions": {
+    "蒙德": [
+      { "x": 0.0, "y": 0.0, "name": "蒙德测试点" }
+    ]
+  },
+  "leyLinePositions": {
+    "蒙德": [
+      { "x": 10.0, "y": 20.0, "strategy": "测试策略", "steps": 1, "order": 1 }
+    ]
+  }
+}"#,
+    );
+    write_test_file(
+        &root
+            .join("GameTask")
+            .join("AutoLeyLineOutcrop")
+            .join("Assets")
+            .join("LeyLineOutcropData.json"),
+        r#"{
+  "teleports": [
+    { "id": 1, "region": "蒙德", "position": { "x": 0.0, "y": 0.0 } }
+  ],
+  "blossoms": [
+    { "id": 1000, "region": "蒙德", "position": { "x": 10.0, "y": 20.0 } }
+  ],
+  "edges": [
+    { "source": 1, "target": 1000, "route": "assets/pathing/蒙德-test-1.json" }
+  ],
+  "indexes": {
+    "edgesBySource": { "1": [0] },
+    "edgesByTarget": { "1000": [0] }
+  }
+}"#,
+    );
+    for route in [
+        "Assets/pathing/蒙德-test-1.json",
+        "Assets/pathing/target/蒙德-test-1.json",
+        "Assets/pathing/rerun/蒙德-test-1-rerun.json",
+    ] {
+        write_test_file(
+            &root.join("GameTask").join("AutoLeyLineOutcrop").join(route),
+            r#"{"positions":[]}"#,
+        );
+    }
+}
+
+#[test]
+fn auto_ley_line_outcrop_plan_preserves_legacy_route_resin_reward_and_handbook_rules() {
+    let root = unique_test_root("auto-ley-line-plan");
+    write_test_ley_line_static_data(&root);
+    write_test_file(
+        &root.join("User").join("AutoFight").join("ley.txt"),
+        "香菱 q, wait(0.2)",
+    );
+    let config = AutoLeyLineOutcropExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "assetScale": 1.25,
+        "autoLeyLineOutcropConfig": {
+            "country": "蒙德",
+            "leyLineOutcropType": "启示之花",
+            "count": 0,
+            "useAdventurerHandbook": true,
+            "team": "战斗队",
+            "friendshipTeam": "好感队",
+            "useTransientResin": true,
+            "useFragileResin": true,
+            "isResinExhaustionMode": true,
+            "isGoToSynthesizer": true,
+            "scanDropsAfterRewardEnabled": true,
+            "scanDropsAfterRewardSeconds": 99,
+            "fightConfig": {
+                "strategyName": "ley",
+                "timeout": 45,
+                "seekEnemyEnabled": true,
+                "seekEnemyIntervalSeconds": 2,
+                "seekEnemyRotaryFactor": 99
+            }
+        }
+    })));
+
+    let plan = plan_auto_ley_line_outcrop(&root, config).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_LEY_LINE_OUTCROP_TASK_KEY);
+    assert_eq!(plan.display_name, "自动地脉花");
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.asset_scale, 1.25);
+    assert!(!plan.executor_ready);
+    assert_eq!(plan.validation_rule.normalized_count, 1);
+    assert_eq!(plan.validation_rule.normalized_timeout_seconds, 45);
+    assert_eq!(
+        plan.validation_rule.combat_strategy_path.as_deref(),
+        Some("User/AutoFight/ley.txt")
+    );
+    assert!(
+        plan.startup_rule
+            .use_adventurer_handbook_flag_means_manual_big_map_search
+    );
+    assert!(
+        plan.startup_rule
+            .closes_custom_marks_when_manual_big_map_search
+    );
+    assert!(plan.discovery_rule.selected_manual_flow);
+    assert_eq!(
+        plan.discovery_rule.selected_blossom_asset,
+        AUTO_LEY_LINE_REVELATION_ASSET
+    );
+    assert_eq!(plan.data_rule.error_threshold, 40.0);
+    assert_eq!(plan.data_rule.map_position_count, 1);
+    assert_eq!(plan.data_rule.ley_line_position_count, 1);
+    assert_eq!(plan.data_rule.teleport_count, 1);
+    assert_eq!(plan.data_rule.blossom_count, 1);
+    assert_eq!(plan.data_rule.edge_count, 1);
+    assert!(plan
+        .data_rule
+        .node_index_groups
+        .contains(&"edgesBySource".to_string()));
+
+    let selected = plan.pathing_rule.selected_position_plan.as_ref().unwrap();
+    assert_eq!(selected.strategy, "测试策略");
+    assert_eq!(selected.start_node_id, 1);
+    assert_eq!(selected.start_region, "蒙德");
+    assert_eq!(selected.target_node_id, 1000);
+    assert_eq!(selected.target_region, "蒙德");
+    assert_eq!(selected.route_count, 1);
+    assert_eq!(selected.routes, vec!["assets/pathing/蒙德-test-1.json"]);
+    assert_eq!(
+        selected.target_route,
+        "assets/pathing/target/蒙德-test-1.json"
+    );
+    assert_eq!(
+        selected.rerun_route,
+        "assets/pathing/rerun/蒙德-test-1-rerun.json"
+    );
+    assert!(plan.pathing_rule.missing_route_files.is_empty());
+    assert!(plan.pathing_rule.uses_bfs_from_teleport_nodes);
+    assert!(
+        plan.pathing_rule
+            .uses_reverse_two_hop_fallback_when_no_forward_path
+    );
+
+    assert!(plan.combat_rule.auto_fight_runs_without_finish_detect);
+    assert!(plan.combat_rule.seek_enemy_enabled);
+    assert_eq!(plan.combat_rule.seek_enemy_rotary_factor, 13);
+    assert!(plan
+        .combat_rule
+        .ocr_finish_success_keywords
+        .contains(&"挑战成功".to_string()));
+    assert!(plan.reward_rule.switch_double_reward_20_to_40);
+    assert_eq!(plan.reward_rule.scan_drops_after_reward_seconds, 60);
+    assert!(plan.resin_rule.resin_exhaustion_mode);
+    assert!(plan.resin_rule.transient_resin_enabled);
+    assert!(plan.resin_rule.fragile_resin_enabled);
+    assert!(plan.resin_rule.synthesizer_flag_configured);
+    assert!(!plan.resin_rule.synthesizer_flow_invoked_by_legacy_task);
+    assert_eq!(plan.locators.handbook_track_action.threshold, 0.72);
+    assert_eq!(
+        plan.locators.handbook_track_action.roi,
+        Some(Rect {
+            x: 1120,
+            y: 680,
+            width: 700,
+            height: 320
+        })
+    );
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("PathExecutor")));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_ley_line_outcrop_plan_rejects_invalid_legacy_settings() {
+    let invalid_type = AutoLeyLineOutcropExecutionConfig::from_value(Some(&serde_json::json!({
+        "country": "蒙德",
+        "leyLineOutcropType": "地脉花"
+    })));
+    let error = plan_auto_ley_line_outcrop(".", invalid_type).unwrap_err();
+    assert!(
+        matches!(error, TaskError::InvalidTaskConfig { key, .. } if key == AUTO_LEY_LINE_OUTCROP_TASK_KEY)
+    );
+
+    let missing_team = AutoLeyLineOutcropExecutionConfig::from_value(Some(&serde_json::json!({
+        "country": "蒙德",
+        "leyLineOutcropType": "启示之花",
+        "friendshipTeam": "好感队",
+        "team": ""
+    })));
+    let error = plan_auto_ley_line_outcrop(".", missing_team).unwrap_err();
+    assert!(
+        matches!(error, TaskError::InvalidTaskConfig { key, .. } if key == AUTO_LEY_LINE_OUTCROP_TASK_KEY)
+    );
+}
+
+#[test]
+fn auto_fish_plan_preserves_legacy_trigger_templates_bite_and_bar_rules() {
+    let defaults = AutoFishingConfig::default();
+    assert!(!defaults.enabled);
+    assert!(!defaults.auto_throw_rod_enabled);
+    assert_eq!(defaults.auto_throw_rod_time_out, 15);
+    assert_eq!(defaults.whole_process_timeout_seconds, 300);
+    assert_eq!(defaults.fishing_time_policy, serde_json::json!("All"));
+    assert_eq!(defaults.torch_dll_full_path, r"C:\torch\lib\torch_cpu.dll");
+
+    let config = AutoFishExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "autoFishingConfig": {
+            "enabled": true,
+            "autoThrowRodEnabled": true,
+            "autoThrowRodTimeOut": 22,
+            "wholeProcessTimeoutSeconds": 444,
+            "fishingTimePolicy": 2,
+            "torchDllFullPath": "D:\\torch\\torch_cpu.dll"
+        }
+    })));
+    let plan = plan_auto_fish(config);
+
+    assert_eq!(plan.task_key, AUTO_FISH_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(!plan.executor_ready);
+    assert!(plan.config_rule.enabled);
+    assert!(plan.config_rule.auto_throw_rod_enabled);
+    assert_eq!(plan.config_rule.auto_throw_rod_timeout_seconds, 22);
+    assert_eq!(plan.config_rule.whole_process_timeout_seconds, 444);
+    assert_eq!(
+        plan.config_rule.fishing_time_policy,
+        AutoFishTimePolicy::Nighttime
+    );
+    assert_eq!(
+        plan.config_rule.torch_dll_full_path,
+        "D:\\torch\\torch_cpu.dll"
+    );
+
+    assert_eq!(plan.trigger_rule.priority, 15);
+    assert!(!plan.trigger_rule.initial_exclusive);
+    assert!(plan.trigger_rule.exclusive_when_exit_button_detected);
+    assert!(!plan.trigger_rule.dynamic_add_trigger_supported_by_csharp);
+    assert_eq!(plan.trigger_rule.tick_throttle_ms, 67);
+    assert!(plan.trigger_rule.creates_bgi_fish_yolo_predictor);
+    assert_eq!(
+        plan.behavior_tree_rule.parallel_policy,
+        "OnlyOneMustSucceed"
+    );
+    assert_eq!(
+        plan.behavior_tree_rule.semi_auto_sequence,
+        vec!["FishBite", "GetFishBoxArea", "Fishing"]
+    );
+    assert!(
+        plan.behavior_tree_rule
+            .auto_throw_rod_branch_present_but_disabled_in_trigger
+    );
+    assert!(plan.blackboard_rule.tracks_selected_bait);
+    assert!(plan.blackboard_rule.tracks_fishpond);
+    assert!(plan.blackboard_rule.tracks_fish_box_rect);
+    assert!(
+        plan.blackboard_rule
+            .choose_bait_ui_blocks_fishing_ui_detection
+    );
+    assert!(plan.blackboard_rule.pitch_reset_initial_value);
+
+    assert_eq!(plan.locators.space_button.asset, AUTO_FISH_SPACE_BUTTON);
+    assert_eq!(
+        plan.locators.space_button.roi,
+        Rect {
+            x: 1280,
+            y: 864,
+            width: 640,
+            height: 216
+        }
+    );
+    assert_eq!(plan.locators.space_button.threshold, 0.8);
+    assert_eq!(plan.locators.bait_button.asset, AUTO_FISH_BAIT_BUTTON);
+    assert_eq!(
+        plan.locators.bait_button.roi,
+        Rect {
+            x: 960,
+            y: 810,
+            width: 960,
+            height: 270
+        }
+    );
+    assert_eq!(plan.locators.bait_button.threshold, 0.7);
+    assert_eq!(
+        plan.locators.wait_bite_button.asset,
+        AUTO_FISH_WAIT_BITE_BUTTON
+    );
+    assert_eq!(
+        plan.locators.lift_rod_button.asset,
+        AUTO_FISH_LIFT_ROD_BUTTON
+    );
+    assert_eq!(
+        plan.locators.exit_fishing_button.asset,
+        AUTO_FISH_EXIT_FISHING_BUTTON
+    );
+    assert_eq!(
+        plan.locators.exit_fishing_button.roi,
+        Rect {
+            x: 1780,
+            y: 930,
+            width: 140,
+            height: 150
+        }
+    );
+    assert_eq!(plan.locators.exit_fishing_button.threshold, 0.8);
+    assert_eq!(
+        plan.locators.exit_fishing_button.match_mode,
+        TemplateMatchMode::CCoeffNormed
+    );
+    assert!(!plan.locators.exit_fishing_button.use_3_channels);
+
+    assert_eq!(plan.bite_rule.localized_bite_text_default, "上钩");
+    assert_eq!(
+        plan.bite_rule.lifting_words_area,
+        Rect {
+            x: 640,
+            y: 0,
+            width: 640,
+            height: 540
+        }
+    );
+    assert_eq!(
+        plan.bite_rule.white_lower_rgb,
+        RgbPixel {
+            r: 253,
+            g: 253,
+            b: 253
+        }
+    );
+    assert_eq!(plan.bite_rule.dilate_kernel, Size::new(20, 20));
+    assert_eq!(plan.bite_rule.min_word_aspect_ratio, 3.0);
+    assert_eq!(
+        plan.bite_rule.word_area_width_must_exceed_text_width_times,
+        3.0
+    );
+    assert_eq!(
+        plan.bite_rule.detection_order,
+        vec![
+            "white text block",
+            "LiftRodButton template",
+            "Paddle OCR contains localized bite text"
+        ]
+    );
+    assert_eq!(plan.bite_rule.action, AutoFishInputAction::LeftButtonClick);
+
+    assert_eq!(
+        plan.fish_bar_rule.initial_search_region,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 540
+        }
+    );
+    assert_eq!(plan.fish_bar_rule.wait_fish_box_appear_seconds, 5);
+    assert_eq!(plan.fish_bar_rule.hsv_full_base.h, 60.0);
+    assert_eq!(plan.fish_bar_rule.hsv_full_base.s, 0.25);
+    assert_eq!(plan.fish_bar_rule.hsv_full_base.v, 1.0);
+    assert_eq!(plan.fish_bar_rule.hsv_full_low_delta.h, -3.0);
+    assert_eq!(plan.fish_bar_rule.hsv_full_high_delta.h, 3.5);
+    assert_eq!(plan.fish_bar_rule.contour_angle_mod_45_max, 1.0);
+    assert_eq!(plan.fish_bar_rule.same_line_center_y_tolerance_divisor, 5.0);
+    assert_eq!(plan.fish_bar_rule.height_difference_tolerance_divisor, 3.0);
+    assert_eq!(plan.fish_bar_rule.min_width_height_divisor, 4.0);
+    assert_eq!(plan.fish_bar_rule.initial_rect_height_diff_max, 10);
+    assert_eq!(
+        plan.fish_bar_rule
+            .two_rect_target_min_cursor_width_multiplier,
+        10.0
+    );
+    assert_eq!(
+        plan.fish_bar_rule
+            .max_rect_count_before_taking_highest_three,
+        3
+    );
+    assert_eq!(plan.fish_bar_rule.no_detection_finish_grace_seconds, 1);
+    assert!(plan.fish_bar_rule.fish_box_expansion.clamps_to_capture);
+    assert_eq!(
+        plan.fish_bar_rule.overlay_keys,
+        vec!["FishBiteTips", "FishBox", "FishingBarAll"]
+    );
+    assert_eq!(plan.full_task_rule.independent_task_key, "AutoFishing");
+    assert!(plan.full_task_rule.runtime_catalog_remains_native_pending);
+    assert!(plan.full_task_rule.disables_realtime_config_on_start);
+    assert_eq!(plan.full_task_rule.daytime_hours, vec![7]);
+    assert_eq!(plan.full_task_rule.nighttime_hours, vec![19]);
+    assert_eq!(plan.full_task_rule.all_policy_hours, vec![7, 19]);
+    assert_eq!(
+        plan.full_task_rule.rod_net_rule.model_input_size,
+        Size::new(1024, 576)
+    );
+    assert_eq!(plan.full_task_rule.rod_net_rule.alpha, 1734.34 / 2.5);
+    assert_eq!(plan.full_task_rule.rod_net_rule.state_ready, 0);
+    assert_eq!(plan.full_task_rule.rod_net_rule.state_too_close, 1);
+    assert_eq!(plan.full_task_rule.rod_net_rule.state_too_far, 2);
+    assert_eq!(
+        plan.full_task_rule
+            .auto_throw_rod_rule
+            .find_target_timeout_seconds,
+        5
+    );
+    assert_eq!(
+        plan.full_task_rule
+            .auto_throw_rod_rule
+            .ignore_obtained_seconds,
+        6
+    );
+    assert_eq!(
+        plan.full_task_rule
+            .auto_throw_rod_rule
+            .no_bait_fish_failures_before_switch,
+        10
+    );
+    assert_eq!(
+        plan.full_task_rule
+            .auto_throw_rod_rule
+            .no_target_retries_before_restart,
+        25
+    );
+    assert_eq!(
+        plan.full_task_rule
+            .auto_throw_rod_rule
+            .drop_point_failures_before_abort,
+        2
+    );
+
+    assert_eq!(
+        plan.fishing_input_rule.raise_rod_action,
+        AutoFishInputAction::LeftButtonClick
+    );
+    assert_eq!(
+        plan.fishing_input_rule.fishing_left_of_target_action,
+        AutoFishInputAction::LeftButtonDown
+    );
+    assert_eq!(
+        plan.fishing_input_rule.completion_action,
+        AutoFishInputAction::LeftButtonUp
+    );
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishTickPhase::ExclusiveGate
+            && step.condition == AutoFishTickCondition::WhenExitFishingButtonDetected
+            && step.action == AutoFishTickAction::TickSemiAutoFishingTree
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("OpenCV")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("mouse left-button")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("RodNet")));
+
+    for asset_name in [
+        "space.png",
+        "switch_bait.png",
+        "wait_bite.png",
+        "lift_rod.png",
+        "exit_fishing.png",
+    ] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join("AutoFishing")
+            .join("Assets")
+            .join("1920x1080")
+            .join(asset_name)
+            .exists());
+    }
+
+    let scaled = plan_auto_fish(AutoFishExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..AutoFishExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.locators.exit_fishing_button.roi,
+        Rect {
+            x: 1187,
+            y: 620,
+            width: 93,
+            height: 100
+        }
+    );
+    assert_eq!(
+        scaled.bite_rule.lifting_words_area,
+        Rect {
+            x: 426,
+            y: 0,
+            width: 426,
+            height: 360
+        }
+    );
+}
+
+#[test]
+fn auto_fishing_task_plan_preserves_legacy_full_task_behavior_tree_models_and_time_policy() {
+    let config = AutoFishingTaskExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "autoFishingConfig": {
+            "enabled": true,
+            "autoThrowRodEnabled": true,
+            "autoThrowRodTimeOut": 15,
+            "wholeProcessTimeoutSeconds": 300,
+            "fishingTimePolicy": "All",
+            "torchDllFullPath": "D:\\torch\\torch_cpu.dll"
+        },
+        "wholeProcessTimeoutSeconds": 444,
+        "throwRodTimeOutTimeoutSeconds": 22,
+        "fishingTimePolicy": "Daytime",
+        "saveScreenshotOnKeyTick": true
+    })));
+    let plan = plan_auto_fishing_task(config);
+
+    assert_eq!(plan.task_key, AUTO_FISHING_TASK_KEY);
+    assert_eq!(plan.display_name, "Auto Fishing Task");
+    assert_eq!(plan.capture_size, Size::new(1280, 720));
+    assert!(!plan.executor_ready);
+    assert_eq!(plan.config_rule.whole_process_timeout_seconds, 444);
+    assert_eq!(plan.config_rule.throw_rod_timeout_seconds, 22);
+    assert_eq!(
+        plan.config_rule.fishing_time_policy,
+        AutoFishingTimePolicy::Daytime
+    );
+    assert!(plan.config_rule.save_screenshot_on_key_tick);
+    assert_eq!(
+        plan.config_rule.torch_dll_full_path,
+        "D:\\torch\\torch_cpu.dll"
+    );
+    assert!(plan.config_rule.use_torch_probe_required);
+
+    assert_eq!(plan.startup_rule.task_name, "钓鱼独立任务");
+    assert!(plan.startup_rule.disables_realtime_auto_fishing_config);
+    assert!(plan.startup_rule.warns_about_pets);
+    assert!(plan.startup_rule.requires_active_genshin_window);
+    assert!(plan.startup_rule.captures_with_no_retry);
+    assert_eq!(plan.startup_rule.manual_gc_interval_seconds, 2);
+    assert!(plan.startup_rule.always_quits_fishing_mode_at_end);
+
+    assert!(plan.blackboard_rule.tracks_abort);
+    assert!(plan.blackboard_rule.tracks_selected_bait);
+    assert!(plan.blackboard_rule.tracks_fishpond);
+    assert!(plan.blackboard_rule.tracks_throw_rod_no_target);
+    assert!(plan.blackboard_rule.tracks_throw_rod_no_target_times);
+    assert!(plan.blackboard_rule.tracks_throw_rod_no_bait_fish);
+    assert!(plan.blackboard_rule.tracks_throw_rod_no_bait_fish_failures);
+    assert!(plan.blackboard_rule.tracks_fish_box_rect);
+    assert!(
+        plan.blackboard_rule
+            .choose_bait_ui_blocks_fishing_ui_detection
+    );
+    assert!(plan.blackboard_rule.tracks_choose_bait_failures);
+    assert!(plan.blackboard_rule.pitch_reset_initial_value);
+    assert!(
+        plan.blackboard_rule
+            .reset_preserves_fishpond_and_throw_rod_flags
+    );
+
+    assert_eq!(
+        plan.behavior_tree_rule.root_sequence,
+        "钓鱼并确保完成后退出钓鱼模式"
+    );
+    assert_eq!(
+        plan.behavior_tree_rule.whole_process_parallel_policy,
+        "OnlyOneMustSucceed"
+    );
+    assert_eq!(
+        plan.behavior_tree_rule.initial_find_fish_timeout_seconds,
+        20
+    );
+    assert_eq!(plan.behavior_tree_rule.loop_find_fish_timeout_seconds, 10);
+    assert_eq!(
+        plan.behavior_tree_rule.throw_rod_parallel_policy,
+        "OnlyOneMustSucceed"
+    );
+    assert!(plan
+        .behavior_tree_rule
+        .ordered_stages
+        .contains(&"ChooseBait".to_string()));
+    assert!(plan
+        .behavior_tree_rule
+        .ordered_stages
+        .contains(&"ThrowRod".to_string()));
+    assert!(plan
+        .behavior_tree_rule
+        .ordered_stages
+        .contains(&"QuitFishingMode".to_string()));
+
+    assert!(plan.time_policy_rule.skips_time_setting_in_multiplayer);
+    assert!(plan.time_policy_rule.dont_change_runs_once);
+    assert_eq!(plan.time_policy_rule.daytime_hours, vec![7]);
+    assert_eq!(plan.time_policy_rule.nighttime_hours, vec![19]);
+    assert_eq!(plan.time_policy_rule.all_policy_hours, vec![7, 19]);
+
+    assert_eq!(plan.find_fish_rule.move_viewpoint_down_dy, 500);
+    assert_eq!(plan.find_fish_rule.move_viewpoint_down_sleep_ms, 100);
+    assert_eq!(plan.find_fish_rule.turn_no_fish_dx, 100);
+    assert_eq!(plan.find_fish_rule.turn_after_move_sleep_ms, 100);
+    assert_eq!(
+        plan.find_fish_rule.fishpond_detected_overlay_sleep_ms,
+        1_000
+    );
+    assert_eq!(plan.find_fish_rule.fishpond_right_threshold_ratio, 0.75);
+    assert_eq!(plan.find_fish_rule.fishpond_left_threshold_ratio, 0.25);
+    assert_eq!(plan.find_fish_rule.align_backward_vk, 0x53);
+    assert_eq!(plan.find_fish_rule.align_forward_vk, 0x57);
+    assert_eq!(plan.find_fish_rule.align_key_hold_ms, 100);
+    assert_eq!(plan.find_fish_rule.align_between_key_sleep_ms, 400);
+    assert_eq!(plan.find_fish_rule.align_final_sleep_ms, 300);
+    assert_eq!(
+        plan.find_fish_rule.initial_state_theta_step_radians,
+        std::f64::consts::PI / 10.0
+    );
+    assert_eq!(plan.find_fish_rule.initial_state_rho_base, 10.0);
+    assert_eq!(plan.find_fish_rule.initial_state_rho_theta_multiplier, 2.0);
+    assert_eq!(plan.find_fish_rule.initial_state_move_interval_ms, 100);
+
+    assert_eq!(plan.enter_mode_rule.localized_fishing_text_default, "钓鱼");
+    assert_eq!(plan.enter_mode_rule.overall_wait_seconds, 10);
+    assert_eq!(plan.enter_mode_rule.press_f_retry_seconds, 3);
+    assert_eq!(plan.enter_mode_rule.click_white_confirm_retry_seconds, 3);
+    assert_eq!(plan.enter_mode_rule.white_confirm_pre_click_delay_ms, 500);
+    assert_eq!(plan.enter_mode_rule.interact_vk, 0x46);
+    assert_eq!(
+        plan.enter_mode_rule.initial_bait_icon_crop_ratio,
+        AutoFishingRatioRect {
+            x: 0.824,
+            y: 0.669,
+            width: 0.065,
+            height: 0.065
+        }
+    );
+    assert_eq!(
+        plan.enter_mode_rule.grid_icon_input_size,
+        Size::new(125, 125)
+    );
+    assert!(plan.enter_mode_rule.marks_pitch_reset_after_confirm);
+
+    assert_eq!(plan.fish_model_rule.yolo_model_name, "BgiFish");
+    assert_eq!(
+        plan.fish_model_rule.yolo_model,
+        AUTO_FISHING_FISH_MODEL_PATH
+    );
+    assert!(plan.fish_model_rule.grid_icon_model_loaded_for_bait);
+    assert_eq!(plan.fish_model_rule.confidence_min, 0.4);
+    assert_eq!(
+        plan.fish_model_rule.ignore_obtained_left_tip_rect_ratio,
+        AutoFishingRatioRect {
+            x: 0.04375,
+            y: 0.4666,
+            width: 0.1,
+            height: 0.1
+        }
+    );
+    assert_eq!(
+        plan.fish_model_rule.ignore_obtained_center_tip_rect_ratio,
+        AutoFishingRatioRect {
+            x: 0.4,
+            y: 0.445,
+            width: 0.2,
+            height: 0.06125
+        }
+    );
+    assert_eq!(plan.fish_model_rule.fish_types.len(), 21);
+    let first_fish = plan.fish_model_rule.fish_types.first().unwrap();
+    assert_eq!(first_fish.name, "medaka");
+    assert_eq!(first_fish.bait, AutoFishingBaitType::FruitPasteBait);
+    assert_eq!(first_fish.net_index, 0);
+    let secret_source = plan
+        .fish_model_rule
+        .fish_types
+        .iter()
+        .find(|fish| fish.name == "secret source")
+        .unwrap();
+    assert_eq!(secret_source.bait, AutoFishingBaitType::EmberglowBait);
+    assert_eq!(secret_source.net_index, 9);
+
+    assert_eq!(plan.bait_rule.bait_types.len(), 11);
+    assert!(plan
+        .bait_rule
+        .bait_types
+        .contains(&AutoFishingBaitType::BerryBait));
+    assert!(plan
+        .bait_rule
+        .bait_types
+        .contains(&AutoFishingBaitType::RefreshingLakkaBait));
+    assert!(plan.bait_rule.selected_bait_tracked_in_blackboard);
+    assert!(plan.bait_rule.failed_baits_tracked_in_blackboard);
+    assert_eq!(plan.bait_rule.no_bait_fish_failures_before_switch, 10);
+
+    assert_eq!(plan.choose_bait_rule.max_failed_times_before_ignore, 2);
+    assert!(plan.choose_bait_rule.opens_ui_with_right_click);
+    assert_eq!(plan.choose_bait_rule.ui_open_wait_seconds, 3);
+    assert_eq!(plan.choose_bait_rule.post_right_click_sleep_ms, 100);
+    assert_eq!(plan.choose_bait_rule.mouse_move_after_open_dy, 200);
+    assert_eq!(
+        plan.choose_bait_rule.grid_crop_ratio,
+        AutoFishingRatioRect {
+            x: 0.28,
+            y: 0.37,
+            width: 0.45,
+            height: 0.22
+        }
+    );
+    assert_eq!(plan.choose_bait_rule.canny_low_threshold, 20.0);
+    assert_eq!(plan.choose_bait_rule.canny_high_threshold, 40.0);
+    assert_eq!(plan.choose_bait_rule.min_contour_width_screen_ratio, 0.065);
+    assert_eq!(plan.choose_bait_rule.min_contour_width_multiplier, 0.80);
+    assert_eq!(plan.choose_bait_rule.bait_icon_aspect_ratio, 0.81);
+    assert_eq!(plan.choose_bait_rule.bait_icon_aspect_tolerance, 0.05);
+    assert_eq!(plan.choose_bait_rule.fixed_post_select_click_x_ratio, 0.675);
+    assert_eq!(
+        plan.choose_bait_rule.fixed_post_select_click_y_ratio,
+        1.0 / 3.0
+    );
+    assert_eq!(
+        plan.choose_bait_rule.confirm_template_name,
+        "BtnWhiteConfirm"
+    );
+
+    assert!(plan.throw_rod_rule.hold_left_button_on_initialize);
+    assert!(plan.throw_rod_rule.sets_pitch_reset_on_initialize);
+    assert_eq!(plan.throw_rod_rule.ignore_obtained_seconds, 6);
+    assert_eq!(plan.throw_rod_rule.find_target_timeout_seconds, 5);
+    assert_eq!(plan.throw_rod_rule.initial_mouse_sweep_step_pixels, 80);
+    assert_eq!(
+        plan.throw_rod_rule.initial_mouse_sweep_angle_step_radians,
+        std::f64::consts::PI / 16.0
+    );
+    assert_eq!(plan.throw_rod_rule.no_drop_point_failures_before_abort, 2);
+    assert_eq!(plan.throw_rod_rule.no_placement_retries_before_restart, 25);
+    assert_eq!(
+        plan.throw_rod_rule
+            .no_target_fish_retries_before_switch_bait,
+        10
+    );
+    assert_eq!(
+        plan.throw_rod_rule.max_no_bait_fish_failures_before_ignore,
+        2
+    );
+    assert_eq!(plan.throw_rod_rule.random_move_base_pixels, 100);
+    assert_eq!(
+        plan.throw_rod_rule.rod_input_normalized_size,
+        Size::new(1024, 576)
+    );
+    assert_eq!(plan.throw_rod_rule.state_failed_random_move, -1);
+    assert_eq!(plan.throw_rod_rule.too_close_minimum_step, 30.0);
+    assert_eq!(plan.throw_rod_rule.too_close_dx_divisor, 1.5);
+    assert_eq!(plan.throw_rod_rule.too_far_dy_multiplier, 1.5);
+
+    assert_eq!(plan.check_result_rule.check_throw_rod_delay_seconds, 3);
+    assert_eq!(
+        plan.check_result_rule.check_throw_rod_failure_template,
+        "BaitButtonRo"
+    );
+    assert_eq!(plan.check_result_rule.fish_bite_timeout_seconds, 22);
+    assert!(plan.check_result_rule.fish_bite_timeout_clicks_left_button);
+    assert_eq!(
+        plan.check_result_rule.fish_bite_timeout_after_click_seconds,
+        2
+    );
+    assert_eq!(plan.check_result_rule.check_raise_hook_delay_seconds, 3);
+    assert_eq!(
+        plan.check_result_rule.check_raise_hook_failure_template,
+        "WaitBiteButtonRo"
+    );
+    assert_eq!(plan.check_result_rule.get_fish_box_area_timeout_seconds, 5);
+    assert_eq!(plan.check_result_rule.fish_box_rect_max_height_delta, 10);
+    assert_eq!(
+        plan.check_result_rule
+            .fishing_no_detection_finish_grace_seconds,
+        1
+    );
+
+    assert_eq!(plan.rod_net_rule.model_input_size, Size::new(1024, 576));
+    assert_eq!(plan.rod_net_rule.alpha, 1734.34 / 2.5);
+    assert_eq!(plan.rod_net_rule.label_count, 11);
+    assert_eq!(plan.rod_net_rule.state_ready, 0);
+    assert_eq!(plan.rod_net_rule.state_too_close, 1);
+    assert_eq!(plan.rod_net_rule.state_too_far, 2);
+    assert_eq!(plan.rod_net_rule.offset_values.len(), 11);
+    assert_eq!(plan.rod_net_rule.offset_values[0], 0.8);
+    assert_eq!(plan.rod_net_rule.dz_values.len(), 11);
+    assert_eq!(plan.rod_net_rule.dz_values[0], 1.0307939);
+    assert_eq!(plan.rod_net_rule.h_coeff_values.len(), 11);
+    assert_eq!(plan.rod_net_rule.h_coeff_values[10], -0.3689651);
+    assert_eq!(plan.rod_net_rule.weight_values.len(), 11);
+    assert_eq!(plan.rod_net_rule.weight_values[7][1], -9.5275803);
+    assert_eq!(plan.rod_net_rule.bias_values.len(), 11);
+    assert_eq!(plan.rod_net_rule.bias_values[7][0], -9.0128260);
+
+    assert_eq!(plan.quit_rule.localized_fishing_text_default, "钓鱼");
+    assert!(plan.quit_rule.succeeds_when_find_f_fishing_text);
+    assert!(plan.quit_rule.clicks_black_confirm_when_present);
+    assert_eq!(plan.quit_rule.black_confirm_sleep_ms, 1_000);
+    assert_eq!(plan.quit_rule.escape_retry_sleep_ms, 2_000);
+
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::Startup
+            && step.action == AutoFishingTaskAction::DisableRealtimeAutoFish
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::ChooseBait
+            && step.action == AutoFishingTaskAction::ChooseBaitWithGridIconModel
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::ThrowRod
+            && step.action == AutoFishingTaskAction::ThrowRodWithRodNet
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::ThrowRod
+            && step.action == AutoFishingTaskAction::CheckThrowRodResult
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::BiteAndRaiseRod
+            && step.action == AutoFishingTaskAction::WaitBiteTimeout
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::BiteAndRaiseRod
+            && step.action == AutoFishingTaskAction::CheckRaiseHookResult
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoFishingTaskPhase::QuitFishingMode
+            && step.action == AutoFishingTaskAction::QuitFishingMode
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("time-policy rounds")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Blackboard reset/state contract")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("BgiFish")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("GridIcon")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("pure retry/timeout/crop")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Torch/RodNet")));
+}
+
+fn assert_auto_fishing_f64_near(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-10,
+        "expected {actual} to be within 1e-10 of {expected}"
+    );
+}
+
+fn default_auto_fishing_rod_rule() -> AutoFishingRodNetRule {
+    plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).rod_net_rule
+}
+
+fn auto_fishing_expected_round(
+    hour: Option<u8>,
+    reason: AutoFishingTimePolicyRoundReason,
+) -> AutoFishingTimePolicyRound {
+    AutoFishingTimePolicyRound {
+        set_time_hour: hour,
+        set_time_minute: hour.map(|_| 0),
+        run_tick_around: true,
+        resets_blackboard_before_round: true,
+        resets_manual_gc_timer_before_round: true,
+        reason,
+    }
+}
+
+#[test]
+fn auto_fishing_time_policy_rounds_preserve_multiplayer_dont_change_and_day_night_rules() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).time_policy_rule;
+
+    assert_eq!(
+        plan_auto_fishing_time_policy_rounds(&AutoFishingTimePolicy::Daytime, true, &rule),
+        vec![auto_fishing_expected_round(
+            None,
+            AutoFishingTimePolicyRoundReason::MultiplayerSkipsTimeSetting
+        )]
+    );
+    assert_eq!(
+        plan_auto_fishing_time_policy_rounds(&AutoFishingTimePolicy::DontChange, false, &rule),
+        vec![auto_fishing_expected_round(
+            None,
+            AutoFishingTimePolicyRoundReason::DontChange
+        )]
+    );
+    assert_eq!(
+        plan_auto_fishing_time_policy_rounds(&AutoFishingTimePolicy::Daytime, false, &rule),
+        vec![auto_fishing_expected_round(
+            Some(7),
+            AutoFishingTimePolicyRoundReason::Daytime
+        )]
+    );
+    assert_eq!(
+        plan_auto_fishing_time_policy_rounds(&AutoFishingTimePolicy::Nighttime, false, &rule),
+        vec![auto_fishing_expected_round(
+            Some(19),
+            AutoFishingTimePolicyRoundReason::Nighttime
+        )]
+    );
+    assert_eq!(
+        plan_auto_fishing_time_policy_rounds(&AutoFishingTimePolicy::All, false, &rule),
+        vec![
+            auto_fishing_expected_round(Some(7), AutoFishingTimePolicyRoundReason::AllOrFallback),
+            auto_fishing_expected_round(Some(19), AutoFishingTimePolicyRoundReason::AllOrFallback)
+        ]
+    );
+    assert_eq!(
+        plan_auto_fishing_time_policy_rounds(
+            &AutoFishingTimePolicy::Unknown("custom".to_string()),
+            false,
+            &rule
+        ),
+        vec![
+            auto_fishing_expected_round(Some(7), AutoFishingTimePolicyRoundReason::AllOrFallback),
+            auto_fishing_expected_round(Some(19), AutoFishingTimePolicyRoundReason::AllOrFallback)
+        ]
+    );
+}
+
+#[test]
+fn auto_fishing_tick_around_loop_reducer_preserves_stop_skip_tick_and_gc_order() {
+    let base = AutoFishingTickAroundObservation {
+        cancellation_requested: false,
+        genshin_active: true,
+        capture_succeeded: true,
+        behavior_tree_status: AutoFishingBehaviorStatus::Running,
+        manual_gc_due: false,
+    };
+
+    let cancelled = reduce_auto_fishing_tick_around_loop(AutoFishingTickAroundObservation {
+        cancellation_requested: true,
+        genshin_active: false,
+        capture_succeeded: true,
+        behavior_tree_status: AutoFishingBehaviorStatus::Succeeded,
+        manual_gc_due: true,
+    });
+    assert!(!cancelled.continue_loop);
+    assert!(!cancelled.should_tick_behavior_tree);
+    assert_eq!(
+        cancelled.stop_reason,
+        Some(AutoFishingTickAroundStopReason::CancellationRequested)
+    );
+    assert!(!cancelled.collect_gc);
+
+    let inactive = reduce_auto_fishing_tick_around_loop(AutoFishingTickAroundObservation {
+        genshin_active: false,
+        manual_gc_due: true,
+        ..base
+    });
+    assert!(!inactive.continue_loop);
+    assert_eq!(
+        inactive.stop_reason,
+        Some(AutoFishingTickAroundStopReason::InactiveGameWindow)
+    );
+    assert!(!inactive.should_tick_behavior_tree);
+    assert!(!inactive.collect_gc);
+
+    let capture_failed = reduce_auto_fishing_tick_around_loop(AutoFishingTickAroundObservation {
+        capture_succeeded: false,
+        behavior_tree_status: AutoFishingBehaviorStatus::Succeeded,
+        manual_gc_due: true,
+        ..base
+    });
+    assert!(capture_failed.continue_loop);
+    assert!(!capture_failed.should_tick_behavior_tree);
+    assert_eq!(capture_failed.stop_reason, None);
+    assert!(!capture_failed.collect_gc);
+
+    let finished = reduce_auto_fishing_tick_around_loop(AutoFishingTickAroundObservation {
+        behavior_tree_status: AutoFishingBehaviorStatus::Failed,
+        manual_gc_due: true,
+        ..base
+    });
+    assert!(!finished.continue_loop);
+    assert!(finished.should_tick_behavior_tree);
+    assert_eq!(
+        finished.stop_reason,
+        Some(AutoFishingTickAroundStopReason::BehaviorTreeStopped)
+    );
+    assert_eq!(
+        finished.finished_behavior_status,
+        Some(AutoFishingBehaviorStatus::Failed)
+    );
+    assert!(!finished.collect_gc);
+
+    let running_no_gc = reduce_auto_fishing_tick_around_loop(base);
+    assert!(running_no_gc.continue_loop);
+    assert!(running_no_gc.should_tick_behavior_tree);
+    assert_eq!(running_no_gc.stop_reason, None);
+    assert!(!running_no_gc.collect_gc);
+    assert!(!running_no_gc.updates_manual_gc_timestamp);
+
+    let running_gc = reduce_auto_fishing_tick_around_loop(AutoFishingTickAroundObservation {
+        manual_gc_due: true,
+        ..base
+    });
+    assert!(running_gc.continue_loop);
+    assert!(running_gc.should_tick_behavior_tree);
+    assert!(running_gc.collect_gc);
+    assert!(running_gc.updates_manual_gc_timestamp);
+}
+
+#[test]
+fn auto_fishing_blackboard_default_and_reset_preserve_legacy_partial_reset_contract() {
+    assert_eq!(
+        AutoFishingBlackboardState::default(),
+        AutoFishingBlackboardState {
+            abort: false,
+            selected_bait: None,
+            fishpond: None,
+            throw_rod_no_target: false,
+            throw_rod_no_target_times: 0,
+            throw_rod_no_bait_fish: false,
+            throw_rod_no_bait_fish_failures: Vec::new(),
+            fish_box_rect: None,
+            choose_bait_ui_opening: false,
+            choose_bait_failures: Vec::new(),
+            pitch_reset: true
+        }
+    );
+
+    let fishpond = AutoFishingFishpondSnapshot {
+        fishpond_rect: Some(Rect::new(20, 30, 400, 120).unwrap()),
+        fishes: vec![AutoFishingTargetFishCandidate {
+            fish_type_name: "medaka".to_string(),
+            bait: AutoFishingBaitType::FruitPasteBait,
+            net_index: 0,
+            rect: Rect::new(100, 120, 50, 40).unwrap(),
+            confidence: 0.91,
+        }],
+    };
+    let dirty = AutoFishingBlackboardState {
+        abort: true,
+        selected_bait: Some(AutoFishingBaitType::RedrotBait),
+        fishpond: Some(fishpond.clone()),
+        throw_rod_no_target: true,
+        throw_rod_no_target_times: 9,
+        throw_rod_no_bait_fish: true,
+        throw_rod_no_bait_fish_failures: vec![
+            AutoFishingBaitType::RedrotBait,
+            AutoFishingBaitType::RedrotBait,
+        ],
+        fish_box_rect: Some(Rect::new(600, 500, 300, 80).unwrap()),
+        choose_bait_ui_opening: true,
+        choose_bait_failures: vec![AutoFishingBaitType::FakeFlyBait],
+        pitch_reset: false,
+    };
+
+    let report = reset_auto_fishing_blackboard_state(dirty);
+    assert!(report.cleared_abort_was);
+    assert_eq!(
+        report.cleared_selected_bait,
+        Some(AutoFishingBaitType::RedrotBait)
+    );
+    assert_eq!(report.cleared_throw_rod_no_target_times, 9);
+    assert_eq!(report.cleared_throw_rod_no_bait_fish_failures_len, 2);
+    assert!(report.cleared_fish_box_rect_was_non_empty);
+    assert!(report.cleared_choose_bait_ui_opening_was);
+    assert_eq!(report.cleared_choose_bait_failures_len, 1);
+    assert!(!report.pitch_reset_was);
+    assert!(report.preserved_fishpond);
+    assert!(report.preserved_throw_rod_no_target);
+    assert!(report.preserved_throw_rod_no_bait_fish);
+    assert_eq!(
+        report.next_state,
+        AutoFishingBlackboardState {
+            abort: false,
+            selected_bait: None,
+            fishpond: Some(fishpond),
+            throw_rod_no_target: true,
+            throw_rod_no_target_times: 0,
+            throw_rod_no_bait_fish: true,
+            throw_rod_no_bait_fish_failures: Vec::new(),
+            fish_box_rect: None,
+            choose_bait_ui_opening: false,
+            choose_bait_failures: Vec::new(),
+            pitch_reset: true
+        }
+    );
+}
+
+#[test]
+fn auto_fishing_throw_rod_initialize_clears_stale_flags_after_compatible_reset() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let reset = reset_auto_fishing_blackboard_state(AutoFishingBlackboardState {
+        throw_rod_no_target: true,
+        throw_rod_no_bait_fish: true,
+        pitch_reset: false,
+        ..AutoFishingBlackboardState::default()
+    });
+    assert!(reset.next_state.throw_rod_no_target);
+    assert!(reset.next_state.throw_rod_no_bait_fish);
+
+    let initialized =
+        initialize_auto_fishing_throw_rod_state(reset.next_state, &plan.throw_rod_rule);
+    assert!(initialized.cleared_stale_throw_rod_no_target);
+    assert!(initialized.cleared_stale_throw_rod_no_bait_fish);
+    assert!(initialized.sets_pitch_reset);
+    assert!(!initialized.next_state.throw_rod_no_target);
+    assert!(!initialized.next_state.throw_rod_no_bait_fish);
+    assert!(initialized.next_state.pitch_reset);
+    assert_eq!(
+        initialized.input_events,
+        vec![InputEvent::MouseButtonDown {
+            button: MouseButton::Left
+        }]
+    );
+}
+
+#[test]
+fn auto_fishing_timeout_reducers_preserve_whole_process_and_find_fish_status() {
+    let whole_running = reduce_auto_fishing_whole_process_timeout(AutoFishingTimeoutObservation {
+        timeout_elapsed: false,
+    });
+    assert_eq!(whole_running.status, AutoFishingBehaviorStatus::Running);
+    assert!(!whole_running.sets_abort);
+
+    let whole_timeout = reduce_auto_fishing_whole_process_timeout(AutoFishingTimeoutObservation {
+        timeout_elapsed: true,
+    });
+    assert_eq!(whole_timeout.status, AutoFishingBehaviorStatus::Succeeded);
+    assert!(!whole_timeout.sets_abort);
+
+    let find_running = reduce_auto_fishing_find_fish_timeout(AutoFishingTimeoutObservation {
+        timeout_elapsed: false,
+    });
+    assert_eq!(find_running.status, AutoFishingBehaviorStatus::Running);
+    assert!(!find_running.sets_abort);
+
+    let find_timeout = reduce_auto_fishing_find_fish_timeout(AutoFishingTimeoutObservation {
+        timeout_elapsed: true,
+    });
+    assert_eq!(find_timeout.status, AutoFishingBehaviorStatus::Failed);
+    assert!(find_timeout.sets_abort);
+}
+
+#[test]
+fn auto_fishing_move_viewpoint_down_preserves_pitch_reset_mouse_move() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).find_fish_rule;
+
+    let reset = reduce_auto_fishing_move_viewpoint_down(
+        AutoFishingMoveViewpointDownObservation { pitch_reset: true },
+        &rule,
+    );
+    assert_eq!(reset.status, AutoFishingBehaviorStatus::Running);
+    assert!(!reset.next_pitch_reset);
+    assert_eq!(
+        reset.input_events,
+        vec![
+            InputEvent::MouseMoveRelative { dx: 0, dy: 500 },
+            InputEvent::Delay { milliseconds: 100 }
+        ]
+    );
+
+    let stable = reduce_auto_fishing_move_viewpoint_down(
+        AutoFishingMoveViewpointDownObservation { pitch_reset: false },
+        &rule,
+    );
+    assert_eq!(stable.status, AutoFishingBehaviorStatus::Succeeded);
+    assert!(!stable.next_pitch_reset);
+    assert!(stable.input_events.is_empty());
+}
+
+#[test]
+fn auto_fishing_initial_state_spiral_preserves_legacy_theta_and_interval() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).find_fish_rule;
+
+    let found = reduce_auto_fishing_initial_state(
+        AutoFishingInitialStateObservation {
+            bait_button_present: true,
+            theta: 1.25,
+            move_interval_elapsed: true,
+        },
+        &rule,
+    );
+    assert_eq!(found.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(found.next_theta, 1.25);
+    assert_eq!(found.mouse_move, None);
+    assert_eq!(found.reschedule_after_ms, None);
+
+    let waiting = reduce_auto_fishing_initial_state(
+        AutoFishingInitialStateObservation {
+            bait_button_present: false,
+            theta: 0.0,
+            move_interval_elapsed: false,
+        },
+        &rule,
+    );
+    assert_eq!(waiting.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(waiting.next_theta, 0.0);
+    assert_eq!(waiting.mouse_move, None);
+    assert_eq!(waiting.reschedule_after_ms, None);
+
+    let moving = reduce_auto_fishing_initial_state(
+        AutoFishingInitialStateObservation {
+            bait_button_present: false,
+            theta: 0.0,
+            move_interval_elapsed: true,
+        },
+        &rule,
+    );
+    assert_eq!(moving.status, AutoFishingBehaviorStatus::Running);
+    assert_auto_fishing_f64_near(moving.next_theta, std::f64::consts::PI / 10.0);
+    assert_eq!(moving.mouse_move, Some((10, 3)));
+    assert_eq!(moving.reschedule_after_ms, Some(100));
+}
+
+#[test]
+fn auto_fishing_turn_around_preserves_sweep_side_adjustment_and_alignment() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).find_fish_rule;
+    let capture_size = Size::new(1920, 1080);
+
+    let no_fish = reduce_auto_fishing_turn_around(
+        AutoFishingTurnAroundObservation {
+            capture_size,
+            fishpond_rect: None,
+        },
+        &rule,
+    );
+    assert_eq!(no_fish.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        no_fish.decision,
+        AutoFishingTurnAroundDecisionKind::NoFishSweep
+    );
+    assert!(!no_fish.clears_overlay);
+    assert_eq!(
+        no_fish.input_events,
+        vec![
+            InputEvent::MouseMoveRelative { dx: 100, dy: 0 },
+            InputEvent::Delay { milliseconds: 100 }
+        ]
+    );
+
+    let right = reduce_auto_fishing_turn_around(
+        AutoFishingTurnAroundObservation {
+            capture_size,
+            fishpond_rect: Some(Rect::new(1500, 400, 120, 80).unwrap()),
+        },
+        &rule,
+    );
+    assert_eq!(
+        right.decision,
+        AutoFishingTurnAroundDecisionKind::FishpondTooFarRight
+    );
+    assert!(right.clears_overlay);
+    assert_eq!(
+        right.input_events,
+        vec![
+            InputEvent::Delay {
+                milliseconds: 1_000
+            },
+            InputEvent::MouseMoveRelative { dx: 100, dy: 0 },
+            InputEvent::Delay { milliseconds: 100 }
+        ]
+    );
+
+    let left = reduce_auto_fishing_turn_around(
+        AutoFishingTurnAroundObservation {
+            capture_size,
+            fishpond_rect: Some(Rect::new(100, 400, 200, 80).unwrap()),
+        },
+        &rule,
+    );
+    assert_eq!(
+        left.decision,
+        AutoFishingTurnAroundDecisionKind::FishpondTooFarLeft
+    );
+    assert_eq!(
+        left.input_events,
+        vec![
+            InputEvent::Delay {
+                milliseconds: 1_000
+            },
+            InputEvent::MouseMoveRelative { dx: -100, dy: 0 },
+            InputEvent::Delay { milliseconds: 100 }
+        ]
+    );
+
+    let aligned = reduce_auto_fishing_turn_around(
+        AutoFishingTurnAroundObservation {
+            capture_size,
+            fishpond_rect: Some(Rect::new(1440, 400, 100, 80).unwrap()),
+        },
+        &rule,
+    );
+    assert_eq!(aligned.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(
+        aligned.decision,
+        AutoFishingTurnAroundDecisionKind::AlignCharacterAndCamera
+    );
+    assert!(aligned.clears_overlay);
+    assert_eq!(
+        aligned.input_events,
+        vec![
+            InputEvent::Delay {
+                milliseconds: 1_000
+            },
+            InputEvent::KeyDown {
+                vk: 0x53,
+                extended: None
+            },
+            InputEvent::Delay { milliseconds: 100 },
+            InputEvent::KeyUp {
+                vk: 0x53,
+                extended: None
+            },
+            InputEvent::Delay { milliseconds: 400 },
+            InputEvent::KeyDown {
+                vk: 0x57,
+                extended: None
+            },
+            InputEvent::Delay { milliseconds: 100 },
+            InputEvent::KeyUp {
+                vk: 0x57,
+                extended: None
+            },
+            InputEvent::Delay { milliseconds: 400 },
+            InputEvent::Delay { milliseconds: 300 }
+        ]
+    );
+}
+
+#[test]
+fn auto_fishing_enter_mode_bait_icon_crop_preserves_legacy_square_width_formula() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).enter_mode_rule;
+
+    let full_hd =
+        plan_auto_fishing_enter_mode_bait_icon_crop(Size::new(1920, 1080), &rule).unwrap();
+    assert_eq!(
+        full_hd,
+        AutoFishingBaitIconCropPlan {
+            crop_rect: Rect::new(1582, 722, 124, 124).unwrap(),
+            resize_size: Size::new(125, 125)
+        }
+    );
+
+    let hd = plan_auto_fishing_enter_mode_bait_icon_crop(Size::new(1280, 720), &rule).unwrap();
+    assert_eq!(
+        hd,
+        AutoFishingBaitIconCropPlan {
+            crop_rect: Rect::new(1054, 481, 83, 83).unwrap(),
+            resize_size: Size::new(125, 125)
+        }
+    );
+
+    let tall = plan_auto_fishing_enter_mode_bait_icon_crop(Size::new(1000, 2000), &rule).unwrap();
+    assert_eq!(tall.crop_rect.height, 65);
+    assert_ne!(tall.crop_rect.height, (0.065_f64 * 2000.0).trunc() as i32);
+
+    assert_eq!(
+        plan_auto_fishing_enter_mode_bait_icon_crop(Size::new(0, 1080), &rule).unwrap_err(),
+        AutoFishingEnterModeError::InvalidCaptureSize
+    );
+
+    let mut invalid_rule = rule.clone();
+    invalid_rule.initial_bait_icon_crop_ratio.width = 0.0;
+    assert_eq!(
+        plan_auto_fishing_enter_mode_bait_icon_crop(Size::new(1920, 1080), &invalid_rule)
+            .unwrap_err(),
+        AutoFishingEnterModeError::InvalidCropRect
+    );
+}
+
+#[test]
+fn auto_fishing_enter_mode_reducer_preserves_initial_f_confirm_success_and_timeout_order() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).enter_mode_rule;
+    let ready_state = AutoFishingEnterModeState {
+        initialized: false,
+        selected_bait: None,
+        pitch_reset: false,
+    };
+    let initialized_state = AutoFishingEnterModeState {
+        initialized: true,
+        selected_bait: None,
+        pitch_reset: false,
+    };
+    let base_observation = AutoFishingEnterModeObservation {
+        state: initialized_state,
+        press_f_cooldown_elapsed: false,
+        click_white_confirm_cooldown_elapsed: false,
+        f_fishing_text_visible: false,
+        white_confirm_button_present: false,
+        exit_fishing_button_present: false,
+        overall_timeout_elapsed: false,
+        inferred_bait_after_confirm: None,
+        capture_size: Size::new(1920, 1080),
+    };
+
+    let initial = reduce_auto_fishing_enter_mode(
+        AutoFishingEnterModeObservation {
+            state: ready_state,
+            f_fishing_text_visible: true,
+            white_confirm_button_present: true,
+            exit_fishing_button_present: true,
+            overall_timeout_elapsed: true,
+            ..base_observation
+        },
+        &rule,
+    )
+    .unwrap();
+    assert_eq!(initial.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        initial.decision,
+        AutoFishingEnterModeDecisionKind::StartOverallWait
+    );
+    assert!(initial.next_state.initialized);
+    assert_eq!(initial.starts_overall_timeout_ms, Some(10_000));
+    assert!(initial.input_events.is_empty());
+
+    let press_f = reduce_auto_fishing_enter_mode(
+        AutoFishingEnterModeObservation {
+            press_f_cooldown_elapsed: true,
+            click_white_confirm_cooldown_elapsed: true,
+            f_fishing_text_visible: true,
+            white_confirm_button_present: true,
+            exit_fishing_button_present: true,
+            overall_timeout_elapsed: true,
+            ..base_observation
+        },
+        &rule,
+    )
+    .unwrap();
+    assert_eq!(press_f.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        press_f.decision,
+        AutoFishingEnterModeDecisionKind::PressFishingKey
+    );
+    assert_eq!(
+        press_f.input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: 0x46,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: 0x46,
+                extended: None
+            }
+        ]
+    );
+    assert_eq!(press_f.reschedule_press_f_after_ms, Some(3_000));
+    assert!(!press_f.clicks_white_confirm);
+
+    let confirm = reduce_auto_fishing_enter_mode(
+        AutoFishingEnterModeObservation {
+            press_f_cooldown_elapsed: false,
+            click_white_confirm_cooldown_elapsed: true,
+            f_fishing_text_visible: true,
+            white_confirm_button_present: true,
+            exit_fishing_button_present: true,
+            overall_timeout_elapsed: true,
+            inferred_bait_after_confirm: Some(AutoFishingBaitType::RedrotBait),
+            ..base_observation
+        },
+        &rule,
+    )
+    .unwrap();
+    assert_eq!(confirm.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        confirm.decision,
+        AutoFishingEnterModeDecisionKind::ClickWhiteConfirm
+    );
+    assert!(confirm.clicks_white_confirm);
+    assert_eq!(confirm.white_confirm_pre_click_delay_ms, Some(500));
+    assert_eq!(
+        confirm.next_state.selected_bait,
+        Some(AutoFishingBaitType::RedrotBait)
+    );
+    assert!(confirm.next_state.pitch_reset);
+    assert_eq!(
+        confirm.bait_icon_crop.unwrap().crop_rect,
+        Rect::new(1582, 722, 124, 124).unwrap()
+    );
+    assert_eq!(confirm.reschedule_click_white_confirm_after_ms, Some(3_000));
+
+    let success = reduce_auto_fishing_enter_mode(
+        AutoFishingEnterModeObservation {
+            exit_fishing_button_present: true,
+            ..base_observation
+        },
+        &rule,
+    )
+    .unwrap();
+    assert_eq!(success.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(success.decision, AutoFishingEnterModeDecisionKind::Entered);
+
+    let timeout = reduce_auto_fishing_enter_mode(
+        AutoFishingEnterModeObservation {
+            overall_timeout_elapsed: true,
+            ..base_observation
+        },
+        &rule,
+    )
+    .unwrap();
+    assert_eq!(timeout.status, AutoFishingBehaviorStatus::Failed);
+    assert_eq!(
+        timeout.decision,
+        AutoFishingEnterModeDecisionKind::FailedTimeout
+    );
+
+    let waiting = reduce_auto_fishing_enter_mode(base_observation, &rule).unwrap();
+    assert_eq!(waiting.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        waiting.decision,
+        AutoFishingEnterModeDecisionKind::WaitingForExitButton
+    );
+}
+
+#[test]
+fn auto_fishing_enter_mode_reducer_handles_unknown_bait_after_confirm() {
+    let rule = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default()).enter_mode_rule;
+    let report = reduce_auto_fishing_enter_mode(
+        AutoFishingEnterModeObservation {
+            state: AutoFishingEnterModeState {
+                initialized: true,
+                selected_bait: Some(AutoFishingBaitType::FruitPasteBait),
+                pitch_reset: false,
+            },
+            press_f_cooldown_elapsed: false,
+            click_white_confirm_cooldown_elapsed: true,
+            f_fishing_text_visible: false,
+            white_confirm_button_present: true,
+            exit_fishing_button_present: false,
+            overall_timeout_elapsed: false,
+            inferred_bait_after_confirm: None,
+            capture_size: Size::new(1920, 1080),
+        },
+        &rule,
+    )
+    .unwrap();
+
+    assert_eq!(
+        report.decision,
+        AutoFishingEnterModeDecisionKind::ClickWhiteConfirm
+    );
+    assert_eq!(report.next_state.selected_bait, None);
+    assert!(report.next_state.pitch_reset);
+}
+
+#[test]
+fn auto_fishing_rod_preprocess_matches_legacy_geometry_formula() {
+    let rule = default_auto_fishing_rod_rule();
+    let input = AutoFishingRodInput {
+        rod_x1: 440.0,
+        rod_x2: 584.0,
+        rod_y1: 260.0,
+        rod_y2: 340.0,
+        fish_x1: 620.0,
+        fish_x2: 700.0,
+        fish_y1: 250.0,
+        fish_y2: 310.0,
+        fish_label: 0,
+    };
+
+    let preprocess = preprocess_auto_fishing_rod_input(input, &rule).unwrap();
+
+    assert_auto_fishing_f64_near(preprocess.y0, 8.0562454932204943);
+    assert_auto_fishing_f64_near(preprocess.z0, 5.3529012345679021);
+    assert_auto_fishing_f64_near(preprocess.t, 0.64686595986993412);
+    assert_auto_fishing_f64_near(preprocess.u, 0.21333763852531798);
+    assert_auto_fishing_f64_near(preprocess.v, 0.011531764244611784);
+    assert_auto_fishing_f64_near(preprocess.h, 0.043244115917294185);
+
+    let tall_rod_input = AutoFishingRodInput {
+        rod_x1: 500.0,
+        rod_x2: 548.0,
+        rod_y1: 220.0,
+        rod_y2: 340.0,
+        fish_x1: 600.0,
+        fish_x2: 660.0,
+        fish_y1: 260.0,
+        fish_y2: 320.0,
+        fish_label: 0,
+    };
+    let tall_preprocess = preprocess_auto_fishing_rod_input(tall_rod_input, &rule).unwrap();
+
+    assert_auto_fishing_f64_near(tall_preprocess.y0, 0.2381145445105407);
+    assert_auto_fishing_f64_near(tall_preprocess.z0, 18.280880378731858);
+    assert_auto_fishing_f64_near(tall_preprocess.t, 671.64150449329327);
+    assert_auto_fishing_f64_near(tall_preprocess.u, 0.15279587624110613);
+    assert_auto_fishing_f64_near(tall_preprocess.v, -0.002882941061152946);
+    assert_auto_fishing_f64_near(tall_preprocess.h, 0.043244115917294185);
+}
+
+#[test]
+fn auto_fishing_rod_scores_and_state_match_legacy_rodnet_math() {
+    let rule = default_auto_fishing_rod_rule();
+    let input = AutoFishingRodInput {
+        rod_x1: 440.0,
+        rod_x2: 584.0,
+        rod_y1: 260.0,
+        rod_y2: 340.0,
+        fish_x1: 620.0,
+        fish_x2: 700.0,
+        fish_y1: 250.0,
+        fish_y2: 310.0,
+        fish_label: 0,
+    };
+
+    let report = compute_auto_fishing_rod_scores(input, &rule).unwrap();
+
+    assert_auto_fishing_f64_near(report.dist, 2.8885656807373761);
+    assert_auto_fishing_f64_near(report.logits[0], 5.4205512892531953);
+    assert_auto_fishing_f64_near(report.logits[1], 4.4136403771526416);
+    assert_auto_fishing_f64_near(report.logits[2], -3.1562494491880484);
+    assert_auto_fishing_f64_near(report.scores[0], -0.067685889465472604);
+    assert_auto_fishing_f64_near(report.scores[1], 0.26754790183109101);
+    assert_auto_fishing_f64_near(report.scores[2], 0.000137987634381576);
+    assert_eq!(
+        classify_auto_fishing_rod_state(input, &rule).unwrap(),
+        AutoFishingRodState::TooClose
+    );
+
+    let ready_input = AutoFishingRodInput {
+        fish_x1: 200.0,
+        fish_x2: 280.0,
+        fish_y1: 200.0,
+        fish_y2: 260.0,
+        ..input
+    };
+    let too_close_input = AutoFishingRodInput {
+        fish_x1: 240.0,
+        fish_x2: 320.0,
+        fish_y1: 320.0,
+        fish_y2: 380.0,
+        ..input
+    };
+    let too_far_input = AutoFishingRodInput {
+        fish_x1: 200.0,
+        fish_x2: 280.0,
+        fish_y1: 160.0,
+        fish_y2: 220.0,
+        ..input
+    };
+
+    assert_eq!(
+        classify_auto_fishing_rod_state(ready_input, &rule).unwrap(),
+        AutoFishingRodState::Ready
+    );
+    assert_eq!(
+        classify_auto_fishing_rod_state(too_close_input, &rule).unwrap(),
+        AutoFishingRodState::TooClose
+    );
+    assert_eq!(
+        classify_auto_fishing_rod_state(too_far_input, &rule).unwrap(),
+        AutoFishingRodState::TooFar
+    );
+}
+
+fn auto_fishing_candidate(
+    name: &str,
+    bait: AutoFishingBaitType,
+    rect: Rect,
+    confidence: f64,
+) -> AutoFishingTargetFishCandidate {
+    AutoFishingTargetFishCandidate {
+        fish_type_name: name.to_string(),
+        bait,
+        net_index: 0,
+        rect,
+        confidence,
+    }
+}
+
+#[test]
+fn auto_fishing_target_fish_selection_preserves_legacy_bait_distance_and_confidence_order() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let report = select_auto_fishing_throw_rod_target_fish(
+        AutoFishingTargetFishSelectionObservation {
+            selected_bait: Some(AutoFishingBaitType::FruitPasteBait),
+            throw_rod_no_bait_fish_failures: vec![AutoFishingBaitType::FakeFlyBait],
+            target_rect: Rect::new(90, 90, 20, 20).unwrap(),
+            fishes: vec![
+                auto_fishing_candidate(
+                    "wrong bait near",
+                    AutoFishingBaitType::FakeFlyBait,
+                    Rect::new(92, 90, 20, 20).unwrap(),
+                    0.99,
+                ),
+                auto_fishing_candidate(
+                    "fruit far high confidence",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(190, 90, 20, 20).unwrap(),
+                    0.99,
+                ),
+                auto_fishing_candidate(
+                    "fruit near low confidence",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(105, 90, 20, 20).unwrap(),
+                    0.60,
+                ),
+                auto_fishing_candidate(
+                    "fruit near high confidence",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(105, 90, 20, 20).unwrap(),
+                    0.90,
+                ),
+            ],
+        },
+        &plan.throw_rod_rule,
+    );
+
+    assert_eq!(report.ignored_baits, Vec::<AutoFishingBaitType>::new());
+    assert_eq!(report.eligible_indices, vec![1, 3, 2]);
+    assert_eq!(report.selected_index, Some(3));
+    assert_eq!(
+        report.selected_fish.unwrap().fish_type_name,
+        "fruit near high confidence"
+    );
+    assert_auto_fishing_f64_near(report.selected_distance.unwrap(), 15.0);
+}
+
+#[test]
+fn auto_fishing_target_fish_selection_ignores_failed_baits_and_missing_selection() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let fishes = vec![auto_fishing_candidate(
+        "ignored fruit",
+        AutoFishingBaitType::FruitPasteBait,
+        Rect::new(90, 90, 20, 20).unwrap(),
+        0.99,
+    )];
+
+    let ignored = select_auto_fishing_throw_rod_target_fish(
+        AutoFishingTargetFishSelectionObservation {
+            selected_bait: Some(AutoFishingBaitType::FruitPasteBait),
+            throw_rod_no_bait_fish_failures: vec![
+                AutoFishingBaitType::FakeFlyBait,
+                AutoFishingBaitType::FruitPasteBait,
+                AutoFishingBaitType::FruitPasteBait,
+            ],
+            target_rect: Rect::new(90, 90, 20, 20).unwrap(),
+            fishes: fishes.clone(),
+        },
+        &plan.throw_rod_rule,
+    );
+
+    assert_eq!(
+        ignored.ignored_baits,
+        vec![AutoFishingBaitType::FruitPasteBait]
+    );
+    assert!(ignored.eligible_indices.is_empty());
+    assert_eq!(ignored.selected_index, None);
+    assert_eq!(ignored.selected_fish, None);
+    assert_eq!(ignored.selected_distance, None);
+
+    let missing_bait = select_auto_fishing_throw_rod_target_fish(
+        AutoFishingTargetFishSelectionObservation {
+            selected_bait: None,
+            throw_rod_no_bait_fish_failures: Vec::new(),
+            target_rect: Rect::new(90, 90, 20, 20).unwrap(),
+            fishes,
+        },
+        &plan.throw_rod_rule,
+    );
+
+    assert!(missing_bait.eligible_indices.is_empty());
+    assert_eq!(missing_bait.selected_index, None);
+}
+
+#[test]
+fn auto_fishing_fishpond_availability_uses_choose_and_throw_rod_failure_ignores() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let report = evaluate_auto_fishing_fishpond_availability(
+        AutoFishingFishpondAvailabilityObservation {
+            choose_bait_failures: vec![
+                AutoFishingBaitType::FakeFlyBait,
+                AutoFishingBaitType::FakeFlyBait,
+            ],
+            throw_rod_no_bait_fish_failures: vec![
+                AutoFishingBaitType::FruitPasteBait,
+                AutoFishingBaitType::FruitPasteBait,
+            ],
+            fishes: vec![
+                auto_fishing_candidate(
+                    "fake fly ignored",
+                    AutoFishingBaitType::FakeFlyBait,
+                    Rect::new(10, 10, 20, 20).unwrap(),
+                    0.9,
+                ),
+                auto_fishing_candidate(
+                    "fruit ignored",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(40, 10, 20, 20).unwrap(),
+                    0.9,
+                ),
+                auto_fishing_candidate(
+                    "redrot available",
+                    AutoFishingBaitType::RedrotBait,
+                    Rect::new(70, 10, 20, 20).unwrap(),
+                    0.8,
+                ),
+            ],
+        },
+        &plan.choose_bait_rule,
+        &plan.throw_rod_rule,
+    );
+
+    assert_eq!(
+        report.choose_bait_ignored_baits,
+        vec![AutoFishingBaitType::FakeFlyBait]
+    );
+    assert_eq!(
+        report.throw_rod_ignored_baits,
+        vec![AutoFishingBaitType::FruitPasteBait]
+    );
+    assert_eq!(
+        report.available_baits,
+        vec![AutoFishingBaitType::RedrotBait]
+    );
+    assert!(report.has_available_fish);
+}
+
+#[test]
+fn auto_fishing_bait_selection_keeps_current_or_selects_most_common_non_failed_bait() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let keep_current = choose_auto_fishing_bait_for_fishpond(
+        AutoFishingBaitSelectionObservation {
+            current_selected_bait: Some(AutoFishingBaitType::FakeFlyBait),
+            choose_bait_failures: vec![
+                AutoFishingBaitType::FruitPasteBait,
+                AutoFishingBaitType::FruitPasteBait,
+            ],
+            fishes: vec![
+                auto_fishing_candidate(
+                    "current bait fish",
+                    AutoFishingBaitType::FakeFlyBait,
+                    Rect::new(10, 10, 20, 20).unwrap(),
+                    0.8,
+                ),
+                auto_fishing_candidate(
+                    "more fruit fish",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(40, 10, 20, 20).unwrap(),
+                    0.9,
+                ),
+            ],
+        },
+        &plan.choose_bait_rule,
+    );
+
+    assert!(keep_current.keeps_current_bait);
+    assert_eq!(
+        keep_current.selected_bait,
+        Some(AutoFishingBaitType::FakeFlyBait)
+    );
+    assert!(keep_current.eligible_bait_counts.is_empty());
+
+    let choose_most_common = choose_auto_fishing_bait_for_fishpond(
+        AutoFishingBaitSelectionObservation {
+            current_selected_bait: None,
+            choose_bait_failures: vec![
+                AutoFishingBaitType::FakeFlyBait,
+                AutoFishingBaitType::FakeFlyBait,
+            ],
+            fishes: vec![
+                auto_fishing_candidate(
+                    "ignored fake fly 1",
+                    AutoFishingBaitType::FakeFlyBait,
+                    Rect::new(10, 10, 20, 20).unwrap(),
+                    0.9,
+                ),
+                auto_fishing_candidate(
+                    "fruit 1",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(40, 10, 20, 20).unwrap(),
+                    0.9,
+                ),
+                auto_fishing_candidate(
+                    "redrot 1",
+                    AutoFishingBaitType::RedrotBait,
+                    Rect::new(70, 10, 20, 20).unwrap(),
+                    0.7,
+                ),
+                auto_fishing_candidate(
+                    "fruit 2",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(100, 10, 20, 20).unwrap(),
+                    0.6,
+                ),
+            ],
+        },
+        &plan.choose_bait_rule,
+    );
+
+    assert!(!choose_most_common.keeps_current_bait);
+    assert_eq!(
+        choose_most_common.ignored_baits,
+        vec![AutoFishingBaitType::FakeFlyBait]
+    );
+    assert_eq!(
+        choose_most_common.eligible_bait_counts,
+        vec![
+            AutoFishingBaitCount {
+                bait: AutoFishingBaitType::FruitPasteBait,
+                count: 2
+            },
+            AutoFishingBaitCount {
+                bait: AutoFishingBaitType::RedrotBait,
+                count: 1
+            }
+        ]
+    );
+    assert_eq!(
+        choose_most_common.selected_bait,
+        Some(AutoFishingBaitType::FruitPasteBait)
+    );
+
+    let tie = choose_auto_fishing_bait_for_fishpond(
+        AutoFishingBaitSelectionObservation {
+            current_selected_bait: None,
+            choose_bait_failures: Vec::new(),
+            fishes: vec![
+                auto_fishing_candidate(
+                    "redrot first",
+                    AutoFishingBaitType::RedrotBait,
+                    Rect::new(10, 10, 20, 20).unwrap(),
+                    0.5,
+                ),
+                auto_fishing_candidate(
+                    "fruit second",
+                    AutoFishingBaitType::FruitPasteBait,
+                    Rect::new(40, 10, 20, 20).unwrap(),
+                    0.9,
+                ),
+            ],
+        },
+        &plan.choose_bait_rule,
+    );
+
+    assert_eq!(tie.selected_bait, Some(AutoFishingBaitType::RedrotBait));
+}
+
+#[test]
+fn auto_fishing_delayed_template_checks_preserve_legacy_one_shot_failure_rules() {
+    assert_eq!(
+        reduce_auto_fishing_delayed_template_check(AutoFishingDelayedTemplateCheckObservation {
+            delay_elapsed: false,
+            has_checked: false,
+            failure_template_present: true,
+        }),
+        AutoFishingDelayedTemplateCheckReport {
+            next_has_checked: false,
+            status: AutoFishingBehaviorStatus::Running,
+        }
+    );
+    assert_eq!(
+        reduce_auto_fishing_delayed_template_check(AutoFishingDelayedTemplateCheckObservation {
+            delay_elapsed: true,
+            has_checked: false,
+            failure_template_present: true,
+        }),
+        AutoFishingDelayedTemplateCheckReport {
+            next_has_checked: false,
+            status: AutoFishingBehaviorStatus::Failed,
+        }
+    );
+    assert_eq!(
+        reduce_auto_fishing_delayed_template_check(AutoFishingDelayedTemplateCheckObservation {
+            delay_elapsed: true,
+            has_checked: false,
+            failure_template_present: false,
+        }),
+        AutoFishingDelayedTemplateCheckReport {
+            next_has_checked: true,
+            status: AutoFishingBehaviorStatus::Running,
+        }
+    );
+    assert_eq!(
+        reduce_auto_fishing_delayed_template_check(AutoFishingDelayedTemplateCheckObservation {
+            delay_elapsed: true,
+            has_checked: true,
+            failure_template_present: true,
+        }),
+        AutoFishingDelayedTemplateCheckReport {
+            next_has_checked: true,
+            status: AutoFishingBehaviorStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn auto_fishing_fish_bite_timeout_preserves_two_stage_click_then_failure() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "autoFishingConfig": {
+                "autoThrowRodTimeOut": 15
+            }
+        }),
+    )));
+
+    let waiting = reduce_auto_fishing_fish_bite_timeout(
+        AutoFishingFishBiteTimeoutObservation {
+            timeout_elapsed: false,
+            left_button_clicked: false,
+        },
+        &plan.check_result_rule,
+    );
+    assert_eq!(waiting.status, AutoFishingBehaviorStatus::Running);
+    assert!(!waiting.next_left_button_clicked);
+    assert!(waiting.input_events.is_empty());
+    assert_eq!(waiting.reschedule_after_ms, None);
+
+    let first_timeout = reduce_auto_fishing_fish_bite_timeout(
+        AutoFishingFishBiteTimeoutObservation {
+            timeout_elapsed: true,
+            left_button_clicked: false,
+        },
+        &plan.check_result_rule,
+    );
+    assert_eq!(first_timeout.status, AutoFishingBehaviorStatus::Running);
+    assert!(first_timeout.next_left_button_clicked);
+    assert_eq!(
+        first_timeout.input_events,
+        vec![
+            InputEvent::MouseButtonDown {
+                button: MouseButton::Left
+            },
+            InputEvent::MouseButtonUp {
+                button: MouseButton::Left
+            }
+        ]
+    );
+    assert_eq!(first_timeout.reschedule_after_ms, Some(2_000));
+
+    let second_timeout = reduce_auto_fishing_fish_bite_timeout(
+        AutoFishingFishBiteTimeoutObservation {
+            timeout_elapsed: true,
+            left_button_clicked: true,
+        },
+        &plan.check_result_rule,
+    );
+    assert_eq!(second_timeout.status, AutoFishingBehaviorStatus::Failed);
+    assert!(second_timeout.input_events.is_empty());
+    assert_eq!(second_timeout.reschedule_after_ms, None);
+}
+
+#[test]
+fn auto_fishing_fish_bite_decision_preserves_word_image_ocr_priority_and_cleanup() {
+    let word = decide_auto_fishing_fish_bite(AutoFishingFishBiteObservation {
+        word_block_detected: true,
+        lift_rod_button_present: true,
+        ocr_text: Some("无关".to_string()),
+        localized_get_bite_text: "上钩".to_string(),
+    });
+    assert_eq!(word.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(word.method, Some(AutoFishingFishBiteMethod::WordBlock));
+    assert!(word.removes_fish_bite_tips_overlay);
+
+    let image = decide_auto_fishing_fish_bite(AutoFishingFishBiteObservation {
+        word_block_detected: false,
+        lift_rod_button_present: true,
+        ocr_text: Some("上 钩".to_string()),
+        localized_get_bite_text: "上钩".to_string(),
+    });
+    assert_eq!(image.method, Some(AutoFishingFishBiteMethod::LiftRodButton));
+
+    let ocr = decide_auto_fishing_fish_bite(AutoFishingFishBiteObservation {
+        word_block_detected: false,
+        lift_rod_button_present: false,
+        ocr_text: Some(" 已  上 钩 ".to_string()),
+        localized_get_bite_text: "上钩".to_string(),
+    });
+    assert_eq!(ocr.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(ocr.method, Some(AutoFishingFishBiteMethod::Ocr));
+    assert_eq!(
+        ocr.input_events,
+        vec![
+            InputEvent::MouseButtonDown {
+                button: MouseButton::Left
+            },
+            InputEvent::MouseButtonUp {
+                button: MouseButton::Left
+            }
+        ]
+    );
+
+    let none = decide_auto_fishing_fish_bite(AutoFishingFishBiteObservation {
+        word_block_detected: false,
+        lift_rod_button_present: false,
+        ocr_text: Some("还没有".to_string()),
+        localized_get_bite_text: "上钩".to_string(),
+    });
+    assert_eq!(none.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(none.method, None);
+    assert!(!none.removes_fish_bite_tips_overlay);
+    assert!(none.input_events.is_empty());
+}
+
+#[test]
+fn auto_fishing_fish_box_area_resolver_preserves_timeout_waiting_and_height_mismatch() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let valid_rects = vec![
+        Rect::new(400, 100, 30, 40).unwrap(),
+        Rect::new(700, 100, 300, 40).unwrap(),
+    ];
+
+    let timeout = resolve_auto_fishing_fish_box_area(
+        AutoFishingFishBoxAreaObservation {
+            timeout_elapsed: true,
+            capture_size: Size::new(1920, 1080),
+            top_rects: valid_rects.clone(),
+        },
+        &plan.check_result_rule,
+    );
+    assert_eq!(timeout.status, AutoFishingBehaviorStatus::Failed);
+    assert_eq!(
+        timeout.decision,
+        AutoFishingFishBoxAreaDecisionKind::Timeout
+    );
+    assert_eq!(timeout.fish_box_rect, None);
+
+    for rects in [
+        Vec::new(),
+        vec![Rect::new(400, 100, 30, 40).unwrap()],
+        vec![
+            Rect::new(400, 100, 30, 40).unwrap(),
+            Rect::new(700, 100, 300, 40).unwrap(),
+            Rect::new(850, 100, 10, 40).unwrap(),
+        ],
+    ] {
+        let waiting = resolve_auto_fishing_fish_box_area(
+            AutoFishingFishBoxAreaObservation {
+                timeout_elapsed: false,
+                capture_size: Size::new(1920, 1080),
+                top_rects: rects,
+            },
+            &plan.check_result_rule,
+        );
+        assert_eq!(waiting.status, AutoFishingBehaviorStatus::Running);
+        assert_eq!(
+            waiting.decision,
+            AutoFishingFishBoxAreaDecisionKind::WaitingForTwoRects
+        );
+    }
+
+    let mismatch = resolve_auto_fishing_fish_box_area(
+        AutoFishingFishBoxAreaObservation {
+            timeout_elapsed: false,
+            capture_size: Size::new(1920, 1080),
+            top_rects: vec![
+                Rect::new(400, 100, 30, 40).unwrap(),
+                Rect::new(700, 100, 300, 51).unwrap(),
+            ],
+        },
+        &plan.check_result_rule,
+    );
+    assert_eq!(
+        mismatch.decision,
+        AutoFishingFishBoxAreaDecisionKind::HeightMismatch
+    );
+    assert!(mismatch.error_screenshot_recommended);
+}
+
+#[test]
+fn auto_fishing_fish_box_area_resolver_detects_box_and_rejects_invalid_geometry() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let detected = resolve_auto_fishing_fish_box_area(
+        AutoFishingFishBoxAreaObservation {
+            timeout_elapsed: false,
+            capture_size: Size::new(1920, 1080),
+            top_rects: vec![
+                Rect::new(700, 100, 300, 40).unwrap(),
+                Rect::new(400, 100, 30, 40).unwrap(),
+            ],
+        },
+        &plan.check_result_rule,
+    );
+
+    assert_eq!(detected.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(
+        detected.decision,
+        AutoFishingFishBoxAreaDecisionKind::Detected
+    );
+    assert_eq!(
+        detected.cursor_rect,
+        Some(Rect::new(400, 100, 30, 40).unwrap())
+    );
+    assert_eq!(
+        detected.target_rect,
+        Some(Rect::new(700, 100, 300, 40).unwrap())
+    );
+    assert_eq!(
+        detected.fish_box_rect,
+        Some(Rect::new(360, 90, 1200, 60).unwrap())
+    );
+
+    for rects in [
+        vec![
+            Rect::new(400, 100, 30, 40).unwrap(),
+            Rect::new(300, 100, 300, 40).unwrap(),
+        ],
+        vec![
+            Rect::new(950, 100, 30, 40).unwrap(),
+            Rect::new(1000, 100, 300, 40).unwrap(),
+        ],
+        vec![
+            Rect::new(400, 100, 30, 40).unwrap(),
+            Rect::new(500, 100, 300, 40).unwrap(),
+        ],
+        vec![
+            Rect::new(400, 100, 30, 40).unwrap(),
+            Rect::new(700, 100, 600, 40).unwrap(),
+        ],
+    ] {
+        let invalid = resolve_auto_fishing_fish_box_area(
+            AutoFishingFishBoxAreaObservation {
+                timeout_elapsed: false,
+                capture_size: Size::new(1920, 1080),
+                top_rects: rects,
+            },
+            &plan.check_result_rule,
+        );
+        assert_eq!(invalid.status, AutoFishingBehaviorStatus::Running);
+        assert_eq!(
+            invalid.decision,
+            AutoFishingFishBoxAreaDecisionKind::InvalidGeometry
+        );
+        assert_eq!(invalid.fish_box_rect, None);
+    }
+}
+
+#[test]
+fn auto_fishing_pull_bar_reducer_preserves_two_rect_press_release_and_invalid_target() {
+    let idle = AutoFishingPullBarState {
+        previous_left_button_down: false,
+        no_detection_armed: false,
+    };
+
+    let press = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: idle,
+        fish_bar_rects: vec![
+            Rect::new(20, 10, 10, 30).unwrap(),
+            Rect::new(50, 10, 200, 30).unwrap(),
+        ],
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(press.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        press.decision,
+        AutoFishingPullBarDecisionKind::PressLeftButton
+    );
+    assert!(press.next_state.previous_left_button_down);
+    assert_eq!(
+        press.input_events,
+        vec![InputEvent::MouseButtonDown {
+            button: MouseButton::Left
+        }]
+    );
+
+    let release = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: AutoFishingPullBarState {
+            previous_left_button_down: true,
+            no_detection_armed: true,
+        },
+        fish_bar_rects: vec![
+            Rect::new(260, 10, 10, 30).unwrap(),
+            Rect::new(50, 10, 200, 30).unwrap(),
+        ],
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(
+        release.decision,
+        AutoFishingPullBarDecisionKind::ReleaseLeftButton
+    );
+    assert!(!release.next_state.previous_left_button_down);
+    assert!(!release.next_state.no_detection_armed);
+    assert_eq!(
+        release.input_events,
+        vec![InputEvent::MouseButtonUp {
+            button: MouseButton::Left
+        }]
+    );
+
+    let invalid = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: AutoFishingPullBarState {
+            previous_left_button_down: true,
+            no_detection_armed: true,
+        },
+        fish_bar_rects: vec![
+            Rect::new(20, 10, 20, 30).unwrap(),
+            Rect::new(50, 10, 120, 30).unwrap(),
+        ],
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(
+        invalid.decision,
+        AutoFishingPullBarDecisionKind::InvalidTwoRectTarget
+    );
+    assert!(invalid.next_state.previous_left_button_down);
+    assert!(invalid.next_state.no_detection_armed);
+    assert!(invalid.input_events.is_empty());
+}
+
+#[test]
+fn auto_fishing_pull_bar_reducer_preserves_three_rect_midpoint_rule() {
+    let pressed = AutoFishingPullBarState {
+        previous_left_button_down: true,
+        no_detection_armed: false,
+    };
+
+    let release = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: pressed,
+        fish_bar_rects: vec![
+            Rect::new(20, 10, 80, 30).unwrap(),
+            Rect::new(120, 10, 10, 30).unwrap(),
+            Rect::new(170, 10, 40, 30).unwrap(),
+        ],
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(
+        release.decision,
+        AutoFishingPullBarDecisionKind::ReleaseLeftButton
+    );
+
+    let press = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: AutoFishingPullBarState {
+            previous_left_button_down: false,
+            no_detection_armed: true,
+        },
+        fish_bar_rects: vec![
+            Rect::new(170, 10, 120, 30).unwrap(),
+            Rect::new(120, 10, 10, 30).unwrap(),
+            Rect::new(20, 10, 80, 30).unwrap(),
+            Rect::new(400, 10, 20, 5).unwrap(),
+        ],
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(
+        press.decision,
+        AutoFishingPullBarDecisionKind::PressLeftButton
+    );
+    assert!(press.next_state.previous_left_button_down);
+    assert_eq!(press.considered_rects.len(), 3);
+    assert!(!press.next_state.no_detection_armed);
+}
+
+#[test]
+fn auto_fishing_pull_bar_reducer_preserves_no_detection_grace_and_completion_release() {
+    let idle = AutoFishingPullBarState {
+        previous_left_button_down: false,
+        no_detection_armed: false,
+    };
+
+    let armed = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: idle,
+        fish_bar_rects: Vec::new(),
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(
+        armed.decision,
+        AutoFishingPullBarDecisionKind::ArmNoDetectionGrace
+    );
+    assert_eq!(armed.status, AutoFishingBehaviorStatus::Running);
+    assert!(armed.next_state.no_detection_armed);
+    assert!(armed.clears_bar_overlay);
+
+    let waiting = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: armed.next_state,
+        fish_bar_rects: Vec::new(),
+        no_detection_grace_elapsed: false,
+    });
+    assert_eq!(
+        waiting.decision,
+        AutoFishingPullBarDecisionKind::WaitNoDetectionGrace
+    );
+    assert_eq!(waiting.status, AutoFishingBehaviorStatus::Running);
+
+    let completed = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+        state: AutoFishingPullBarState {
+            previous_left_button_down: true,
+            no_detection_armed: true,
+        },
+        fish_bar_rects: Vec::new(),
+        no_detection_grace_elapsed: true,
+    });
+    assert_eq!(
+        completed.decision,
+        AutoFishingPullBarDecisionKind::CompleteNoDetection
+    );
+    assert_eq!(completed.status, AutoFishingBehaviorStatus::Succeeded);
+    assert!(completed.removes_fish_box_overlay);
+    assert!(completed.clears_bar_overlay);
+    assert!(!completed.next_state.previous_left_button_down);
+    assert_eq!(
+        completed.input_events,
+        vec![InputEvent::MouseButtonUp {
+            button: MouseButton::Left
+        }]
+    );
+}
+
+#[test]
+fn auto_fishing_throw_rod_geometry_resolves_legacy_normalized_input_and_scale_cap() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+
+    let geometry = resolve_auto_fishing_throw_rod_geometry(
+        AutoFishingThrowRodGeometryObservation {
+            capture_size: Size::new(1024, 576),
+            rod_rect: Rect::new(440, 260, 144, 80).unwrap(),
+            fish_rect: Rect::new(620, 250, 80, 60).unwrap(),
+            fish_label: 0,
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(geometry.scale_size, Size::new(1024, 576));
+    assert_eq!(
+        geometry.rod_input,
+        AutoFishingRodInput {
+            rod_x1: 440.0,
+            rod_x2: 584.0,
+            rod_y1: 260.0,
+            rod_y2: 340.0,
+            fish_x1: 620.0,
+            fish_x2: 700.0,
+            fish_y1: 250.0,
+            fish_y2: 310.0,
+            fish_label: 0,
+        }
+    );
+    assert_auto_fishing_f64_near(geometry.delta_x, 148.0);
+    assert_auto_fishing_f64_near(geometry.delta_y, -20.0);
+    assert_auto_fishing_f64_near(geometry.distance, 149.34523762075577);
+
+    let scaled = resolve_auto_fishing_throw_rod_geometry(
+        AutoFishingThrowRodGeometryObservation {
+            capture_size: Size::new(2560, 1440),
+            rod_rect: Rect::new(825, 488, 270, 150).unwrap(),
+            fish_rect: Rect::new(1163, 469, 150, 113).unwrap(),
+            fish_label: 0,
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(scaled.scale_size, Size::new(1920, 1080));
+    assert_auto_fishing_f64_near(scaled.rod_input.rod_x1, 440.0);
+    assert_auto_fishing_f64_near(scaled.rod_input.rod_x2, 584.0);
+}
+
+#[test]
+fn auto_fishing_throw_rod_adjustment_preserves_legacy_ready_close_far_and_sleep() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let input = AutoFishingRodInput {
+        rod_x1: 440.0,
+        rod_x2: 584.0,
+        rod_y1: 260.0,
+        rod_y2: 340.0,
+        fish_x1: 620.0,
+        fish_x2: 700.0,
+        fish_y1: 250.0,
+        fish_y2: 310.0,
+        fish_label: 0,
+    };
+    let base_observation = AutoFishingThrowRodAdjustmentObservation {
+        rod_input: input,
+        classification: AutoFishingThrowRodClassification::Ready,
+        capture_size: Size::new(1920, 1080),
+        random_sample: None,
+    };
+
+    let ready = plan_auto_fishing_throw_rod_adjustment(
+        AutoFishingThrowRodAdjustmentObservation {
+            classification: AutoFishingRodState::Ready.into(),
+            ..base_observation
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(ready.kind, AutoFishingThrowRodAdjustmentKind::ReleaseRod);
+    assert_eq!(ready.status, AutoFishingThrowRodAdjustmentStatus::Succeeded);
+    assert_auto_fishing_f64_near(ready.delta_x, 148.0);
+    assert_auto_fishing_f64_near(ready.delta_y, -20.0);
+    assert_auto_fishing_f64_near(ready.distance, 149.34523762075577);
+    assert_eq!(
+        ready.input_events,
+        vec![InputEvent::MouseButtonUp {
+            button: MouseButton::Left
+        }]
+    );
+    assert_eq!(ready.sleep_ms, None);
+
+    let too_close = plan_auto_fishing_throw_rod_adjustment(
+        AutoFishingThrowRodAdjustmentObservation {
+            classification: AutoFishingThrowRodClassification::TooClose,
+            ..base_observation
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(
+        too_close.kind,
+        AutoFishingThrowRodAdjustmentKind::MoveAwayFromFish
+    );
+    assert_eq!(
+        too_close.status,
+        AutoFishingThrowRodAdjustmentStatus::Running
+    );
+    assert_eq!(
+        too_close.input_events,
+        vec![InputEvent::MouseMoveRelative { dx: -19, dy: 6 }]
+    );
+    assert_eq!(too_close.sleep_ms, Some(149));
+
+    let too_far = plan_auto_fishing_throw_rod_adjustment(
+        AutoFishingThrowRodAdjustmentObservation {
+            classification: AutoFishingRodState::TooFar.into(),
+            ..base_observation
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(
+        too_far.kind,
+        AutoFishingThrowRodAdjustmentKind::MoveTowardFish
+    );
+    assert_eq!(
+        too_far.input_events,
+        vec![InputEvent::MouseMoveRelative { dx: 98, dy: -30 }]
+    );
+    assert_eq!(too_far.sleep_ms, Some(149));
+
+    let unknown = plan_auto_fishing_throw_rod_adjustment(
+        AutoFishingThrowRodAdjustmentObservation {
+            classification: AutoFishingThrowRodClassification::Unknown(42),
+            ..base_observation
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(unknown.kind, AutoFishingThrowRodAdjustmentKind::Noop);
+    assert_eq!(unknown.status, AutoFishingThrowRodAdjustmentStatus::Running);
+    assert!(unknown.input_events.is_empty());
+    assert_eq!(unknown.sleep_ms, Some(149));
+}
+
+#[test]
+fn auto_fishing_throw_rod_adjustment_preserves_failed_random_move_integer_math() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let input = AutoFishingRodInput {
+        rod_x1: 440.0,
+        rod_x2: 584.0,
+        rod_y1: 260.0,
+        rod_y2: 340.0,
+        fish_x1: 620.0,
+        fish_x2: 700.0,
+        fish_y1: 250.0,
+        fish_y2: 310.0,
+        fish_label: 0,
+    };
+
+    let failed = plan_auto_fishing_throw_rod_adjustment(
+        AutoFishingThrowRodAdjustmentObservation {
+            rod_input: input,
+            classification: AutoFishingThrowRodClassification::Failed,
+            capture_size: Size::new(1920, 1080),
+            random_sample: Some(AutoFishingRandomMoveSample {
+                random_x: 1200,
+                random_y: 500,
+            }),
+        },
+        &plan.throw_rod_rule,
+    )
+    .unwrap();
+
+    assert_eq!(
+        failed.kind,
+        AutoFishingThrowRodAdjustmentKind::FailedRandomMove
+    );
+    assert_eq!(failed.status, AutoFishingThrowRodAdjustmentStatus::Running);
+    assert_eq!(
+        failed.input_events,
+        vec![InputEvent::MouseMoveRelative { dx: -12, dy: 3 }]
+    );
+    assert_eq!(failed.sleep_ms, Some(149));
+
+    assert_eq!(
+        plan_auto_fishing_throw_rod_adjustment(
+            AutoFishingThrowRodAdjustmentObservation {
+                random_sample: None,
+                ..AutoFishingThrowRodAdjustmentObservation {
+                    rod_input: input,
+                    classification: AutoFishingThrowRodClassification::Failed,
+                    capture_size: Size::new(1920, 1080),
+                    random_sample: Some(AutoFishingRandomMoveSample {
+                        random_x: 1200,
+                        random_y: 500,
+                    }),
+                }
+            },
+            &plan.throw_rod_rule,
+        )
+        .unwrap_err(),
+        AutoFishingThrowRodAdjustmentError::MissingRandomSample
+    );
+
+    assert_eq!(
+        plan_auto_fishing_throw_rod_adjustment(
+            AutoFishingThrowRodAdjustmentObservation {
+                capture_size: Size::new(0, 1080),
+                ..AutoFishingThrowRodAdjustmentObservation {
+                    rod_input: input,
+                    classification: AutoFishingThrowRodClassification::Failed,
+                    capture_size: Size::new(1920, 1080),
+                    random_sample: Some(AutoFishingRandomMoveSample {
+                        random_x: 1200,
+                        random_y: 500,
+                    }),
+                }
+            },
+            &plan.throw_rod_rule,
+        )
+        .unwrap_err(),
+        AutoFishingThrowRodAdjustmentError::InvalidCaptureSize
+    );
+}
+
+#[test]
+fn auto_fishing_throw_rod_adjustment_rejects_zero_distance_too_close() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+    let input = AutoFishingRodInput {
+        rod_x1: 440.0,
+        rod_x2: 584.0,
+        rod_y1: 260.0,
+        rod_y2: 340.0,
+        fish_x1: 440.0,
+        fish_x2: 584.0,
+        fish_y1: 260.0,
+        fish_y2: 340.0,
+        fish_label: 0,
+    };
+
+    assert_eq!(
+        plan_auto_fishing_throw_rod_adjustment(
+            AutoFishingThrowRodAdjustmentObservation {
+                rod_input: input,
+                classification: AutoFishingThrowRodClassification::TooClose,
+                capture_size: Size::new(1920, 1080),
+                random_sample: None,
+            },
+            &plan.throw_rod_rule,
+        )
+        .unwrap_err(),
+        AutoFishingThrowRodAdjustmentError::NonFiniteComputation
+    );
+}
+
+#[test]
+fn auto_fishing_quit_mode_decision_preserves_initial_success_confirm_and_escape_branches() {
+    let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+
+    let initial = decide_auto_fishing_quit_mode(
+        AutoFishingQuitModeObservation {
+            first_tick: true,
+            f_fishing_text_visible: true,
+            black_confirm_button_present: true,
+        },
+        &plan.quit_rule,
+    );
+    assert_eq!(initial.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        initial.decision,
+        AutoFishingQuitModeDecisionKind::InitialWait
+    );
+    assert_eq!(initial.sleep_ms, None);
+    assert!(initial.input_events.is_empty());
+
+    let success = decide_auto_fishing_quit_mode(
+        AutoFishingQuitModeObservation {
+            first_tick: false,
+            f_fishing_text_visible: true,
+            black_confirm_button_present: true,
+        },
+        &plan.quit_rule,
+    );
+    assert_eq!(success.status, AutoFishingBehaviorStatus::Succeeded);
+    assert_eq!(
+        success.decision,
+        AutoFishingQuitModeDecisionKind::AlreadyExited
+    );
+    assert!(!success.clicks_black_confirm);
+    assert_eq!(success.sleep_ms, None);
+
+    let confirm = decide_auto_fishing_quit_mode(
+        AutoFishingQuitModeObservation {
+            first_tick: false,
+            f_fishing_text_visible: false,
+            black_confirm_button_present: true,
+        },
+        &plan.quit_rule,
+    );
+    assert_eq!(confirm.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        confirm.decision,
+        AutoFishingQuitModeDecisionKind::ClickBlackConfirm
+    );
+    assert!(confirm.clicks_black_confirm);
+    assert_eq!(confirm.sleep_ms, Some(1_000));
+    assert!(confirm.input_events.is_empty());
+
+    let escape = decide_auto_fishing_quit_mode(
+        AutoFishingQuitModeObservation {
+            first_tick: false,
+            f_fishing_text_visible: false,
+            black_confirm_button_present: false,
+        },
+        &plan.quit_rule,
+    );
+    assert_eq!(escape.status, AutoFishingBehaviorStatus::Running);
+    assert_eq!(
+        escape.decision,
+        AutoFishingQuitModeDecisionKind::PressEscape
+    );
+    assert_eq!(
+        escape.input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: 0x1B,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: 0x1B,
+                extended: None
+            }
+        ]
+    );
+    assert_eq!(escape.sleep_ms, Some(2_000));
+}
+
+#[test]
+fn auto_fishing_rodnet_rejects_invalid_label_shape_and_degenerate_geometry() {
+    let rule = default_auto_fishing_rod_rule();
+    let input = AutoFishingRodInput {
+        rod_x1: 440.0,
+        rod_x2: 584.0,
+        rod_y1: 260.0,
+        rod_y2: 340.0,
+        fish_x1: 620.0,
+        fish_x2: 700.0,
+        fish_y1: 250.0,
+        fish_y2: 310.0,
+        fish_label: 0,
+    };
+
+    assert_eq!(
+        compute_auto_fishing_rod_scores(
+            AutoFishingRodInput {
+                fish_label: 99,
+                ..input
+            },
+            &rule
+        )
+        .unwrap_err(),
+        AutoFishingRodNetError::InvalidFishLabel {
+            fish_label: 99,
+            label_count: 11
+        }
+    );
+
+    let mut malformed_rule = rule.clone();
+    malformed_rule.offset_values.pop();
+    assert_eq!(
+        compute_auto_fishing_rod_scores(input, &malformed_rule).unwrap_err(),
+        AutoFishingRodNetError::InvalidParameterShape
+    );
+
+    assert_eq!(
+        compute_auto_fishing_rod_scores(
+            AutoFishingRodInput {
+                rod_x2: 440.0,
+                rod_y2: 260.0,
+                ..input
+            },
+            &rule
+        )
+        .unwrap_err(),
+        AutoFishingRodNetError::NonFiniteComputation
+    );
+}
+
+#[test]
+fn skill_cd_plan_preserves_legacy_context_ocr_input_fallback_and_overlay_rules() {
+    let defaults = SkillCdConfig::default();
+    assert!(!defaults.enabled);
+    assert!(defaults.custom_cd_list.is_empty());
+    assert!(!defaults.trigger_on_skill_use);
+    assert!(!defaults.hide_when_zero);
+    assert_eq!(defaults.p_x, 1520.0);
+    assert_eq!(defaults.p_y, 245.0);
+    assert_eq!(defaults.gap, 91.2);
+    assert_eq!(defaults.scale, 1.0);
+    assert_eq!(defaults.background_normal_color, "#FFFFFFFF");
+    assert_eq!(defaults.text_normal_color, "#DA4A23FF");
+    assert_eq!(defaults.background_ready_color, "#FFFFFFFF");
+    assert_eq!(defaults.text_ready_color, "#5DCC17FF");
+
+    let config = SkillCdExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "triggerInterval": 60,
+        "skillCdConfig": {
+            "enabled": true,
+            "customCdList": [
+                { "roleName": "钟离", "cdValueText": "12.5" },
+                { "roleName": "纳西妲", "cdValueText": "" },
+                { "roleName": "", "cdValueText": "9" },
+                { "roleName": "钟离", "cdValueText": "13" }
+            ],
+            "triggerOnSkillUse": true,
+            "hideWhenZero": true,
+            "pX": -5.0,
+            "pY": 2000.0,
+            "gap": 250.0,
+            "scale": 12.0,
+            "backgroundNormalColor": "",
+            "textNormalColor": "",
+            "backgroundReadyColor": "",
+            "textReadyColor": ""
+        }
+    })));
+    let plan = plan_skill_cd(config);
+
+    assert_eq!(plan.task_key, SKILL_CD_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert!(plan.config_rule.enabled);
+    assert!(plan.config_rule.trigger_on_skill_use);
+    assert!(plan.config_rule.hide_when_zero);
+    assert_eq!(plan.config_rule.p_x, 0.0);
+    assert_eq!(plan.config_rule.p_y, 1080.0);
+    assert_eq!(plan.config_rule.gap, 200.0);
+    assert_eq!(plan.config_rule.scale, 10.0);
+    assert_eq!(plan.config_rule.background_normal_color, "#FFFFFFFF");
+    assert_eq!(plan.config_rule.text_normal_color, "#DA4A23FF");
+    assert_eq!(plan.config_rule.background_ready_color, "#FFFFFFFF");
+    assert_eq!(plan.config_rule.text_ready_color, "#5DCC17FF");
+    assert_eq!(plan.config_rule.custom_cd_rules.len(), 2);
+    assert_eq!(plan.config_rule.custom_cd_rules[0].role_name, "钟离");
+    assert_eq!(plan.config_rule.custom_cd_rules[0].cd_value, Some(12.5));
+    assert_eq!(plan.config_rule.custom_cd_rules[1].role_name, "纳西妲");
+    assert_eq!(plan.config_rule.custom_cd_rules[1].cd_value, None);
+
+    assert_eq!(plan.clamp_rule.p_x.min, 0.0);
+    assert_eq!(plan.clamp_rule.p_x.max, 1920.0);
+    assert_eq!(plan.clamp_rule.p_y.max, 1080.0);
+    assert_eq!(plan.clamp_rule.gap.max, 200.0);
+    assert_eq!(plan.clamp_rule.scale.max, 10.0);
+    assert!(plan.clamp_rule.blank_color_fallbacks_to_defaults);
+    assert_eq!(
+        plan.context_rule.accepted_contexts,
+        vec![SkillCdGameContext::MainUi, SkillCdGameContext::Domain]
+    );
+    assert_eq!(plan.context_rule.leave_debounce_ms, 800);
+    assert_eq!(plan.context_rule.enter_stabilization_ms, 500);
+    assert!(plan.context_rule.multi_game_auto_disables_trigger);
+    assert!(plan.context_rule.disabled_clears_overlay);
+    assert!(plan.context_rule.leave_context_clears_frame_cache);
+
+    assert!(plan.team_sync_rule.sync_on_context_enter);
+    assert_eq!(plan.team_sync_rule.initial_delay_ms, 500);
+    assert_eq!(plan.team_sync_rule.recent_index_press_delay_ms, 1_100);
+    assert!(plan.team_sync_rule.require_initialized_combat_scenes);
+    assert!(plan.team_sync_rule.reset_cds_when_team_changes);
+    assert_eq!(plan.team_sync_rule.overlay_requires_exact_avatar_count, 4);
+
+    assert_eq!(
+        plan.input_rule.elemental_skill_binding_source,
+        "KeyBindingsConfig.ElementalSkill"
+    );
+    assert_eq!(plan.input_rule.digit_keys, vec!["1", "2", "3", "4"]);
+    assert!(plan.input_rule.tracks_key_down_edges);
+    assert_eq!(plan.input_rule.skill_use_recent_window_ms, 1_100);
+    assert_eq!(
+        plan.input_rule.frame_source,
+        SkillCdFrameSource::PenultimateImageThenLastImage
+    );
+
+    assert_eq!(plan.cooldown_rule.slot_count, 4);
+    assert_eq!(plan.cooldown_rule.countdown_max_delta_seconds, 5.0);
+    assert!(plan.cooldown_rule.clamp_to_zero);
+    assert_eq!(
+        plan.cooldown_rule.e_cooldown_roi,
+        Rect {
+            x: 1679,
+            y: 983,
+            width: 41,
+            height: 18
+        }
+    );
+    assert_eq!(
+        plan.cooldown_rule.ocr_rule.white_lower_bgr,
+        BgrPixel {
+            b: 230,
+            g: 230,
+            r: 230
+        }
+    );
+    assert_eq!(
+        plan.cooldown_rule.ocr_rule.white_upper_bgr,
+        BgrPixel {
+            b: 255,
+            g: 255,
+            r: 255
+        }
+    );
+    assert_eq!(plan.cooldown_rule.ocr_rule.regex, SKILL_CD_OCR_REGEX);
+    assert_eq!(
+        plan.cooldown_rule.ocr_rule.compensation_trigger_intervals,
+        2
+    );
+    assert_eq!(plan.cooldown_rule.ocr_rule.compensation_seconds, 0.12);
+    assert_eq!(plan.cooldown_rule.ocr_rule.accepted_min_exclusive, 0.0);
+    assert_eq!(plan.cooldown_rule.ocr_rule.accepted_max_exclusive, 60.0);
+    assert!(
+        plan.cooldown_rule
+            .fallback_rule
+            .custom_rule_precedes_default_avatar_map
+    );
+    assert!(
+        plan.cooldown_rule
+            .fallback_rule
+            .empty_custom_value_uses_default_avatar_map
+    );
+    assert_eq!(
+        plan.cooldown_rule.default_avatar_index_rects[0],
+        Rect {
+            x: 1859,
+            y: 256,
+            width: 28,
+            height: 24
+        }
+    );
+
+    assert_eq!(plan.overlay_rule.overlay_key, SKILL_CD_OVERLAY_KEY);
+    assert_eq!(plan.overlay_rule.position_x, 0.0);
+    assert_eq!(plan.overlay_rule.position_y, 1080.0);
+    assert_eq!(plan.overlay_rule.gap, 200.0);
+    assert_eq!(plan.overlay_rule.scale, 10.0);
+    assert!(plan.overlay_rule.hide_when_zero);
+    assert_eq!(plan.overlay_rule.requires_exact_avatar_count, 4);
+    assert_eq!(plan.overlay_rule.cd_text_format, "F1");
+    assert_eq!(plan.overlay_rule.position_round_decimal_places, 1);
+    assert_eq!(
+        plan.overlay_rule.avatar_side_icon_rects[0],
+        Rect {
+            x: 1765,
+            y: 225,
+            width: 76,
+            height: 76
+        }
+    );
+
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == SkillCdTickPhase::ActionTrigger
+            && step.condition == SkillCdTickCondition::WhenOcrFailsAndFallbackApplies
+            && step.action == SkillCdTickAction::ApplyFallbackCooldown
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("GetAsyncKeyState")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Paddle OCR")));
+
+    let scaled = plan_skill_cd(SkillCdExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..SkillCdExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.cooldown_rule.e_cooldown_roi,
+        Rect {
+            x: 1120,
+            y: 656,
+            width: 27,
+            height: 12
+        }
+    );
+    assert_eq!(
+        scaled.cooldown_rule.default_avatar_index_rects[0],
+        Rect {
+            x: 1240,
+            y: 170,
+            width: 18,
+            height: 16
+        }
+    );
+}
+
+#[test]
+fn skill_cd_ocr_text_parser_preserves_legacy_regex_compensation_and_bounds() {
+    let plan = plan_skill_cd(SkillCdExecutionConfig {
+        trigger_interval_ms: 50,
+        ..SkillCdExecutionConfig::default()
+    });
+    let rule = &plan.cooldown_rule.ocr_rule;
+
+    let parsed = parse_skill_cd_ocr_text("CD: 12.3s", rule).unwrap();
+    assert!((parsed - 12.2).abs() < 1e-9);
+
+    let parsed = parse_skill_cd_ocr_text("0.2", rule).unwrap();
+    assert!((parsed - 0.1).abs() < 1e-9);
+
+    assert_eq!(parse_skill_cd_ocr_text("", rule), None);
+    assert_eq!(parse_skill_cd_ocr_text("no digits", rule), None);
+    assert_eq!(parse_skill_cd_ocr_text("0.05", rule), None);
+    assert_eq!(parse_skill_cd_ocr_text("60.1", rule), None);
+    assert_eq!(parse_skill_cd_ocr_text("99 12", rule), None);
+
+    let mut invalid_rule = rule.clone();
+    invalid_rule.regex = "(".to_string();
+    assert_eq!(parse_skill_cd_ocr_text("12", &invalid_rule), None);
+}
+
+#[test]
+fn skill_cd_fallback_resolution_preserves_custom_then_default_order() {
+    let custom_rules = vec![
+        SkillCdCustomCdRule {
+            role_name: "钟离".to_string(),
+            cd_value_text: Some("12.5".to_string()),
+            cd_value: Some(12.5),
+        },
+        SkillCdCustomCdRule {
+            role_name: "纳西妲".to_string(),
+            cd_value_text: None,
+            cd_value: None,
+        },
+        SkillCdCustomCdRule {
+            role_name: "冷门角色".to_string(),
+            cd_value_text: None,
+            cd_value: None,
+        },
+    ];
+    let defaults = [("纳西妲", 6.0), ("香菱", 12.0)];
+
+    assert_eq!(
+        resolve_skill_cd_fallback("钟离", &custom_rules, defaults),
+        SkillCdFallbackResolution {
+            seconds: 12.5,
+            source: SkillCdFallbackSource::CustomRule
+        }
+    );
+    assert_eq!(
+        resolve_skill_cd_fallback("纳西妲", &custom_rules, defaults),
+        SkillCdFallbackResolution {
+            seconds: 6.0,
+            source: SkillCdFallbackSource::CustomRuleDefaultAvatarMap
+        }
+    );
+    assert_eq!(
+        resolve_skill_cd_fallback("冷门角色", &custom_rules, defaults),
+        SkillCdFallbackResolution {
+            seconds: 0.0,
+            source: SkillCdFallbackSource::CustomRuleMissingDefaultAvatar
+        }
+    );
+    assert_eq!(
+        resolve_skill_cd_fallback("香菱", &custom_rules, defaults),
+        SkillCdFallbackResolution {
+            seconds: 12.0,
+            source: SkillCdFallbackSource::DefaultAvatarMap
+        }
+    );
+    assert_eq!(
+        resolve_skill_cd_fallback("不存在", &custom_rules, defaults),
+        SkillCdFallbackResolution {
+            seconds: 0.0,
+            source: SkillCdFallbackSource::MissingDefaultAvatar
+        }
+    );
+    assert_eq!(
+        resolve_skill_cd_fallback("", &custom_rules, defaults),
+        SkillCdFallbackResolution {
+            seconds: 0.0,
+            source: SkillCdFallbackSource::MissingDefaultAvatar
+        }
+    );
+}
+
+fn enabled_skill_cd_plan(trigger_on_skill_use: bool, hide_when_zero: bool) -> SkillCdExecutionPlan {
+    let mut config = SkillCdConfig::default();
+    config.enabled = true;
+    config.trigger_on_skill_use = trigger_on_skill_use;
+    config.hide_when_zero = hide_when_zero;
+    plan_skill_cd(SkillCdExecutionConfig {
+        skill_cd_config: config,
+        ..SkillCdExecutionConfig::default()
+    })
+}
+
+fn full_skill_cd_team_names() -> [String; 4] {
+    [
+        "钟离".to_string(),
+        "纳西妲".to_string(),
+        "香菱".to_string(),
+        "班尼特".to_string(),
+    ]
+}
+
+fn stable_skill_cd_state() -> SkillCdRuntimeState {
+    SkillCdRuntimeState {
+        was_in_context: true,
+        context_enter_elapsed_ms: Some(1_000),
+        team_avatar_names: full_skill_cd_team_names(),
+        last_frame_available: true,
+        ..SkillCdRuntimeState::default()
+    }
+}
+
+#[derive(Debug)]
+struct FakeSkillCdRuntime {
+    observations: VecDeque<SkillCdTickObservation>,
+    clear_overlay_reasons: Vec<SkillCdClearOverlayReason>,
+    auto_disable_calls: usize,
+    team_sync_requests: Vec<(u64, u64)>,
+    clear_frame_cache_calls: usize,
+    rotate_frame_cache_calls: usize,
+    rendered_overlays: Vec<Vec<SkillCdOverlayEntry>>,
+}
+
+impl FakeSkillCdRuntime {
+    fn new(observations: Vec<SkillCdTickObservation>) -> Self {
+        Self {
+            observations: observations.into(),
+            clear_overlay_reasons: Vec::new(),
+            auto_disable_calls: 0,
+            team_sync_requests: Vec::new(),
+            clear_frame_cache_calls: 0,
+            rotate_frame_cache_calls: 0,
+            rendered_overlays: Vec::new(),
+        }
+    }
+}
+
+impl SkillCdRuntime for FakeSkillCdRuntime {
+    fn observe_skill_cd_tick(
+        &mut self,
+        _plan: &SkillCdExecutionPlan,
+        _state: &SkillCdRuntimeState,
+    ) -> SkillCdTickObservation {
+        self.observations.pop_front().unwrap_or_default()
+    }
+
+    fn clear_skill_cd_overlay(
+        &mut self,
+        _plan: &SkillCdExecutionPlan,
+        reason: SkillCdClearOverlayReason,
+    ) {
+        self.clear_overlay_reasons.push(reason);
+    }
+
+    fn auto_disable_skill_cd_trigger(&mut self, _plan: &SkillCdExecutionPlan) {
+        self.auto_disable_calls += 1;
+    }
+
+    fn request_skill_cd_team_sync(
+        &mut self,
+        _plan: &SkillCdExecutionPlan,
+        delay_ms: u64,
+        wait_after_recent_index_press_ms: u64,
+    ) {
+        self.team_sync_requests
+            .push((delay_ms, wait_after_recent_index_press_ms));
+    }
+
+    fn clear_skill_cd_frame_cache(&mut self, _plan: &SkillCdExecutionPlan) {
+        self.clear_frame_cache_calls += 1;
+    }
+
+    fn rotate_skill_cd_frame_cache(&mut self, _plan: &SkillCdExecutionPlan) {
+        self.rotate_frame_cache_calls += 1;
+    }
+
+    fn render_skill_cd_overlay(
+        &mut self,
+        _plan: &SkillCdExecutionPlan,
+        entries: &[SkillCdOverlayEntry],
+    ) {
+        self.rendered_overlays.push(entries.to_vec());
+    }
+}
+
+#[test]
+fn skill_cd_reducer_clears_overlay_when_disabled_without_countdown() {
+    let plan = plan_skill_cd(SkillCdExecutionConfig::default());
+    let state = SkillCdRuntimeState {
+        cooldowns: [5.0, 0.0, 0.0, 0.0],
+        ..SkillCdRuntimeState::default()
+    };
+
+    let reduction = reduce_skill_cd_tick(&plan, &state, SkillCdTickObservation::default());
+
+    assert_eq!(reduction.state.cooldowns[0], 5.0);
+    assert_eq!(
+        reduction.effects,
+        vec![
+            SkillCdTickEffect::ClearOverlay {
+                reason: SkillCdClearOverlayReason::Disabled
+            },
+            SkillCdTickEffect::SkipTick {
+                reason: SkillCdSkipReason::Disabled
+            }
+        ]
+    );
+}
+
+#[test]
+fn skill_cd_reducer_decrements_before_multigame_auto_disable() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        cooldowns: [2.0, 0.0, 0.0, 0.0],
+        ..SkillCdRuntimeState::default()
+    };
+    let reduction = reduce_skill_cd_tick(
+        &plan,
+        &state,
+        SkillCdTickObservation {
+            delta_seconds: 0.5,
+            multi_game_detected: true,
+            ..SkillCdTickObservation::default()
+        },
+    );
+
+    assert_eq!(reduction.state.cooldowns[0], 1.5);
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::DecrementCooldowns { delta_seconds: 0.5 }));
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::AutoDisableTrigger));
+    assert!(reduction.effects.contains(&SkillCdTickEffect::SkipTick {
+        reason: SkillCdSkipReason::MultiGameDetected
+    }));
+    assert!(!reduction
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, SkillCdTickEffect::ClearOverlay { .. })));
+}
+
+#[test]
+fn skill_cd_reducer_preserves_leave_debounce_then_clears_frames_outside_context() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        was_in_context: true,
+        context_enter_elapsed_ms: Some(1_000),
+        context_leave_elapsed_ms: Some(900),
+        last_frame_available: true,
+        penultimate_frame_available: true,
+        team_avatar_names: full_skill_cd_team_names(),
+        cooldowns: [3.0, 0.0, 0.0, 0.0],
+        ..SkillCdRuntimeState::default()
+    };
+
+    let reduction = reduce_skill_cd_tick(
+        &plan,
+        &state,
+        SkillCdTickObservation {
+            raw_in_context: false,
+            ..SkillCdTickObservation::default()
+        },
+    );
+
+    assert!(!reduction.state.was_in_context);
+    assert!((reduction.state.cooldowns[0] - 2.95).abs() < 1e-9);
+    assert!(!reduction.state.last_frame_available);
+    assert!(!reduction.state.penultimate_frame_available);
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::ClearOverlay {
+            reason: SkillCdClearOverlayReason::LeftContext
+        }));
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::ClearFrameCache));
+    assert!(reduction.effects.contains(&SkillCdTickEffect::SkipTick {
+        reason: SkillCdSkipReason::OutOfContext
+    }));
+}
+
+#[test]
+fn skill_cd_reducer_requests_team_sync_and_skips_enter_stabilization() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        last_press_index_elapsed_ms: Some(300),
+        ..SkillCdRuntimeState::default()
+    };
+
+    let reduction = reduce_skill_cd_tick(
+        &plan,
+        &state,
+        SkillCdTickObservation {
+            delta_seconds: 0.05,
+            raw_in_context: true,
+            ..SkillCdTickObservation::default()
+        },
+    );
+
+    assert!(reduction.state.was_in_context);
+    assert!(reduction.state.is_syncing_team);
+    assert_eq!(reduction.state.context_enter_elapsed_ms, Some(0));
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::RequestTeamSync {
+            delay_ms: 750,
+            wait_after_recent_index_press_ms: 250
+        }));
+    assert!(reduction.effects.contains(&SkillCdTickEffect::SkipTick {
+        reason: SkillCdSkipReason::EnterStabilization
+    }));
+    assert!(!reduction
+        .effects
+        .contains(&SkillCdTickEffect::RotateFrameCache));
+}
+
+#[test]
+fn skill_cd_reducer_records_digit_switch_ocr_cooldown() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = stable_skill_cd_state();
+
+    let reduction = reduce_skill_cd_tick(
+        &plan,
+        &state,
+        SkillCdTickObservation {
+            digit_key_down: [false, true, false, false],
+            active_index: Some(1),
+            ocr_cooldown_seconds: Some(8.4),
+            ..SkillCdTickObservation::default()
+        },
+    );
+
+    assert_eq!(reduction.state.cooldowns[0], 8.4);
+    assert_eq!(reduction.state.last_switch_from_slot, Some(0));
+    assert_eq!(reduction.state.last_switch_elapsed_ms, Some(0));
+    assert_eq!(reduction.state.last_active_index, 2);
+    assert_eq!(reduction.state.last_press_index_elapsed_ms, Some(0));
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::IdentifyActiveIndex {
+            trigger: SkillCdActionTrigger::DigitKey,
+            pressed_target: Some(1)
+        }));
+    assert!(reduction.effects.contains(&SkillCdTickEffect::SetCooldown {
+        slot: 0,
+        seconds: 8.4,
+        source: SkillCdCooldownUpdateSource::Ocr
+    }));
+}
+
+#[test]
+fn skill_cd_reducer_repeats_held_elemental_skill_and_uses_fallback() {
+    let plan = enabled_skill_cd_plan(true, false);
+    let state = SkillCdRuntimeState {
+        prev_elemental_skill_key: true,
+        last_elemental_skill_press_elapsed_ms: Some(500),
+        ..stable_skill_cd_state()
+    };
+
+    let reduction = reduce_skill_cd_tick(
+        &plan,
+        &state,
+        SkillCdTickObservation {
+            elemental_skill_key_down: true,
+            active_index: Some(1),
+            ocr_cooldown_seconds: None,
+            visual_skill_ready: Some(false),
+            fallback_cooldown: Some(SkillCdFallbackResolution {
+                seconds: 6.0,
+                source: SkillCdFallbackSource::DefaultAvatarMap,
+            }),
+            ..SkillCdTickObservation::default()
+        },
+    );
+
+    assert_eq!(reduction.state.cooldowns[0], 6.0);
+    assert_eq!(reduction.state.last_active_index, 0);
+    assert!(!reduction
+        .effects
+        .contains(&SkillCdTickEffect::RecordElementalSkillPress));
+    assert!(reduction
+        .effects
+        .contains(&SkillCdTickEffect::IdentifyActiveIndex {
+            trigger: SkillCdActionTrigger::ElementalSkillKey,
+            pressed_target: None
+        }));
+    assert!(reduction.effects.contains(&SkillCdTickEffect::SetCooldown {
+        slot: 0,
+        seconds: 6.0,
+        source: SkillCdCooldownUpdateSource::Fallback(SkillCdFallbackSource::DefaultAvatarMap)
+    }));
+}
+
+#[test]
+fn skill_cd_reducer_overlay_requires_full_team_and_respects_hide_when_zero() {
+    let plan = enabled_skill_cd_plan(false, true);
+    let state = SkillCdRuntimeState {
+        cooldowns: [0.0, 1.25, 0.0, 2.0],
+        ..stable_skill_cd_state()
+    };
+
+    let reduction = reduce_skill_cd_tick(
+        &plan,
+        &state,
+        SkillCdTickObservation {
+            current_frame_available: false,
+            screen_scale_factor: 1.5,
+            ..SkillCdTickObservation::default()
+        },
+    );
+
+    let render = reduction.effects.iter().find_map(|effect| {
+        if let SkillCdTickEffect::RenderOverlay { entries } = effect {
+            Some(entries)
+        } else {
+            None
+        }
+    });
+    let entries = render.expect("expected overlay render effect");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].slot, 1);
+    assert_eq!(entries[0].text, "1.2");
+    assert_eq!(entries[0].x, 1520.0 * 1.5);
+    assert!((entries[0].y - (245.0 + 91.2) * 1.5).abs() < 1e-9);
+    assert_eq!(entries[1].slot, 3);
+    assert_eq!(entries[1].text, "1.9");
+}
+
+#[test]
+fn skill_cd_tick_executor_dispatches_disabled_overlay_clear() {
+    let plan = plan_skill_cd(SkillCdExecutionConfig::default());
+    let state = SkillCdRuntimeState {
+        cooldowns: [5.0, 0.0, 0.0, 0.0],
+        ..SkillCdRuntimeState::default()
+    };
+    let mut runtime = FakeSkillCdRuntime::new(vec![SkillCdTickObservation::default()]);
+
+    let report = execute_skill_cd_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(report.state.cooldowns[0], 5.0);
+    assert_eq!(
+        runtime.clear_overlay_reasons,
+        vec![SkillCdClearOverlayReason::Disabled]
+    );
+    assert_eq!(
+        report.executed_actions,
+        vec![SkillCdExecutedAction::ClearOverlay {
+            reason: SkillCdClearOverlayReason::Disabled
+        }]
+    );
+    assert!(report.effects.contains(&SkillCdTickEffect::SkipTick {
+        reason: SkillCdSkipReason::Disabled
+    }));
+}
+
+#[test]
+fn skill_cd_tick_executor_requests_team_sync_after_context_enter() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        last_press_index_elapsed_ms: Some(300),
+        ..SkillCdRuntimeState::default()
+    };
+    let mut runtime = FakeSkillCdRuntime::new(vec![SkillCdTickObservation {
+        raw_in_context: true,
+        ..SkillCdTickObservation::default()
+    }]);
+
+    let report = execute_skill_cd_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.team_sync_requests, vec![(750, 250)]);
+    assert_eq!(
+        report.executed_actions,
+        vec![SkillCdExecutedAction::RequestTeamSync {
+            delay_ms: 750,
+            wait_after_recent_index_press_ms: 250
+        }]
+    );
+    assert!(report.state.was_in_context);
+    assert!(report.state.is_syncing_team);
+    assert!(report.effects.contains(&SkillCdTickEffect::SkipTick {
+        reason: SkillCdSkipReason::EnterStabilization
+    }));
+}
+
+#[test]
+fn skill_cd_tick_executor_clears_frame_cache_after_leave_debounce() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        was_in_context: true,
+        context_enter_elapsed_ms: Some(1_000),
+        context_leave_elapsed_ms: Some(900),
+        last_frame_available: true,
+        penultimate_frame_available: true,
+        team_avatar_names: full_skill_cd_team_names(),
+        ..SkillCdRuntimeState::default()
+    };
+    let mut runtime = FakeSkillCdRuntime::new(vec![SkillCdTickObservation {
+        raw_in_context: false,
+        ..SkillCdTickObservation::default()
+    }]);
+
+    let report = execute_skill_cd_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(
+        runtime.clear_overlay_reasons,
+        vec![SkillCdClearOverlayReason::LeftContext]
+    );
+    assert_eq!(runtime.clear_frame_cache_calls, 1);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            SkillCdExecutedAction::ClearOverlay {
+                reason: SkillCdClearOverlayReason::LeftContext
+            },
+            SkillCdExecutedAction::ClearFrameCache
+        ]
+    );
+    assert!(!report.state.last_frame_available);
+    assert!(!report.state.penultimate_frame_available);
+}
+
+#[test]
+fn skill_cd_tick_executor_rotates_frame_cache_and_renders_overlay() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        cooldowns: [2.0, 0.0, 0.0, 0.0],
+        ..stable_skill_cd_state()
+    };
+    let mut runtime = FakeSkillCdRuntime::new(vec![SkillCdTickObservation {
+        current_frame_available: true,
+        screen_scale_factor: 1.0,
+        ..SkillCdTickObservation::default()
+    }]);
+
+    let report = execute_skill_cd_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.rotate_frame_cache_calls, 1);
+    assert_eq!(runtime.rendered_overlays.len(), 1);
+    assert_eq!(runtime.rendered_overlays[0].len(), 4);
+    assert_eq!(runtime.rendered_overlays[0][0].text, "1.9");
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            SkillCdExecutedAction::RotateFrameCache,
+            SkillCdExecutedAction::RenderOverlay {
+                entries: runtime.rendered_overlays[0].clone()
+            }
+        ]
+    );
+    assert!(report.effects.contains(&SkillCdTickEffect::PollKeyStates));
+    assert!(report.state.last_frame_available);
+    assert!(report.state.penultimate_frame_available);
+}
+
+#[test]
+fn skill_cd_tick_executor_auto_disables_on_multigame_detection() {
+    let plan = enabled_skill_cd_plan(false, false);
+    let state = SkillCdRuntimeState {
+        cooldowns: [2.0, 0.0, 0.0, 0.0],
+        ..SkillCdRuntimeState::default()
+    };
+    let mut runtime = FakeSkillCdRuntime::new(vec![SkillCdTickObservation {
+        delta_seconds: 0.5,
+        multi_game_detected: true,
+        ..SkillCdTickObservation::default()
+    }]);
+
+    let report = execute_skill_cd_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.auto_disable_calls, 1);
+    assert_eq!(
+        report.executed_actions,
+        vec![SkillCdExecutedAction::AutoDisableTrigger]
+    );
+    assert_eq!(report.state.cooldowns[0], 1.5);
+    assert!(report
+        .effects
+        .contains(&SkillCdTickEffect::DecrementCooldowns { delta_seconds: 0.5 }));
+}
+
+#[test]
+fn map_mask_plan_preserves_legacy_big_map_mini_map_provider_and_overlay_rules() {
+    let defaults = MapMaskConfig::default();
+    assert!(!defaults.enabled);
+    assert!(!defaults.mini_map_mask_enabled);
+    assert!(!defaults.path_auto_record_enabled);
+    assert_eq!(defaults.map_point_api_provider, "MihoyoMap");
+    assert_eq!(defaults.ho_yo_lab_language, "en-us");
+
+    let config = MapMaskExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "mapMaskConfig": {
+            "enabled": true,
+            "miniMapMaskEnabled": true,
+            "pathAutoRecordEnabled": true,
+            "mapPointApiProvider": "HoYoLab",
+            "hoYoLabLanguage": "pt-pt"
+        }
+    })));
+    let plan = plan_map_mask(config);
+
+    assert_eq!(plan.task_key, MAP_MASK_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert!(plan.config_rule.enabled);
+    assert!(plan.config_rule.mini_map_mask_enabled);
+    assert!(plan.config_rule.path_auto_record_enabled);
+    assert_eq!(
+        plan.config_rule.map_point_api_provider,
+        MapMaskPointProvider::HoYoLab
+    );
+    assert_eq!(plan.config_rule.map_point_api_provider_raw, "HoYoLab");
+    assert_eq!(plan.config_rule.ho_yo_lab_language, "pt-pt");
+    assert_eq!(
+        plan.config_rule.ho_yo_lab_supported_languages,
+        vec!["en-us", "pt-pt", "es-es"]
+    );
+
+    assert_eq!(plan.throttle_rule.tick_interval_ms, 50);
+    assert!(plan.throttle_rule.skip_when_elapsed_less_or_equal);
+    assert_eq!(plan.ui_detection_rule.supported_trigger_category, "Unknown");
+    assert!(plan.ui_detection_rule.big_map_when_current_ui_big_map);
+    assert!(plan.ui_detection_rule.big_map_when_bv_detects_big_map);
+    assert!(plan.ui_detection_rule.mini_map_requires_main_ui);
+    assert_eq!(
+        plan.ui_detection_rule.big_map_templates[0].asset,
+        MAP_MASK_BIG_MAP_SCALE_BUTTON
+    );
+    assert_eq!(
+        plan.ui_detection_rule.big_map_templates[0].roi,
+        Rect {
+            x: 30,
+            y: 440,
+            width: 40,
+            height: 200
+        }
+    );
+    assert_eq!(plan.ui_detection_rule.big_map_templates[0].threshold, 0.8);
+    assert_eq!(
+        plan.ui_detection_rule.big_map_templates[0].match_mode,
+        TemplateMatchMode::CCoeffNormed
+    );
+    assert_eq!(
+        plan.ui_detection_rule.big_map_templates[1].asset,
+        MAP_MASK_BIG_MAP_SETTINGS_BUTTON
+    );
+    assert_eq!(
+        plan.ui_detection_rule.big_map_templates[1].roi,
+        Rect {
+            x: 25,
+            y: 990,
+            width: 58,
+            height: 62
+        }
+    );
+    assert_eq!(
+        plan.ui_detection_rule.main_ui_template.asset,
+        MAP_MASK_PAIMON_MENU
+    );
+
+    assert_eq!(plan.stability_rule.similarity_threshold, 0.98);
+    assert_eq!(plan.stability_rule.stable_frame_count, 2);
+    assert_eq!(plan.stability_rule.downscale_size, Size::new(320, 180));
+    assert_eq!(
+        plan.stability_rule.match_mode,
+        TemplateMatchMode::CCoeffNormed
+    );
+    assert_eq!(plan.stability_rule.reset_after_stable_count, 20);
+
+    assert_eq!(
+        plan.big_map_rule.feature_keypoints_asset,
+        MAP_MASK_TEYVAT_256_SIFT_KEYPOINTS
+    );
+    assert_eq!(
+        plan.big_map_rule.feature_mat_asset,
+        MAP_MASK_TEYVAT_256_SIFT_MAT
+    );
+    assert_eq!(plan.big_map_rule.layer_256_to_2048_scale, 8);
+    assert_eq!(
+        plan.big_map_rule.reject_when_width_lt_and_height_lt.width,
+        50
+    );
+    assert_eq!(
+        plan.big_map_rule.reject_when_width_lt_and_height_lt.height,
+        40
+    );
+    assert_eq!(
+        plan.big_map_rule.reject_when_width_gt_and_height_gt.width,
+        3000
+    );
+    assert_eq!(
+        plan.big_map_rule.reject_when_width_gt_and_height_gt.height,
+        1800
+    );
+
+    assert!(plan.mini_map_rule.enabled);
+    assert!(plan.mini_map_rule.requires_main_ui);
+    assert_eq!(
+        plan.mini_map_rule.mini_map_roi,
+        Rect {
+            x: 62,
+            y: 19,
+            width: 212,
+            height: 212
+        }
+    );
+    assert_eq!(plan.mini_map_rule.viewport_size, 212.0 / 3.0 * 10.0);
+    assert_eq!(
+        plan.mini_map_rule.center_source,
+        "NavigationInstance.GetPositionStable"
+    );
+    assert_eq!(plan.mini_map_rule.position_jump_reset_threshold, 150.0);
+    assert_eq!(plan.mini_map_rule.match_config.original_size, 156);
+    assert_eq!(plan.mini_map_rule.match_config.rough_size, 52);
+    assert_eq!(plan.mini_map_rule.match_config.exact_size, 260);
+    assert_eq!(plan.mini_map_rule.match_config.rough_zoom, 5);
+    assert_eq!(plan.mini_map_rule.match_config.exact_zoom, 1);
+    assert_eq!(plan.mini_map_rule.match_config.rough_search_radius, 50);
+    assert_eq!(plan.mini_map_rule.match_config.exact_search_radius, 20);
+    assert_eq!(
+        plan.mini_map_rule.match_config.confidence_thresholds,
+        vec![0.99, 0.97, 0.95]
+    );
+
+    assert_eq!(plan.teyvat_map_rule.rows, 15);
+    assert_eq!(plan.teyvat_map_rule.cols, 22);
+    assert_eq!(plan.teyvat_map_rule.up_rows, 7);
+    assert_eq!(plan.teyvat_map_rule.left_cols, 15);
+    assert_eq!(plan.teyvat_map_rule.block_size, 2048);
+    assert_eq!(plan.teyvat_map_rule.origin_x, 32768);
+    assert_eq!(plan.teyvat_map_rule.origin_y, 16384);
+    assert_eq!(plan.teyvat_map_rule.split_rows, 30);
+    assert_eq!(plan.teyvat_map_rule.split_cols, 44);
+
+    assert_eq!(
+        plan.point_provider_rule.provider,
+        MapMaskPointProvider::HoYoLab
+    );
+    assert_eq!(plan.point_provider_rule.provider_raw, "HoYoLab");
+    assert_eq!(plan.point_provider_rule.ho_yo_lab_language, "pt-pt");
+    assert!(plan.point_provider_rule.fetches_points_for_big_map);
+    assert!(plan.point_provider_rule.fetches_points_for_mini_map);
+    assert_eq!(plan.overlay_rule.big_map_canvas, "PointsCanvasControl");
+    assert_eq!(
+        plan.overlay_rule.mini_map_canvas,
+        "MiniMapPointsCanvasControl"
+    );
+    assert_eq!(plan.overlay_rule.window_source, "MaskWindow");
+    assert!(plan
+        .overlay_rule
+        .path_auto_record_status
+        .contains("native TODO"));
+
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == MapMaskTickPhase::BigMapStability
+            && step.condition == MapMaskTickCondition::WhenFrameStable
+            && step.action == MapMaskTickAction::MatchTeyvat256LayerRect
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("OpenCV/SIFT")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("MaskWindow")));
+
+    let scaled = plan_map_mask(MapMaskExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..MapMaskExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.mini_map_rule.mini_map_roi,
+        Rect {
+            x: 41,
+            y: 12,
+            width: 141,
+            height: 141
+        }
+    );
+    assert_eq!(
+        scaled.ui_detection_rule.big_map_templates[0].roi,
+        Rect {
+            x: 20,
+            y: 293,
+            width: 26,
+            height: 133
+        }
+    );
+}
+
+fn enabled_map_mask_plan(mini_map_enabled: bool) -> MapMaskExecutionPlan {
+    let mut config = MapMaskConfig::default();
+    config.enabled = true;
+    config.mini_map_mask_enabled = mini_map_enabled;
+    plan_map_mask(MapMaskExecutionConfig {
+        map_mask_config: config,
+        ..MapMaskExecutionConfig::default()
+    })
+}
+
+#[derive(Debug)]
+struct FakeMapMaskRuntime {
+    observations: VecDeque<MapMaskTickObservation>,
+    clear_all_overlay_calls: usize,
+    big_map_ui_values: Vec<bool>,
+    big_map_compute_requests: Vec<Option<Rect>>,
+    reset_big_map_rect_calls: usize,
+    mini_map_compute_calls: usize,
+    clear_mini_map_viewport_calls: usize,
+}
+
+impl FakeMapMaskRuntime {
+    fn new(observations: Vec<MapMaskTickObservation>) -> Self {
+        Self {
+            observations: observations.into(),
+            clear_all_overlay_calls: 0,
+            big_map_ui_values: Vec::new(),
+            big_map_compute_requests: Vec::new(),
+            reset_big_map_rect_calls: 0,
+            mini_map_compute_calls: 0,
+            clear_mini_map_viewport_calls: 0,
+        }
+    }
+}
+
+impl MapMaskRuntime for FakeMapMaskRuntime {
+    fn observe_map_mask_tick(
+        &mut self,
+        _plan: &MapMaskExecutionPlan,
+        _state: &MapMaskRuntimeState,
+    ) -> MapMaskTickObservation {
+        self.observations.pop_front().unwrap_or_default()
+    }
+
+    fn clear_map_mask_overlay_canvases(&mut self, _plan: &MapMaskExecutionPlan) {
+        self.clear_all_overlay_calls += 1;
+    }
+
+    fn set_map_mask_big_map_ui(&mut self, _plan: &MapMaskExecutionPlan, is_in_big_map_ui: bool) {
+        self.big_map_ui_values.push(is_in_big_map_ui);
+    }
+
+    fn enqueue_map_mask_big_map_compute(
+        &mut self,
+        _plan: &MapMaskExecutionPlan,
+        previous_rect_256: Option<Rect>,
+    ) {
+        self.big_map_compute_requests.push(previous_rect_256);
+    }
+
+    fn reset_map_mask_previous_big_map_rect(&mut self, _plan: &MapMaskExecutionPlan) {
+        self.reset_big_map_rect_calls += 1;
+    }
+
+    fn enqueue_map_mask_mini_map_compute(&mut self, _plan: &MapMaskExecutionPlan) {
+        self.mini_map_compute_calls += 1;
+    }
+
+    fn clear_map_mask_mini_map_viewport(&mut self, _plan: &MapMaskExecutionPlan) {
+        self.clear_mini_map_viewport_calls += 1;
+    }
+}
+
+#[test]
+fn map_mask_tick_reducer_preserves_disabled_and_throttle_gates() {
+    let disabled = plan_map_mask(MapMaskExecutionConfig::default());
+    let state = MapMaskRuntimeState {
+        stable_count: 7,
+        previous_big_map_rect_256: Some(Rect {
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+        }),
+        is_in_big_map_ui: true,
+    };
+
+    let reduction = reduce_map_mask_tick(
+        &disabled,
+        &state,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 51,
+            current_ui_is_big_map: true,
+            bv_detected_big_map_ui: false,
+            bv_detected_main_ui: false,
+            frame_is_stable: false,
+        },
+    );
+    assert_eq!(reduction.state, state);
+    assert_eq!(
+        reduction.effects,
+        vec![
+            MapMaskTickEffect::ClearAllOverlayCanvases,
+            MapMaskTickEffect::SkipTick(MapMaskSkipReason::Disabled)
+        ]
+    );
+
+    let plan = enabled_map_mask_plan(false);
+    let reduction = reduce_map_mask_tick(
+        &plan,
+        &state,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 50,
+            current_ui_is_big_map: true,
+            bv_detected_big_map_ui: false,
+            bv_detected_main_ui: false,
+            frame_is_stable: false,
+        },
+    );
+    assert_eq!(reduction.state, state);
+    assert_eq!(
+        reduction.effects,
+        vec![MapMaskTickEffect::SkipTick(MapMaskSkipReason::Throttled)]
+    );
+}
+
+#[test]
+fn map_mask_tick_reducer_preserves_big_map_stability_enqueue_order() {
+    let plan = enabled_map_mask_plan(false);
+    let prev_rect = Rect {
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 80,
+    };
+    let base = MapMaskRuntimeState {
+        stable_count: 0,
+        previous_big_map_rect_256: Some(prev_rect),
+        is_in_big_map_ui: false,
+    };
+
+    let stable = reduce_map_mask_tick(
+        &plan,
+        &base,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 51,
+            current_ui_is_big_map: true,
+            bv_detected_big_map_ui: false,
+            bv_detected_main_ui: false,
+            frame_is_stable: true,
+        },
+    );
+    assert_eq!(stable.state.stable_count, 1);
+    assert_eq!(stable.state.is_in_big_map_ui, true);
+    assert_eq!(stable.effects, vec![MapMaskTickEffect::SetBigMapUi(true)]);
+
+    let unstable = reduce_map_mask_tick(
+        &plan,
+        &base,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 51,
+            current_ui_is_big_map: false,
+            bv_detected_big_map_ui: true,
+            bv_detected_main_ui: false,
+            frame_is_stable: false,
+        },
+    );
+    assert_eq!(unstable.state.stable_count, 0);
+    assert_eq!(
+        unstable.effects,
+        vec![
+            MapMaskTickEffect::EnqueueBigMapCompute {
+                previous_rect_256: Some(prev_rect)
+            },
+            MapMaskTickEffect::SetBigMapUi(true)
+        ]
+    );
+
+    let nearly_reset = MapMaskRuntimeState {
+        stable_count: 19,
+        ..base
+    };
+    let reset = reduce_map_mask_tick(
+        &plan,
+        &nearly_reset,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 51,
+            current_ui_is_big_map: true,
+            bv_detected_big_map_ui: false,
+            bv_detected_main_ui: false,
+            frame_is_stable: true,
+        },
+    );
+    assert_eq!(reset.state.stable_count, 0);
+    assert!(reset
+        .effects
+        .contains(&MapMaskTickEffect::EnqueueBigMapCompute {
+            previous_rect_256: Some(prev_rect)
+        }));
+}
+
+#[test]
+fn map_mask_tick_reducer_queues_minimap_or_clears_when_outside_main_ui() {
+    let plan = enabled_map_mask_plan(true);
+    let prev_rect = Rect {
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 80,
+    };
+    let state = MapMaskRuntimeState {
+        stable_count: 3,
+        previous_big_map_rect_256: Some(prev_rect),
+        is_in_big_map_ui: true,
+    };
+
+    let main_ui = reduce_map_mask_tick(
+        &plan,
+        &state,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 51,
+            current_ui_is_big_map: false,
+            bv_detected_big_map_ui: false,
+            bv_detected_main_ui: true,
+            frame_is_stable: false,
+        },
+    );
+    assert_eq!(main_ui.state.previous_big_map_rect_256, None);
+    assert_eq!(main_ui.state.stable_count, 3);
+    assert_eq!(
+        main_ui.effects,
+        vec![
+            MapMaskTickEffect::EnqueueMiniMapCompute,
+            MapMaskTickEffect::ResetBigMapPreviousRect,
+            MapMaskTickEffect::SetBigMapUi(false)
+        ]
+    );
+
+    let non_main_ui = reduce_map_mask_tick(
+        &plan,
+        &state,
+        MapMaskTickObservation {
+            elapsed_since_previous_tick_ms: 51,
+            current_ui_is_big_map: false,
+            bv_detected_big_map_ui: false,
+            bv_detected_main_ui: false,
+            frame_is_stable: false,
+        },
+    );
+    assert_eq!(
+        non_main_ui.effects,
+        vec![
+            MapMaskTickEffect::ClearMiniMapViewport,
+            MapMaskTickEffect::ResetBigMapPreviousRect,
+            MapMaskTickEffect::SetBigMapUi(false)
+        ]
+    );
+}
+
+#[test]
+fn map_mask_tick_executor_dispatches_disabled_overlay_clear() {
+    let plan = plan_map_mask(MapMaskExecutionConfig::default());
+    let state = MapMaskRuntimeState {
+        stable_count: 7,
+        previous_big_map_rect_256: Some(Rect {
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+        }),
+        is_in_big_map_ui: true,
+    };
+    let mut runtime = FakeMapMaskRuntime::new(vec![MapMaskTickObservation::default()]);
+
+    let report = execute_map_mask_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.clear_all_overlay_calls, 1);
+    assert_eq!(
+        report.executed_actions,
+        vec![MapMaskExecutedAction::ClearAllOverlayCanvases]
+    );
+    assert_eq!(report.state, state);
+    assert!(report
+        .effects
+        .contains(&MapMaskTickEffect::SkipTick(MapMaskSkipReason::Disabled)));
+}
+
+#[test]
+fn map_mask_tick_executor_dispatches_big_map_compute_and_ui_state() {
+    let plan = enabled_map_mask_plan(false);
+    let prev_rect = Rect {
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 80,
+    };
+    let state = MapMaskRuntimeState {
+        stable_count: 0,
+        previous_big_map_rect_256: Some(prev_rect),
+        is_in_big_map_ui: false,
+    };
+    let mut runtime = FakeMapMaskRuntime::new(vec![MapMaskTickObservation {
+        current_ui_is_big_map: false,
+        bv_detected_big_map_ui: true,
+        ..MapMaskTickObservation::default()
+    }]);
+
+    let report = execute_map_mask_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.big_map_compute_requests, vec![Some(prev_rect)]);
+    assert_eq!(runtime.big_map_ui_values, vec![true]);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            MapMaskExecutedAction::EnqueueBigMapCompute {
+                previous_rect_256: Some(prev_rect)
+            },
+            MapMaskExecutedAction::SetBigMapUi(true)
+        ]
+    );
+    assert!(report.state.is_in_big_map_ui);
+}
+
+#[test]
+fn map_mask_tick_executor_dispatches_minimap_compute_and_big_map_reset() {
+    let plan = enabled_map_mask_plan(true);
+    let prev_rect = Rect {
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 80,
+    };
+    let state = MapMaskRuntimeState {
+        stable_count: 3,
+        previous_big_map_rect_256: Some(prev_rect),
+        is_in_big_map_ui: true,
+    };
+    let mut runtime = FakeMapMaskRuntime::new(vec![MapMaskTickObservation {
+        bv_detected_main_ui: true,
+        ..MapMaskTickObservation::default()
+    }]);
+
+    let report = execute_map_mask_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.mini_map_compute_calls, 1);
+    assert_eq!(runtime.reset_big_map_rect_calls, 1);
+    assert_eq!(runtime.big_map_ui_values, vec![false]);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            MapMaskExecutedAction::EnqueueMiniMapCompute,
+            MapMaskExecutedAction::ResetBigMapPreviousRect,
+            MapMaskExecutedAction::SetBigMapUi(false)
+        ]
+    );
+    assert_eq!(report.state.previous_big_map_rect_256, None);
+}
+
+#[test]
+fn map_mask_tick_executor_clears_minimap_viewport_outside_main_ui() {
+    let plan = enabled_map_mask_plan(true);
+    let state = MapMaskRuntimeState {
+        stable_count: 3,
+        previous_big_map_rect_256: None,
+        is_in_big_map_ui: true,
+    };
+    let mut runtime = FakeMapMaskRuntime::new(vec![MapMaskTickObservation {
+        bv_detected_main_ui: false,
+        ..MapMaskTickObservation::default()
+    }]);
+
+    let report = execute_map_mask_tick_plan(&plan, &state, &mut runtime);
+
+    assert_eq!(runtime.clear_mini_map_viewport_calls, 1);
+    assert_eq!(runtime.big_map_ui_values, vec![false]);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            MapMaskExecutedAction::ClearMiniMapViewport,
+            MapMaskExecutedAction::SetBigMapUi(false)
+        ]
+    );
+}
+
+#[test]
+fn map_mask_big_map_viewport_filters_and_scales_worker_rects() {
+    let plan = enabled_map_mask_plan(false);
+    let rule = &plan.big_map_rule;
+
+    assert_eq!(
+        resolve_map_mask_big_map_viewport(Rect::empty(), rule),
+        MapMaskBigMapViewportDecision::Update {
+            viewport_2048: Rect::empty(),
+            accepted_rect_256: None
+        }
+    );
+    assert_eq!(
+        resolve_map_mask_big_map_viewport(
+            Rect {
+                x: 1,
+                y: 2,
+                width: 49,
+                height: 39
+            },
+            rule
+        ),
+        MapMaskBigMapViewportDecision::Reject {
+            reason: MapMaskBigMapRectRejectReason::TooSmall,
+            reset_previous_rect: true
+        }
+    );
+    assert_eq!(
+        resolve_map_mask_big_map_viewport(
+            Rect {
+                x: 1,
+                y: 2,
+                width: 3001,
+                height: 1801
+            },
+            rule
+        ),
+        MapMaskBigMapViewportDecision::Reject {
+            reason: MapMaskBigMapRectRejectReason::TooLarge,
+            reset_previous_rect: true
+        }
+    );
+    assert_eq!(
+        resolve_map_mask_big_map_viewport(
+            Rect {
+                x: 11,
+                y: 12,
+                width: 60,
+                height: 41
+            },
+            rule
+        ),
+        MapMaskBigMapViewportDecision::Update {
+            viewport_2048: Rect {
+                x: 88,
+                y: 96,
+                width: 480,
+                height: 328
+            },
+            accepted_rect_256: Some(Rect {
+                x: 11,
+                y: 12,
+                width: 60,
+                height: 41
+            })
+        }
+    );
+}
+
+#[test]
+fn map_mask_mini_map_viewport_uses_stable_position_as_center() {
+    let plan = enabled_map_mask_plan(true);
+
+    assert_eq!(
+        resolve_map_mask_mini_map_viewport(None, &plan.mini_map_rule),
+        MapMaskMiniMapViewportDecision::Clear
+    );
+
+    let decision =
+        resolve_map_mask_mini_map_viewport(Some(Point { x: 1000, y: 500 }), &plan.mini_map_rule);
+    let MapMaskMiniMapViewportDecision::Update { viewport } = decision else {
+        panic!("expected minimap viewport");
+    };
+    let expected_size = 212.0 / 3.0 * 10.0;
+    assert!((viewport.width - expected_size).abs() < 1e-9);
+    assert!((viewport.height - expected_size).abs() < 1e-9);
+    assert!((viewport.x - (1000.0 - expected_size / 2.0)).abs() < 1e-9);
+    assert!((viewport.y - (500.0 - expected_size / 2.0)).abs() < 1e-9);
+}
+
+#[test]
+fn game_loading_plan_preserves_legacy_auto_enter_templates_bili_and_starward_rules() {
+    let config = GameLoadingExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "genshinStartConfig": {
+            "autoEnterGameEnabled": false,
+            "installPath": "C:/Games/Genshin Impact/GenshinImpact.exe",
+            "recordGameTimeEnabled": true,
+            "linkedStartEnabled": false,
+            "startGameWithCmd": true,
+            "autoDisableGenshinHdrEnabled": false
+        }
+    })));
+    let plan = plan_game_loading(config);
+
+    assert_eq!(plan.task_key, GAME_LOADING_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert!(!plan.config_rule.auto_enter_game_enabled);
+    assert!(plan.config_rule.record_game_time_enabled);
+    assert_eq!(
+        plan.config_rule.install_file_name.as_deref(),
+        Some("GenshinImpact.exe")
+    );
+    assert!(!plan.config_rule.linked_start_enabled);
+    assert!(plan.config_rule.start_game_with_cmd);
+    assert!(!plan.config_rule.auto_disable_genshin_hdr_enabled);
+    assert_eq!(plan.throttle_rule.tick_interval_ms, 2_000);
+    assert_eq!(plan.throttle_rule.max_runtime_minutes, 5);
+    assert_eq!(plan.throttle_rule.age_prompt_ocr_interval_ms, 1_000);
+    assert!(plan.finish_rule.stop_when_main_ui_detected);
+    assert!(plan.finish_rule.stop_when_any_closable_ui_detected);
+    assert!(plan.finish_rule.stop_when_in_domain_detected);
+
+    assert_eq!(
+        plan.locators.choose_enter_game.asset,
+        GAME_LOADING_CHOOSE_ENTER_GAME_ASSET
+    );
+    assert_eq!(
+        plan.locators.choose_enter_game.roi,
+        Rect {
+            x: 0,
+            y: 540,
+            width: 1920,
+            height: 540
+        }
+    );
+    assert_eq!(
+        plan.locators.enter_game.asset,
+        GAME_LOADING_ENTER_GAME_ASSET
+    );
+    assert_eq!(
+        plan.locators.enter_game.roi,
+        Rect {
+            x: 640,
+            y: 540,
+            width: 640,
+            height: 540
+        }
+    );
+    assert_eq!(
+        plan.locators.welkin_moon.asset,
+        GAME_LOADING_WELKIN_MOON_ASSET
+    );
+    assert_eq!(plan.locators.girl_moon.asset, GAME_LOADING_GIRL_MOON_ASSET);
+    assert_eq!(
+        plan.locators.welkin_moon.roi,
+        plan.locators.choose_enter_game.roi
+    );
+    assert_eq!(
+        plan.locators.girl_moon.roi,
+        plan.locators.choose_enter_game.roi
+    );
+    assert_eq!(
+        plan.locators.white_confirm.asset,
+        GAME_LOADING_WHITE_CONFIRM_ASSET
+    );
+    assert_eq!(plan.locators.primogem.asset, GAME_LOADING_PRIMOGEM_ASSET);
+    assert_eq!(
+        plan.locators.white_confirm.roi,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080
+        }
+    );
+    assert_eq!(plan.locators.age_prompt_ocr.keywords, vec!["适龄", "监护"]);
+    assert!(plan.locators.age_prompt_ocr.ocr_this_full_capture);
+    assert_eq!(
+        plan.locators.age_prompt_ocr.confirm_asset,
+        GAME_LOADING_WHITE_CONFIRM_ASSET
+    );
+    assert_eq!(
+        plan.locators.background_click,
+        GameLoadingClickPoint {
+            x_1080p: 100,
+            y_1080p: 100,
+            applies_dpi_scale_to_offset: false
+        }
+    );
+
+    assert!(plan.starward_rule.enabled);
+    assert_eq!(plan.starward_rule.protocol, "starward");
+    assert_eq!(
+        plan.starward_rule.protocol_registry_key,
+        r"HKEY_CLASSES_ROOT\starward"
+    );
+    assert!(plan
+        .starward_rule
+        .server_candidates
+        .iter()
+        .any(|candidate| {
+            candidate.source == GameLoadingServerSource::InstallFileName
+                && candidate.install_file_name.as_deref() == Some("GenshinImpact.exe")
+                && candidate.server == "hk4e_global"
+        }));
+    assert!(plan
+        .starward_rule
+        .server_candidates
+        .iter()
+        .any(|candidate| {
+            candidate.source == GameLoadingServerSource::ConfigIniChannel
+                && candidate.install_file_name.as_deref() == Some("YuanShen.exe")
+                && candidate.config_ini_channel.as_deref() == Some("1")
+                && candidate.server == "hk4e_cn"
+        }));
+    assert!(plan
+        .starward_rule
+        .server_candidates
+        .iter()
+        .any(|candidate| {
+            candidate.source == GameLoadingServerSource::ConfigIniChannel
+                && candidate.install_file_name.as_deref() == Some("YuanShen.exe")
+                && candidate.config_ini_channel.as_deref() == Some("14")
+                && candidate.server == "hk4e_bilibili"
+        }));
+    assert!(plan
+        .starward_rule
+        .server_candidates
+        .iter()
+        .any(|candidate| {
+            candidate.source == GameLoadingServerSource::Registry
+                && candidate
+                    .registry_key
+                    .as_deref()
+                    .is_some_and(|key| key.contains(r"miHoYo\HYP\1_1\hk4e_cn"))
+                && candidate.registry_value.as_deref() == Some("GameInstallPath")
+                && candidate.server == "hk4e_cn"
+        }));
+    assert!(plan
+        .starward_rule
+        .server_candidates
+        .iter()
+        .any(|candidate| {
+            candidate.source == GameLoadingServerSource::Registry
+                && candidate
+                    .registry_key
+                    .as_deref()
+                    .is_some_and(|key| key.contains(r"Cognosphere\HYP\1_0\hk4e_global"))
+                && candidate.server == "hk4e_global"
+        }));
+    assert!(plan
+        .starward_rule
+        .server_candidates
+        .iter()
+        .any(|candidate| {
+            candidate.source == GameLoadingServerSource::Registry
+                && candidate
+                    .registry_key
+                    .as_deref()
+                    .is_some_and(|key| key.contains(r"standalone\14_0\hk4e_cn"))
+                && candidate.server == "hk4e_bilibili"
+        }));
+
+    assert!(plan.bili_rule.detect_channel_from_config_ini);
+    assert_eq!(plan.bili_rule.bili_channel, "14");
+    assert_eq!(plan.bili_rule.process_name, "YuanShen");
+    assert_eq!(plan.bili_rule.title_contains, "bilibili");
+    assert_eq!(plan.bili_rule.protocol_window_title_contains, "协议");
+    assert_eq!(plan.bili_rule.login_window_title_contains, "登录");
+    assert!(plan.bili_rule.owner_must_match_process);
+    assert_eq!(
+        plan.bili_rule.protocol_click,
+        GameLoadingClickPoint {
+            x_1080p: 1030,
+            y_1080p: 615,
+            applies_dpi_scale_to_offset: true
+        }
+    );
+    assert_eq!(
+        plan.bili_rule.login_click,
+        GameLoadingClickPoint {
+            x_1080p: 960,
+            y_1080p: 630,
+            applies_dpi_scale_to_offset: true
+        }
+    );
+    assert_eq!(plan.bili_rule.wait_before_login_click_ms, 2_000);
+    assert_eq!(plan.bili_rule.wait_after_login_click_ms, 2_000);
+    assert_eq!(plan.bili_rule.wait_after_login_window_closed_ms, 2_000);
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == GameLoadingTickPhase::EnterGame
+            && step.condition
+                == GameLoadingTickCondition::WhenNotBiliServerAndChooseEnterGameDetected
+            && matches!(
+                &step.action,
+                GameLoadingTickAction::ClickTemplate { asset }
+                    if asset == GAME_LOADING_CHOOSE_ENTER_GAME_ASSET
+            )
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == GameLoadingTickPhase::EnterGame
+            && step.condition == GameLoadingTickCondition::WhenEnterGameDetected
+            && step.action == GameLoadingTickAction::ClickBackground
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Starward")));
+
+    let scaled = plan_game_loading(GameLoadingExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..GameLoadingExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.locators.choose_enter_game.roi,
+        Rect {
+            x: 0,
+            y: 360,
+            width: 1280,
+            height: 360
+        }
+    );
+    assert_eq!(
+        scaled.locators.enter_game.roi,
+        Rect {
+            x: 426,
+            y: 360,
+            width: 426,
+            height: 360
+        }
+    );
+}
+
+#[test]
+fn game_loading_config_ini_channel_parser_matches_general_section() {
+    assert_eq!(
+        parse_game_loading_config_ini_channel("[General]\nchannel=14\n[Other]\nchannel=1"),
+        Some("14".to_string())
+    );
+    assert_eq!(
+        parse_game_loading_config_ini_channel(" [general] \n channel = 1   \n"),
+        Some("1".to_string())
+    );
+    assert_eq!(
+        parse_game_loading_config_ini_channel("[General]\nfoo=bar\n[Other]\nchannel=14"),
+        None
+    );
+    assert_eq!(
+        parse_game_loading_config_ini_channel("[General]\nchannel=\n"),
+        None
+    );
+    assert_eq!(parse_game_loading_config_ini_channel("channel=14"), None);
+}
+
+#[test]
+fn game_loading_server_resolution_uses_install_channel_then_registry_snapshots() {
+    let global = resolve_game_loading_server(Some("GenshinImpact.exe"), Some("14"), &[]).unwrap();
+    assert_eq!(global.source, GameLoadingServerSource::InstallFileName);
+    assert_eq!(global.server, "hk4e_global");
+
+    let cn = resolve_game_loading_server(Some("YuanShen.exe"), Some("1"), &[]).unwrap();
+    assert_eq!(cn.source, GameLoadingServerSource::ConfigIniChannel);
+    assert_eq!(cn.server, "hk4e_cn");
+    assert_eq!(cn.matched_config_ini_channel.as_deref(), Some("1"));
+
+    let bili = resolve_game_loading_server(Some("yuanshen.exe"), Some("14"), &[]).unwrap();
+    assert_eq!(bili.source, GameLoadingServerSource::ConfigIniChannel);
+    assert_eq!(bili.server, "hk4e_bilibili");
+
+    assert_eq!(
+        resolve_game_loading_server(Some("YuanShen.exe"), Some("2"), &[]),
+        None
+    );
+
+    let registry_bili = resolve_game_loading_server(
+        None,
+        None,
+        &[GameLoadingRegistryHit {
+            registry_key:
+                r"HKEY_CURRENT_USER\Software\miHoYo\HYP\standalone\14_0\hk4e_cn\umfgRO5gh5\hk4e_cn"
+                    .to_string(),
+            registry_value: Some("GameInstallPath".to_string()),
+            value_exists: true,
+        }],
+    )
+    .unwrap();
+    assert_eq!(registry_bili.source, GameLoadingServerSource::Registry);
+    assert_eq!(registry_bili.server, "hk4e_bilibili");
+
+    assert_eq!(
+        resolve_game_loading_server(
+            None,
+            None,
+            &[GameLoadingRegistryHit {
+                registry_key: r"HKEY_CURRENT_USER\Software\miHoYo\HYP\1_1\hk4e_cn".to_string(),
+                registry_value: Some("GameInstallPath".to_string()),
+                value_exists: false,
+            }],
+        ),
+        None
+    );
+}
+
+#[derive(Debug, Default)]
+struct FakeGameLoadingRuntime {
+    observations: VecDeque<GameLoadingTickObservation>,
+    disable_count: usize,
+    starward_count: usize,
+    clicked_templates: Vec<String>,
+    background_clicks: Vec<GameLoadingClickPoint>,
+    point_clicks: Vec<GameLoadingClickPoint>,
+}
+
+impl FakeGameLoadingRuntime {
+    fn new(observations: impl IntoIterator<Item = GameLoadingTickObservation>) -> Self {
+        Self {
+            observations: observations.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+}
+
+impl GameLoadingRuntime for FakeGameLoadingRuntime {
+    fn observe_game_loading_tick(
+        &mut self,
+        _plan: &GameLoadingExecutionPlan,
+    ) -> Result<GameLoadingTickObservation> {
+        Ok(self.observations.pop_front().unwrap_or_default())
+    }
+
+    fn disable_game_loading_trigger(&mut self) -> Result<()> {
+        self.disable_count += 1;
+        Ok(())
+    }
+
+    fn start_game_loading_starward_recording(
+        &mut self,
+        _rule: &GameLoadingStarwardRule,
+    ) -> Result<()> {
+        self.starward_count += 1;
+        Ok(())
+    }
+
+    fn click_game_loading_template(&mut self, asset: &str) -> Result<()> {
+        self.clicked_templates.push(asset.to_string());
+        Ok(())
+    }
+
+    fn click_game_loading_background(&mut self, point: GameLoadingClickPoint) -> Result<()> {
+        self.background_clicks.push(point);
+        Ok(())
+    }
+
+    fn click_game_loading_point(&mut self, point: GameLoadingClickPoint) -> Result<()> {
+        self.point_clicks.push(point);
+        Ok(())
+    }
+}
+
+fn fake_game_loading_observation(now_ms: u64) -> GameLoadingTickObservation {
+    GameLoadingTickObservation {
+        now_ms,
+        ..GameLoadingTickObservation::default()
+    }
+}
+
+#[test]
+fn game_loading_tick_executor_disables_without_observing_when_auto_enter_is_disabled() {
+    let plan = plan_game_loading(GameLoadingExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "genshinStartConfig": {
+                "autoEnterGameEnabled": false
+            }
+        }),
+    )));
+    let mut state = GameLoadingTriggerState::default();
+    let mut runtime = FakeGameLoadingRuntime::default();
+
+    let report = execute_game_loading_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert!(state.disabled);
+    assert_eq!(runtime.disable_count, 1);
+    assert!(report.observation.is_none());
+    assert_eq!(
+        report.executed_actions,
+        vec![GameLoadingExecutedAction::DisableTrigger]
+    );
+}
+
+#[test]
+fn game_loading_tick_executor_throttles_after_observation() {
+    let plan = plan_game_loading(GameLoadingExecutionConfig::default());
+    let mut state = GameLoadingTriggerState {
+        started_at_ms: Some(10_000),
+        last_tick_ms: Some(10_000),
+        ..GameLoadingTriggerState::default()
+    };
+    let mut runtime = FakeGameLoadingRuntime::new([fake_game_loading_observation(11_000)]);
+
+    let report = execute_game_loading_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert!(!state.disabled);
+    assert_eq!(runtime.disable_count, 0);
+    assert_eq!(
+        report.executed_actions,
+        vec![GameLoadingExecutedAction::SkipTick]
+    );
+}
+
+#[test]
+fn game_loading_tick_executor_clicks_regular_entry_and_reward_popups() {
+    let plan = plan_game_loading(GameLoadingExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "genshinStartConfig": {
+                "autoEnterGameEnabled": true,
+                "recordGameTimeEnabled": true
+            }
+        }),
+    )));
+    let observation = GameLoadingTickObservation {
+        now_ms: 10_000,
+        age_prompt_text_matched: true,
+        choose_enter_game_detected: true,
+        enter_game_detected: true,
+        welkin_moon_detected: true,
+        primogem_detected: true,
+        ..GameLoadingTickObservation::default()
+    };
+    let mut state = GameLoadingTriggerState::default();
+    let mut runtime = FakeGameLoadingRuntime::new([observation]);
+
+    let report = execute_game_loading_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(runtime.starward_count, 1);
+    assert_eq!(
+        runtime.clicked_templates,
+        vec![
+            GAME_LOADING_WHITE_CONFIRM_ASSET.to_string(),
+            GAME_LOADING_CHOOSE_ENTER_GAME_ASSET.to_string()
+        ]
+    );
+    assert_eq!(
+        runtime.background_clicks,
+        vec![
+            plan.locators.background_click,
+            plan.locators.background_click,
+            plan.locators.background_click
+        ]
+    );
+    assert_eq!(state.last_tick_ms, Some(10_000));
+    assert_eq!(state.last_age_prompt_ocr_ms, Some(10_000));
+    assert_eq!(state.age_prompt_text_matched, Some(true));
+    assert!(report
+        .executed_actions
+        .contains(&GameLoadingExecutedAction::StartStarwardRecording));
+    assert!(report
+        .executed_actions
+        .contains(&GameLoadingExecutedAction::DetectBiliFromConfigIni { bili_server: false }));
+}
+
+#[test]
+fn game_loading_tick_executor_clicks_bili_protocol_and_login_windows() {
+    let plan = plan_game_loading(GameLoadingExecutionConfig::default());
+    let observation = GameLoadingTickObservation {
+        now_ms: 10_000,
+        bili_server: true,
+        bili_protocol_window_detected: true,
+        bili_login_window_detected: true,
+        ..GameLoadingTickObservation::default()
+    };
+    let mut state = GameLoadingTriggerState::default();
+    let mut runtime = FakeGameLoadingRuntime::new([observation]);
+
+    let report = execute_game_loading_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        runtime.point_clicks,
+        vec![plan.bili_rule.protocol_click, plan.bili_rule.login_click]
+    );
+    assert!(runtime.clicked_templates.is_empty());
+    assert!(runtime.background_clicks.is_empty());
+    assert_eq!(state.bili_server_detected, Some(true));
+    assert_eq!(state.bili_protocol_window_detected, Some(true));
+    assert_eq!(state.bili_login_window_detected, Some(true));
+    assert!(report
+        .executed_actions
+        .contains(&GameLoadingExecutedAction::DetectBiliLoginWindow {
+            protocol_window_detected: true,
+            login_window_detected: true
+        }));
+}
+
+#[test]
+fn quick_teleport_plan_preserves_legacy_template_ocr_hotkey_and_timing_rules() {
+    let config = QuickTeleportExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "quickTeleportConfig": {
+            "enabled": true,
+            "teleportListClickDelay": 333,
+            "waitTeleportPanelDelay": 77,
+            "hotkeyTpEnabled": true
+        },
+        "hotKeyConfig": {
+            "quickTeleportTickHotkey": "F8"
+        }
+    })));
+    let plan = plan_quick_teleport(config);
+
+    assert_eq!(plan.task_key, QUICK_TELEPORT_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert!(plan.config_rule.enabled);
+    assert_eq!(plan.config_rule.teleport_list_click_delay_ms, 333);
+    assert_eq!(plan.config_rule.wait_teleport_panel_delay_ms, 77);
+    assert!(plan.config_rule.hotkey_tp_enabled);
+    assert_eq!(plan.throttle_rule.tick_interval_ms, 300);
+    assert_eq!(plan.throttle_rule.log_click_option_interval_ms, 500);
+    assert!(plan.hotkey_rule.hotkey_tp_enabled);
+    assert_eq!(
+        plan.hotkey_rule.configured_tick_hotkey.as_deref(),
+        Some("F8")
+    );
+    assert!(plan.hotkey_rule.requires_pressed);
+    assert!(plan.hotkey_rule.supports_keyboard_hook);
+    assert!(plan.hotkey_rule.supports_mouse_hook);
+
+    assert_eq!(
+        plan.locators.map_choose_icon_roi,
+        Rect {
+            x: 1270,
+            y: 100,
+            width: 50,
+            height: 880
+        }
+    );
+    assert_eq!(
+        plan.locators.teleport_button.roi,
+        Rect {
+            x: 1440,
+            y: 960,
+            width: 100,
+            height: 120
+        }
+    );
+    assert_eq!(
+        plan.locators.teleport_button.asset,
+        QUICK_TELEPORT_GO_TELEPORT
+    );
+    assert_eq!(
+        plan.locators.map_close_button.roi,
+        Rect {
+            x: 1813,
+            y: 19,
+            width: 58,
+            height: 58
+        }
+    );
+    assert_eq!(
+        plan.locators.map_choose.roi,
+        Rect {
+            x: 1440,
+            y: 0,
+            width: 100,
+            height: 70
+        }
+    );
+    assert_eq!(
+        plan.locators.map_underground_switch_button.roi,
+        Rect {
+            x: 1800,
+            y: 250,
+            width: 90,
+            height: 570
+        }
+    );
+    assert!(plan.locators.map_underground_switch_button.use_3_channels);
+    assert_eq!(
+        plan.locators.transparent_background_asset,
+        QUICK_TELEPORT_TRANSPARENT_BACKGROUND
+    );
+
+    assert_eq!(plan.locators.map_choose_icon_templates.len(), 10);
+    let waypoint = plan
+        .locators
+        .map_choose_icon_templates
+        .iter()
+        .find(|template| template.asset == QUICK_TELEPORT_ICON_TELEPORT_WAYPOINT)
+        .unwrap();
+    assert_eq!(waypoint.threshold, 0.7);
+    assert_eq!(waypoint.roi, plan.locators.map_choose_icon_roi);
+    assert!(waypoint.use_grey_template_for_multi_match);
+    assert_eq!(
+        waypoint.match_mode,
+        bgi_vision::TemplateMatchMode::CCoeffNormed
+    );
+    assert!(plan
+        .locators
+        .map_choose_icon_templates
+        .iter()
+        .any(|template| template.asset == QUICK_TELEPORT_ICON_TABLET_OF_TONA));
+    assert!(plan
+        .locators
+        .map_choose_icon_templates
+        .iter()
+        .filter(|template| template.asset != QUICK_TELEPORT_ICON_TELEPORT_WAYPOINT)
+        .all(|template| template.threshold == 0.8));
+
+    assert_eq!(plan.multi_match_rule.hdr_threshold, 0.7);
+    assert_eq!(plan.multi_match_rule.standard_threshold, 0.8);
+    assert!(plan.multi_match_rule.sort_candidates_by_y_ascending);
+    assert!(plan.multi_match_rule.click_first_valid_candidate);
+    assert_eq!(plan.text_ocr_rule.text_region_width, 200);
+    assert_eq!(plan.text_ocr_rule.text_region_y_offset, -8);
+    assert_eq!(plan.text_ocr_rule.text_region_height_padding, 16);
+    assert_eq!(
+        plan.text_ocr_rule.standard_capture_lower_bgr,
+        QuickTeleportBgrColor {
+            b: 249,
+            g: 249,
+            r: 249
+        }
+    );
+    assert_eq!(
+        plan.text_ocr_rule.standard_capture_upper_bgr,
+        QuickTeleportBgrColor {
+            b: 255,
+            g: 255,
+            r: 255
+        }
+    );
+    assert!(plan.text_ocr_rule.hdr_uses_plain_ocr);
+    assert!(plan.text_ocr_rule.standard_uses_color_range_and_ocr);
+    assert!(plan.text_ocr_rule.skip_empty_text);
+    assert!(plan.text_ocr_rule.skip_single_character_text);
+    assert_eq!(plan.text_ocr_rule.strip_log_marker, ">");
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == QuickTeleportTickPhase::TeleportPanel
+            && step.condition == QuickTeleportTickCondition::WhenCandidateClicked
+            && step.action == QuickTeleportTickAction::RecheckTeleportButtonWithFreshCapture
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("multi-template")));
+
+    let scaled = plan_quick_teleport(QuickTeleportExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..QuickTeleportExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.locators.map_choose_icon_roi,
+        Rect {
+            x: 846,
+            y: 66,
+            width: 33,
+            height: 587
+        }
+    );
+    assert_eq!(
+        scaled.locators.teleport_button.roi,
+        Rect {
+            x: 960,
+            y: 640,
+            width: 66,
+            height: 80
+        }
+    );
+    assert_eq!(
+        scaled.locators.map_choose.roi,
+        Rect {
+            x: 960,
+            y: 0,
+            width: 66,
+            height: 46
+        }
+    );
+    assert!(!scaled.hotkey_rule.requires_pressed);
+}
+
+fn quick_teleport_enabled_plan(hotkey_tp_enabled: bool) -> QuickTeleportExecutionPlan {
+    plan_quick_teleport(QuickTeleportExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "quickTeleportConfig": {
+                "enabled": true,
+                "teleportListClickDelay": 333,
+                "waitTeleportPanelDelay": 77,
+                "hotkeyTpEnabled": hotkey_tp_enabled
+            },
+            "hotKeyConfig": {
+                "quickTeleportTickHotkey": "F8"
+            }
+        }),
+    )))
+}
+
+fn fake_quick_teleport_candidate(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    text: &str,
+) -> QuickTeleportMapChooseCandidate {
+    QuickTeleportMapChooseCandidate {
+        icon_rect: Rect {
+            x,
+            y,
+            width,
+            height,
+        },
+        text: text.to_string(),
+    }
+}
+
+fn quick_teleport_input() -> QuickTeleportDecisionInput {
+    QuickTeleportDecisionInput {
+        elapsed_since_previous_tick_ms: 301,
+        hotkey_pressed: true,
+        is_big_map_ui: true,
+        teleport_button_detected: false,
+        map_close_button_detected: false,
+        map_choose_button_detected: false,
+        map_choose_candidates: Vec::new(),
+    }
+}
+
+#[derive(Default)]
+struct FakeQuickTeleportRuntime {
+    observations: VecDeque<QuickTeleportDecisionInput>,
+    teleport_button_clicks: Vec<String>,
+    candidate_clicks: Vec<(Rect, String)>,
+    delays: Vec<u64>,
+    recheck_results: VecDeque<bool>,
+    recheck_assets: Vec<String>,
+}
+
+impl FakeQuickTeleportRuntime {
+    fn new(observations: impl IntoIterator<Item = QuickTeleportDecisionInput>) -> Self {
+        Self {
+            observations: observations.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    fn with_recheck_results(mut self, results: impl IntoIterator<Item = bool>) -> Self {
+        self.recheck_results = results.into_iter().collect();
+        self
+    }
+}
+
+impl QuickTeleportRuntime for FakeQuickTeleportRuntime {
+    fn observe_quick_teleport_tick(
+        &mut self,
+        _plan: &QuickTeleportExecutionPlan,
+    ) -> Result<QuickTeleportDecisionInput> {
+        Ok(self
+            .observations
+            .pop_front()
+            .expect("fake quick-teleport observation should be queued"))
+    }
+
+    fn click_quick_teleport_button(
+        &mut self,
+        locator: &QuickTeleportTemplateLocator,
+    ) -> Result<()> {
+        self.teleport_button_clicks.push(locator.asset.clone());
+        Ok(())
+    }
+
+    fn delay_quick_teleport(&mut self, duration_ms: u64) -> Result<()> {
+        self.delays.push(duration_ms);
+        Ok(())
+    }
+
+    fn click_quick_teleport_candidate_text_region(
+        &mut self,
+        text_rect: Rect,
+        text: &str,
+    ) -> Result<()> {
+        self.candidate_clicks.push((text_rect, text.to_string()));
+        Ok(())
+    }
+
+    fn recheck_quick_teleport_button(
+        &mut self,
+        locator: &QuickTeleportTemplateLocator,
+    ) -> Result<bool> {
+        self.recheck_assets.push(locator.asset.clone());
+        Ok(self.recheck_results.pop_front().unwrap_or(false))
+    }
+}
+
+#[test]
+fn quick_teleport_decision_preserves_gate_order_and_teleport_button_priority() {
+    let disabled_plan = plan_quick_teleport(QuickTeleportExecutionConfig::default());
+    let disabled = decide_quick_teleport_tick(&disabled_plan, quick_teleport_input());
+    assert_eq!(
+        disabled.action,
+        QuickTeleportDecisionAction::Skip {
+            reason: QuickTeleportSkipReason::Disabled,
+        }
+    );
+
+    let plan = quick_teleport_enabled_plan(true);
+    let mut input = quick_teleport_input();
+    input.elapsed_since_previous_tick_ms = 300;
+    let throttled = decide_quick_teleport_tick(&plan, input);
+    assert_eq!(
+        throttled.action,
+        QuickTeleportDecisionAction::Skip {
+            reason: QuickTeleportSkipReason::TickIntervalNotElapsed,
+        }
+    );
+
+    let mut input = quick_teleport_input();
+    input.hotkey_pressed = false;
+    let hotkey = decide_quick_teleport_tick(&plan, input);
+    assert_eq!(
+        hotkey.action,
+        QuickTeleportDecisionAction::Skip {
+            reason: QuickTeleportSkipReason::HotkeyNotPressed,
+        }
+    );
+
+    let mut input = quick_teleport_input();
+    input.teleport_button_detected = true;
+    input.map_close_button_detected = true;
+    let teleport = decide_quick_teleport_tick(&plan, input);
+    assert_eq!(
+        teleport.action,
+        QuickTeleportDecisionAction::ClickTeleportButton
+    );
+
+    let mut input = quick_teleport_input();
+    input.map_close_button_detected = true;
+    let close_guard = decide_quick_teleport_tick(&plan, input);
+    assert_eq!(
+        close_guard.action,
+        QuickTeleportDecisionAction::Skip {
+            reason: QuickTeleportSkipReason::MapCloseButtonDetected,
+        }
+    );
+}
+
+#[test]
+fn quick_teleport_executor_clicks_existing_teleport_button() {
+    let plan = quick_teleport_enabled_plan(false);
+    let mut input = quick_teleport_input();
+    input.teleport_button_detected = true;
+    let mut runtime = FakeQuickTeleportRuntime::new([input]);
+
+    let report = execute_quick_teleport_tick_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.decision.action,
+        QuickTeleportDecisionAction::ClickTeleportButton
+    );
+    assert_eq!(
+        runtime.teleport_button_clicks,
+        vec![QUICK_TELEPORT_GO_TELEPORT.to_string()]
+    );
+    assert!(runtime.candidate_clicks.is_empty());
+    assert!(runtime.delays.is_empty());
+    assert_eq!(
+        report.executed_actions,
+        vec![QuickTeleportExecutedAction::ClickTeleportButton {
+            asset: QUICK_TELEPORT_GO_TELEPORT.to_string()
+        }]
+    );
+}
+
+#[test]
+fn quick_teleport_executor_clicks_candidate_then_rechecks_teleport_button() {
+    let plan = quick_teleport_enabled_plan(false);
+    let mut input = quick_teleport_input();
+    input.map_choose_candidates = vec![
+        fake_quick_teleport_candidate(10, 300, 20, 24, "下方锚点"),
+        fake_quick_teleport_candidate(10, 150, 20, 24, ">璃月锚点"),
+    ];
+    let mut runtime = FakeQuickTeleportRuntime::new([input]).with_recheck_results([true]);
+
+    let report = execute_quick_teleport_tick_plan(&plan, &mut runtime).unwrap();
+
+    let expected_text_rect = Rect {
+        x: 1300,
+        y: 242,
+        width: 200,
+        height: 40,
+    };
+    assert_eq!(runtime.delays, vec![333, 77]);
+    assert_eq!(
+        runtime.candidate_clicks,
+        vec![(expected_text_rect, ">璃月锚点".to_string())]
+    );
+    assert_eq!(runtime.recheck_assets, vec![QUICK_TELEPORT_GO_TELEPORT]);
+    assert_eq!(
+        runtime.teleport_button_clicks,
+        vec![QUICK_TELEPORT_GO_TELEPORT.to_string()]
+    );
+    assert!(report.executed_actions.contains(
+        &QuickTeleportExecutedAction::ClickCandidateTextRegion {
+            source_index: 1,
+            text: ">璃月锚点".to_string(),
+            log_text: "璃月锚点".to_string(),
+            text_rect: expected_text_rect,
+        }
+    ));
+    assert!(report
+        .executed_actions
+        .contains(&QuickTeleportExecutedAction::RecheckTeleportButton { detected: true }));
+    assert!(report.executed_actions.contains(
+        &QuickTeleportExecutedAction::ClickRecheckedTeleportButton {
+            asset: QUICK_TELEPORT_GO_TELEPORT.to_string(),
+        }
+    ));
+}
+
+#[test]
+fn quick_teleport_executor_skips_io_when_gated() {
+    let plan = plan_quick_teleport(QuickTeleportExecutionConfig::default());
+    let mut runtime = FakeQuickTeleportRuntime::new([quick_teleport_input()]);
+
+    let report = execute_quick_teleport_tick_plan(&plan, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.decision.action,
+        QuickTeleportDecisionAction::Skip {
+            reason: QuickTeleportSkipReason::Disabled,
+        }
+    );
+    assert!(report.executed_actions.is_empty());
+    assert!(runtime.teleport_button_clicks.is_empty());
+    assert!(runtime.candidate_clicks.is_empty());
+    assert!(runtime.delays.is_empty());
+    assert!(runtime.recheck_assets.is_empty());
+}
+
+#[test]
+fn quick_teleport_decision_sorts_candidates_and_clicks_first_valid_text_region() {
+    let plan = quick_teleport_enabled_plan(false);
+    let mut input = quick_teleport_input();
+    input.map_choose_candidates = vec![
+        fake_quick_teleport_candidate(10, 300, 20, 24, "下方锚点"),
+        fake_quick_teleport_candidate(10, 100, 20, 24, ""),
+        fake_quick_teleport_candidate(10, 200, 20, 24, "A"),
+        fake_quick_teleport_candidate(10, 150, 20, 24, ">璃月锚点"),
+    ];
+
+    let decision = decide_quick_teleport_tick(&plan, input);
+
+    assert_eq!(
+        decision
+            .sorted_candidates
+            .iter()
+            .map(|candidate| candidate.icon_rect.y)
+            .collect::<Vec<_>>(),
+        vec![100, 150, 200, 300]
+    );
+    assert_eq!(
+        decision.action,
+        QuickTeleportDecisionAction::ClickCandidate {
+            source_index: 3,
+            text: ">璃月锚点".to_string(),
+            log_text: "璃月锚点".to_string(),
+            icon_rect: Rect {
+                x: 10,
+                y: 150,
+                width: 20,
+                height: 24,
+            },
+            text_rect: Rect {
+                x: 1300,
+                y: 242,
+                width: 200,
+                height: 40,
+            },
+            teleport_list_click_delay_ms: 333,
+            wait_teleport_panel_delay_ms: 77,
+            recheck_teleport_button_after_click: true,
+        }
+    );
+
+    let mut no_valid_input = quick_teleport_input();
+    no_valid_input.map_choose_candidates = vec![
+        fake_quick_teleport_candidate(10, 100, 20, 24, ""),
+        fake_quick_teleport_candidate(10, 200, 20, 24, "单"),
+    ];
+    let no_valid = decide_quick_teleport_tick(&plan, no_valid_input);
+    assert_eq!(
+        no_valid.action,
+        QuickTeleportDecisionAction::Skip {
+            reason: QuickTeleportSkipReason::NoValidCandidate,
+        }
+    );
+}
+
+#[test]
+fn auto_skip_plan_preserves_legacy_dialogue_assets_audio_and_decision_rules() {
+    let config = AutoSkipExecutionConfig::from_value(Some(&serde_json::json!({
+        "captureSize": { "width": 1920, "height": 1080 },
+        "autoSkipConfig": {
+            "enabled": false,
+            "quicklySkipConversationsEnabled": false,
+            "afterChooseOptionSleepDelay": 123,
+            "autoWaitDialogueOptionVoiceEnabled": true,
+            "dialogueOptionVoiceMaxWaitSeconds": 45,
+            "beforeClickConfirmDelay": 66,
+            "autoGetDailyRewardsEnabled": false,
+            "autoReExploreEnabled": false,
+            "autoReExploreCharacter": "菲谢尔,班尼特",
+            "clickChatOption": "随机选择选项",
+            "customPriorityOptionsEnabled": true,
+            "customPriorityOptions": "每日\n探索",
+            "autoHangoutEventEnabled": true,
+            "autoHangoutEndChoose": "芭芭拉",
+            "autoHangoutChooseOptionSleepDelay": 321,
+            "autoHangoutPressSkipEnabled": false,
+            "runBackgroundEnabled": true,
+            "bringGameToFrontAfterBackgroundDialogEnabled": true,
+            "submitGoodsEnabled": false,
+            "pictureInPictureEnabled": true,
+            "pictureInPictureSourceType": "TriggerDispatcher",
+            "closePopupPagedEnabled": false,
+            "skipBuiltInClickOptions": true
+        }
+    })));
+    let plan = plan_auto_skip(config);
+
+    assert_eq!(plan.task_key, AUTO_SKIP_TASK_KEY);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(plan.executor_ready);
+    assert!(!plan.config_rule.enabled);
+    assert!(!plan.config_rule.quickly_skip_conversations_enabled);
+    assert_eq!(plan.config_rule.after_choose_option_sleep_delay_ms, 123);
+    assert!(plan.config_rule.auto_wait_dialogue_option_voice_enabled);
+    assert_eq!(plan.config_rule.dialogue_option_voice_max_wait_seconds, 45);
+    assert_eq!(plan.config_rule.before_click_confirm_delay_ms, 66);
+    assert!(!plan.config_rule.auto_get_daily_rewards_enabled);
+    assert!(!plan.config_rule.auto_re_explore_enabled);
+    assert_eq!(plan.config_rule.auto_re_explore_character, "菲谢尔,班尼特");
+    assert_eq!(
+        plan.config_rule.click_chat_option,
+        AutoSkipClickChatOption::Random
+    );
+    assert_eq!(plan.config_rule.click_chat_option_raw, "随机选择选项");
+    assert!(plan.config_rule.custom_priority_options_enabled);
+    assert_eq!(plan.config_rule.custom_priority_options, "每日\n探索");
+    assert!(plan.config_rule.auto_hangout_event_enabled);
+    assert_eq!(plan.config_rule.auto_hangout_end_choose, "芭芭拉");
+    assert_eq!(
+        plan.config_rule.auto_hangout_choose_option_sleep_delay_ms,
+        321
+    );
+    assert!(!plan.config_rule.auto_hangout_press_skip_enabled);
+    assert!(plan.config_rule.run_background_enabled);
+    assert!(
+        plan.config_rule
+            .bring_game_to_front_after_background_dialog_enabled
+    );
+    assert!(!plan.config_rule.submit_goods_enabled);
+    assert!(plan.config_rule.picture_in_picture_enabled);
+    assert_eq!(
+        plan.config_rule.picture_in_picture_source_type,
+        "TriggerDispatcher"
+    );
+    assert!(!plan.config_rule.close_popup_paged_enabled);
+    assert!(plan.config_rule.skip_built_in_click_options);
+
+    assert_eq!(
+        plan.assets.disabled_ui_button.roi,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 135
+        }
+    );
+    assert_eq!(
+        plan.assets.option_icon.roi,
+        Rect {
+            x: 960,
+            y: 90,
+            width: 640,
+            height: 980
+        }
+    );
+    assert_eq!(plan.option_rule.option_roi, plan.assets.option_icon.roi);
+    assert_eq!(
+        plan.assets.page_close.roi,
+        Rect {
+            x: 1680,
+            y: 0,
+            width: 240,
+            height: 135
+        }
+    );
+    assert_eq!(
+        plan.assets.collect.roi,
+        Rect {
+            x: 0,
+            y: 720,
+            width: 480,
+            height: 360
+        }
+    );
+    assert_eq!(
+        plan.assets.re_dispatch.roi,
+        Rect {
+            x: 960,
+            y: 810,
+            width: 480,
+            height: 270
+        }
+    );
+    assert_eq!(
+        plan.assets.primogem.roi,
+        Rect {
+            x: 0,
+            y: 360,
+            width: 1920,
+            height: 360
+        }
+    );
+    assert_eq!(
+        plan.assets.submit_goods.roi,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 960,
+            height: 360
+        }
+    );
+    assert_eq!(plan.assets.submit_goods.threshold, 0.9);
+    assert_eq!(
+        plan.assets.submit_goods.match_mode,
+        bgi_vision::TemplateMatchMode::CCorrNormed
+    );
+    assert!(plan.assets.submit_goods.use_3_channels);
+    assert_eq!(
+        plan.assets.hangout_skip.roi,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 384,
+            height: 135
+        }
+    );
+    assert_eq!(
+        plan.assets.playing_text.one_contain_match_text,
+        vec!["播", "番", "放", "中"]
+    );
+    assert_eq!(plan.assets.chat_pick_asset, AUTO_SKIP_AUTO_PICK_CHAT_PICK);
+    assert_eq!(
+        plan.assets.confirm_button_assets,
+        vec![AUTO_SKIP_CONFIRM_BUTTON_1, AUTO_SKIP_CONFIRM_BUTTON_2]
+    );
+
+    assert_eq!(plan.timing_rule.tick_min_interval_ms, 200);
+    assert_eq!(plan.timing_rule.hangout_interval_ms, 1_200);
+    assert_eq!(plan.timing_rule.playing_disappear_grace_ms, 10_000);
+    assert_eq!(plan.timing_rule.submit_goods_window_ms, 3_000);
+    assert_eq!(plan.timing_rule.black_click_interval_ms, 1_200);
+    assert_eq!(plan.timing_rule.option_wait_recheck_ms, 1_200);
+    assert_eq!(plan.audio_wait_rule.sample_rate, 16_000);
+    assert_eq!(plan.audio_wait_rule.frame_sample_count, 512);
+    assert_eq!(plan.audio_wait_rule.speech_probability_threshold, 0.60);
+    assert_eq!(
+        plan.audio_wait_rule.maybe_speech_probability_threshold,
+        0.35
+    );
+    assert_eq!(plan.audio_wait_rule.speech_start_grace_ms, 5_000);
+    assert_eq!(plan.audio_wait_rule.silence_duration_ms, 2_000);
+    assert_eq!(plan.audio_wait_rule.no_speech_quiet_duration_ms, 1_200);
+    assert_eq!(plan.audio_wait_rule.max_wait_clamp_seconds, 600);
+    assert_eq!(
+        plan.black_screen_rule.gray_roi,
+        Rect {
+            x: 0,
+            y: 360,
+            width: 1920,
+            height: 360
+        }
+    );
+    assert_eq!(plan.black_screen_rule.min_black_rate, 0.5);
+    assert_eq!(plan.black_screen_rule.max_black_rate_exclusive, 0.98999);
+    assert_eq!(plan.option_rule.text_region_x_offset_1080p, 8);
+    assert_eq!(plan.option_rule.text_region_width_1080p, 535);
+    assert_eq!(plan.option_rule.text_region_bottom_padding_1080p, 30);
+    assert_eq!(plan.option_rule.ignore_if_next_text_y_gap_greater_than, 150);
+    assert_eq!(plan.option_rule.skip_alnum_text_shorter_than, 5);
+    assert_eq!(
+        plan.option_rule.decision_priority,
+        vec![
+            AutoSkipOptionDecision::CustomPriorityKeyword,
+            AutoSkipOptionDecision::ClickNoneExit,
+            AutoSkipOptionDecision::BuiltInSelectKeyword,
+            AutoSkipOptionDecision::BuiltInPauseKeyword,
+            AutoSkipOptionDecision::OrangeText,
+            AutoSkipOptionDecision::BuiltInDefaultPauseKeyword,
+            AutoSkipOptionDecision::ConfiguredDefaultChoice,
+        ]
+    );
+    assert_eq!(
+        plan.option_rule.orange_rule.lower_bgr,
+        AutoSkipBgrColor {
+            b: 243,
+            g: 195,
+            r: 48
+        }
+    );
+    assert_eq!(
+        plan.option_rule.orange_rule.upper_bgr,
+        AutoSkipBgrColor {
+            b: 255,
+            g: 205,
+            r: 55
+        }
+    );
+    assert_eq!(plan.option_rule.orange_rule.min_white_rate, 0.06);
+    assert_eq!(plan.option_rule.use_key_rule.random_scroll_count_min, 0);
+    assert_eq!(
+        plan.option_rule
+            .use_key_rule
+            .random_scroll_count_max_exclusive,
+        5
+    );
+    assert_eq!(plan.option_rule.use_key_rule.scroll_interval_ms, 100);
+    assert_eq!(plan.option_rule.use_key_rule.delay_before_confirm_ms, 50);
+
+    assert_eq!(
+        plan.popup_rule.bottom_triangle_crop,
+        Rect {
+            x: 900,
+            y: 960,
+            width: 120,
+            height: 120
+        }
+    );
+    assert!(!plan.popup_rule.close_popup_page_enabled);
+    assert_eq!(plan.popup_rule.yellow_triangle_hsv.lower.h, 0);
+    assert_eq!(plan.popup_rule.yellow_triangle_hsv.upper.h, 33);
+    assert_eq!(plan.popup_rule.blue_triangle_hsv.lower.h, 87);
+    assert_eq!(plan.popup_rule.blue_triangle_hsv.upper.h, 124);
+    assert_eq!(plan.popup_rule.triangle_area_min, 10.0);
+    assert_eq!(plan.popup_rule.triangle_area_max, 50.0);
+    assert_eq!(plan.popup_rule.triangle_vertices, 3);
+    assert!(!plan.submit_goods_rule.enabled);
+    assert_eq!(
+        plan.submit_goods_rule.active_after_playing_disappears_ms,
+        3_000
+    );
+    assert_eq!(
+        plan.submit_goods_rule.selected_goods_color_bgr,
+        AutoSkipBgrColor {
+            b: 233,
+            g: 229,
+            r: 220
+        }
+    );
+    assert_eq!(plan.submit_goods_rule.selected_goods_color_tolerance, 100);
+    assert_eq!(plan.submit_goods_rule.selected_goods_min_area, 20);
+    assert_eq!(plan.submit_goods_rule.morphology_kernel_width, 5);
+    assert_eq!(plan.submit_goods_rule.morphology_close_iterations, 2);
+    assert_eq!(plan.submit_goods_rule.after_select_goods_delay_ms, 800);
+    assert_eq!(plan.submit_goods_rule.after_black_confirm_delay_ms, 200);
+    assert_eq!(plan.submit_goods_rule.before_white_confirm_delay_ms, 500);
+    assert_eq!(
+        plan.submit_goods_rule.black_confirm_asset,
+        AUTO_SKIP_COMMON_BLACK_CONFIRM
+    );
+    assert_eq!(
+        plan.submit_goods_rule.white_confirm_asset,
+        AUTO_SKIP_COMMON_WHITE_CONFIRM
+    );
+    assert!(!plan.daily_reward_rule.enabled);
+    assert_eq!(plan.daily_reward_rule.keywords, vec!["每日", "委托"]);
+    assert_eq!(plan.daily_reward_rule.after_click_delay_ms, 800);
+    assert_eq!(plan.daily_reward_rule.primogem_wait_window_ms, 10_000);
+    assert_eq!(
+        plan.daily_reward_rule.primogem_click,
+        AutoSkipScreenPoint {
+            x_1080p: 960,
+            y_1080p: 900
+        }
+    );
+    assert!(!plan.expedition_rule.enabled);
+    assert_eq!(plan.expedition_rule.keywords, vec!["探索", "派遣"]);
+    assert_eq!(plan.expedition_rule.open_panel_delay_ms, 800);
+    assert_eq!(plan.expedition_rule.collect_wait_ms, 1_100);
+    assert_eq!(plan.expedition_rule.re_dispatch_retry_count, 3);
+    assert!(plan.hangout_rule.enabled);
+    assert_eq!(plan.hangout_rule.branch_config_json, AUTO_SKIP_HANGOUT_JSON);
+    assert_eq!(plan.hangout_rule.configured_branch, "芭芭拉");
+    assert_eq!(plan.hangout_rule.choose_option_sleep_delay_ms, 321);
+    assert!(!plan.hangout_rule.press_skip_enabled);
+    assert_eq!(
+        plan.hangout_rule.decision_priority,
+        vec![
+            AutoSkipHangoutDecision::ConfiguredBranchKeyword,
+            AutoSkipHangoutDecision::FirstUnselected,
+            AutoSkipHangoutDecision::FirstSelected,
+            AutoSkipHangoutDecision::SkipButtonWhenNoOption,
+        ]
+    );
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoSkipTickPhase::OptionChoose
+            && step.action == AutoSkipTickAction::ChooseDialogueOption
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == AutoSkipTickPhase::BlackScreen
+            && step.action == AutoSkipTickAction::ClickBlackScreen
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Silero VAD")));
+
+    let scaled = plan_auto_skip(AutoSkipExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        ..AutoSkipExecutionConfig::default()
+    });
+    assert_eq!(
+        scaled.assets.disabled_ui_button.roi,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 426,
+            height: 90
+        }
+    );
+    assert_eq!(
+        scaled.assets.option_icon.roi,
+        Rect {
+            x: 640,
+            y: 60,
+            width: 427,
+            height: 650
+        }
+    );
+    assert_eq!(
+        scaled.assets.page_close.roi,
+        Rect {
+            x: 1120,
+            y: 0,
+            width: 160,
+            height: 90
+        }
+    );
+    assert_eq!(
+        scaled.assets.submit_goods.roi,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 240
+        }
+    );
+    assert_eq!(
+        scaled.popup_rule.bottom_triangle_crop,
+        Rect {
+            x: 600,
+            y: 640,
+            width: 80,
+            height: 80
+        }
+    );
+}
+
+fn fake_auto_skip_option(text: &str, y: i32, is_orange: bool) -> AutoSkipDialogueOptionCandidate {
+    AutoSkipDialogueOptionCandidate {
+        text: text.to_string(),
+        y,
+        is_orange,
+    }
+}
+
+fn auto_skip_plan_with_config(config: serde_json::Value) -> AutoSkipExecutionPlan {
+    plan_auto_skip(AutoSkipExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "autoSkipConfig": config
+        }),
+    )))
+}
+
+fn fake_auto_skip_hangout_option(text: &str, is_selected: bool) -> AutoSkipHangoutOptionCandidate {
+    AutoSkipHangoutOptionCandidate {
+        text: text.to_string(),
+        is_selected,
+    }
+}
+
+#[derive(Default)]
+struct FakeAutoSkipRuntime {
+    observations: VecDeque<AutoSkipTickObservation>,
+    background_modes: VecDeque<bool>,
+    dialogue_keywords: AutoSkipDialogueKeywordLists,
+    hangout_keywords: Vec<String>,
+    audio_wait: AutoSkipAudioWaitPreparation,
+    refresh_plan_keys: Vec<String>,
+    observed_plan_keys: Vec<String>,
+    cancel_audio_count: usize,
+    prepared_audio_reasons: Vec<AutoSkipDialogueOptionClickReason>,
+    dialogue_keyword_plan_keys: Vec<String>,
+    hangout_keyword_plan_keys: Vec<String>,
+    key_presses: Vec<String>,
+    clicked_dialogue: Vec<(usize, String)>,
+    clicked_hangout: Vec<(usize, String)>,
+    hangout_skip_clicks: usize,
+    key_selection_reports: VecDeque<AutoSkipKeySelectionReport>,
+    key_selections: Vec<Option<usize>>,
+    daily_primogem_clicks: Vec<AutoSkipScreenPoint>,
+    daily_black_confirm_results: VecDeque<bool>,
+    daily_black_confirm_assets: Vec<String>,
+    popup_close_assets: Vec<String>,
+    bring_to_front_count: usize,
+    bottom_triangle_clicks: usize,
+    character_popup_closes: usize,
+    submit_goods_count: usize,
+    expedition_texts: Vec<String>,
+    black_screen_clicks: Vec<bool>,
+    delays: Vec<u64>,
+}
+
+impl FakeAutoSkipRuntime {
+    fn new(observations: impl IntoIterator<Item = AutoSkipTickObservation>) -> Self {
+        Self {
+            observations: observations.into_iter().collect(),
+            background_modes: VecDeque::from([false]),
+            audio_wait: AutoSkipAudioWaitPreparation {
+                recheck_delay_ms: 1_200,
+            },
+            key_selection_reports: VecDeque::from([AutoSkipKeySelectionReport {
+                reason: AutoSkipDialogueOptionClickReason::ConfiguredFirst,
+                key_presses: vec!["F".to_string()],
+            }]),
+            ..Self::default()
+        }
+    }
+
+    fn with_background_modes(mut self, modes: impl IntoIterator<Item = bool>) -> Self {
+        self.background_modes = modes.into_iter().collect();
+        self
+    }
+
+    fn with_hangout_keywords(mut self, keywords: impl IntoIterator<Item = String>) -> Self {
+        self.hangout_keywords = keywords.into_iter().collect();
+        self
+    }
+
+    fn with_audio_wait(mut self, recheck_delay_ms: u64) -> Self {
+        self.audio_wait = AutoSkipAudioWaitPreparation { recheck_delay_ms };
+        self
+    }
+
+    fn with_daily_black_confirm_results(mut self, results: impl IntoIterator<Item = bool>) -> Self {
+        self.daily_black_confirm_results = results.into_iter().collect();
+        self
+    }
+
+    fn with_key_selection_reports(
+        mut self,
+        reports: impl IntoIterator<Item = AutoSkipKeySelectionReport>,
+    ) -> Self {
+        self.key_selection_reports = reports.into_iter().collect();
+        self
+    }
+}
+
+impl AutoSkipRuntime for FakeAutoSkipRuntime {
+    fn refresh_auto_skip_background_operation_mode(
+        &mut self,
+        plan: &AutoSkipExecutionPlan,
+    ) -> Result<bool> {
+        self.refresh_plan_keys.push(plan.task_key.clone());
+        Ok(self.background_modes.pop_front().unwrap_or(false))
+    }
+
+    fn observe_auto_skip_tick(
+        &mut self,
+        plan: &AutoSkipExecutionPlan,
+    ) -> Result<AutoSkipTickObservation> {
+        self.observed_plan_keys.push(plan.task_key.clone());
+        Ok(self
+            .observations
+            .pop_front()
+            .expect("fake auto-skip observation should be queued"))
+    }
+
+    fn cancel_or_release_auto_skip_audio_waiter(
+        &mut self,
+        _plan: &AutoSkipExecutionPlan,
+    ) -> Result<()> {
+        self.cancel_audio_count += 1;
+        Ok(())
+    }
+
+    fn prepare_auto_skip_audio_wait(
+        &mut self,
+        _plan: &AutoSkipExecutionPlan,
+        reason: AutoSkipDialogueOptionClickReason,
+    ) -> Result<AutoSkipAudioWaitPreparation> {
+        self.prepared_audio_reasons.push(reason);
+        Ok(self.audio_wait)
+    }
+
+    fn auto_skip_dialogue_keywords(
+        &mut self,
+        plan: &AutoSkipExecutionPlan,
+    ) -> Result<AutoSkipDialogueKeywordLists> {
+        self.dialogue_keyword_plan_keys.push(plan.task_key.clone());
+        Ok(self.dialogue_keywords.clone())
+    }
+
+    fn auto_skip_hangout_branch_keywords(
+        &mut self,
+        plan: &AutoSkipExecutionPlan,
+    ) -> Result<Vec<String>> {
+        self.hangout_keyword_plan_keys.push(plan.task_key.clone());
+        Ok(self.hangout_keywords.clone())
+    }
+
+    fn press_auto_skip_key(&mut self, key: &str) -> Result<()> {
+        self.key_presses.push(key.to_string());
+        Ok(())
+    }
+
+    fn click_auto_skip_dialogue_option(
+        &mut self,
+        candidate_index: usize,
+        candidate: &AutoSkipDialogueOptionCandidate,
+    ) -> Result<()> {
+        self.clicked_dialogue
+            .push((candidate_index, candidate.text.clone()));
+        Ok(())
+    }
+
+    fn select_auto_skip_dialogue_option_by_key(
+        &mut self,
+        _plan: &AutoSkipExecutionPlan,
+        random_choice_index: Option<usize>,
+    ) -> Result<AutoSkipKeySelectionReport> {
+        self.key_selections.push(random_choice_index);
+        Ok(self
+            .key_selection_reports
+            .pop_front()
+            .expect("fake auto-skip key selection report should be queued"))
+    }
+
+    fn click_auto_skip_hangout_option(
+        &mut self,
+        candidate_index: usize,
+        candidate: &AutoSkipHangoutOptionCandidate,
+    ) -> Result<()> {
+        self.clicked_hangout
+            .push((candidate_index, candidate.text.clone()));
+        Ok(())
+    }
+
+    fn click_auto_skip_hangout_skip(&mut self, _plan: &AutoSkipExecutionPlan) -> Result<()> {
+        self.hangout_skip_clicks += 1;
+        Ok(())
+    }
+
+    fn click_auto_skip_daily_primogem(&mut self, point: AutoSkipScreenPoint) -> Result<()> {
+        self.daily_primogem_clicks.push(point);
+        Ok(())
+    }
+
+    fn click_auto_skip_daily_black_confirm(&mut self, asset: &str) -> Result<bool> {
+        self.daily_black_confirm_assets.push(asset.to_string());
+        Ok(self
+            .daily_black_confirm_results
+            .pop_front()
+            .unwrap_or(false))
+    }
+
+    fn click_auto_skip_popup_page_close(
+        &mut self,
+        locator: &AutoSkipTemplateLocator,
+    ) -> Result<()> {
+        self.popup_close_assets.push(locator.asset.clone());
+        Ok(())
+    }
+
+    fn bring_auto_skip_game_to_front(&mut self, _plan: &AutoSkipExecutionPlan) -> Result<()> {
+        self.bring_to_front_count += 1;
+        Ok(())
+    }
+
+    fn click_auto_skip_bottom_triangle_popup(
+        &mut self,
+        _plan: &AutoSkipExecutionPlan,
+    ) -> Result<()> {
+        self.bottom_triangle_clicks += 1;
+        Ok(())
+    }
+
+    fn close_auto_skip_character_popup(&mut self, _plan: &AutoSkipExecutionPlan) -> Result<()> {
+        self.character_popup_closes += 1;
+        Ok(())
+    }
+
+    fn execute_auto_skip_submit_goods(&mut self, _plan: &AutoSkipExecutionPlan) -> Result<()> {
+        self.submit_goods_count += 1;
+        Ok(())
+    }
+
+    fn execute_auto_skip_expedition(
+        &mut self,
+        _plan: &AutoSkipExecutionPlan,
+        text: &str,
+    ) -> Result<()> {
+        self.expedition_texts.push(text.to_string());
+        Ok(())
+    }
+
+    fn click_auto_skip_black_screen(&mut self, background_operation_mode: bool) -> Result<()> {
+        self.black_screen_clicks.push(background_operation_mode);
+        Ok(())
+    }
+
+    fn delay_auto_skip(&mut self, duration_ms: u64) -> Result<()> {
+        self.delays.push(duration_ms);
+        Ok(())
+    }
+}
+
+fn fake_auto_skip_observation(now_ms: u64, is_playing: bool) -> AutoSkipTickObservation {
+    AutoSkipTickObservation {
+        now_ms,
+        is_playing,
+        ..AutoSkipTickObservation::default()
+    }
+}
+
+#[test]
+fn auto_skip_tick_executor_prepares_audio_wait_before_dialogue_click() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": false,
+        "autoWaitDialogueOptionVoiceEnabled": true,
+        "clickChatOption": "优先选择第一个选项"
+    }));
+    let mut observation = fake_auto_skip_observation(1_000, true);
+    observation.option_icon_detected = true;
+    observation.dialogue_candidates = vec![fake_auto_skip_option("继续聊天", 100, false)];
+    let mut runtime = FakeAutoSkipRuntime::new([observation]).with_audio_wait(777);
+    let mut state = AutoSkipTriggerState::default();
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.decision.skip_reason,
+        Some(AutoSkipTickSkipReason::AudioWaitPrepared)
+    );
+    assert_eq!(
+        runtime.prepared_audio_reasons,
+        vec![AutoSkipDialogueOptionClickReason::ConfiguredFirst]
+    );
+    assert_eq!(state.choose_option_wait_until_ms, Some(1_777));
+    assert!(runtime.clicked_dialogue.is_empty());
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: false,
+            },
+            AutoSkipExecutedAction::PrepareAudioWait {
+                reason: AutoSkipDialogueOptionClickReason::ConfiguredFirst,
+                recheck_delay_ms: 777,
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_clicks_after_audio_wait_recheck_without_preparing_again() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": false,
+        "autoWaitDialogueOptionVoiceEnabled": true,
+        "afterChooseOptionSleepDelay": 0,
+        "clickChatOption": "优先选择第一个选项"
+    }));
+    let mut first = fake_auto_skip_observation(1_000, true);
+    first.option_icon_detected = true;
+    first.dialogue_candidates = vec![fake_auto_skip_option("继续聊天", 100, false)];
+    let mut second = fake_auto_skip_observation(1_800, true);
+    second.option_icon_detected = true;
+    second.dialogue_candidates = vec![fake_auto_skip_option("继续聊天", 100, false)];
+    let mut runtime = FakeAutoSkipRuntime::new([first, second]).with_audio_wait(700);
+    let mut state = AutoSkipTriggerState::default();
+
+    let first_report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+    let second_report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        first_report.decision.skip_reason,
+        Some(AutoSkipTickSkipReason::AudioWaitPrepared)
+    );
+    assert_eq!(
+        runtime.prepared_audio_reasons,
+        vec![AutoSkipDialogueOptionClickReason::ConfiguredFirst]
+    );
+    assert_eq!(runtime.clicked_dialogue, vec![(0, "继续聊天".to_string())]);
+    assert_eq!(state.choose_option_wait_until_ms, None);
+    assert_eq!(state.choose_option_audio_recheck_until_ms, None);
+    assert_eq!(
+        second_report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: false,
+            },
+            AutoSkipExecutedAction::ClickDialogueOption {
+                candidate_index: 0,
+                text: "继续聊天".to_string(),
+                reason: AutoSkipDialogueOptionClickReason::ConfiguredFirst,
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_skips_while_choose_option_wait_is_active() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "autoWaitDialogueOptionVoiceEnabled": true
+    }));
+    let observation = fake_auto_skip_observation(1_500, true);
+    let mut runtime = FakeAutoSkipRuntime::new([observation]);
+    let mut state = AutoSkipTriggerState {
+        choose_option_wait_until_ms: Some(2_000),
+        ..AutoSkipTriggerState::default()
+    };
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.decision.skip_reason,
+        Some(AutoSkipTickSkipReason::ChooseOptionWaitActive)
+    );
+    assert!(runtime.prepared_audio_reasons.is_empty());
+    assert!(runtime.clicked_dialogue.is_empty());
+}
+
+#[test]
+fn auto_skip_tick_executor_claims_daily_primogem_inside_wait_window() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "autoGetDailyRewardsEnabled": true
+    }));
+    let mut observation = fake_auto_skip_observation(3_000, false);
+    observation.daily_primogem_detected = true;
+    let mut runtime = FakeAutoSkipRuntime::new([observation]);
+    let mut state = AutoSkipTriggerState {
+        previous_daily_reward_click_ms: Some(2_000),
+        ..AutoSkipTriggerState::default()
+    };
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        report.decision.skip_reason,
+        Some(AutoSkipTickSkipReason::DailyRewardWaitWindowHandled)
+    );
+    assert_eq!(
+        runtime.daily_primogem_clicks,
+        vec![plan.daily_reward_rule.primogem_click]
+    );
+    assert_eq!(state.previous_daily_reward_click_ms, None);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: false,
+            },
+            AutoSkipExecutedAction::CancelOrReleaseAudioWaiter,
+            AutoSkipExecutedAction::ClickDailyPrimogem {
+                point: plan.daily_reward_rule.primogem_click,
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_ignores_daily_window_when_daily_rewards_are_disabled() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "autoGetDailyRewardsEnabled": false
+    }));
+    let mut observation = fake_auto_skip_observation(3_000, false);
+    observation.daily_primogem_detected = true;
+    observation.black_screen_detected = true;
+    let mut runtime = FakeAutoSkipRuntime::new([observation]);
+    let mut state = AutoSkipTriggerState {
+        previous_daily_reward_click_ms: Some(2_000),
+        ..AutoSkipTriggerState::default()
+    };
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert!(runtime.daily_primogem_clicks.is_empty());
+    assert_eq!(runtime.black_screen_clicks, vec![false]);
+    assert!(report
+        .executed_actions
+        .contains(&AutoSkipExecutedAction::ClickBlackScreen {
+            background_operation_mode: false,
+        }));
+}
+
+#[test]
+fn auto_skip_tick_executor_bypasses_audio_wait_for_daily_and_expedition_options() {
+    let daily_plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": false,
+        "autoWaitDialogueOptionVoiceEnabled": true,
+        "autoGetDailyRewardsEnabled": true,
+        "autoReExploreEnabled": true
+    }));
+    let mut daily_observation = fake_auto_skip_observation(5_000, true);
+    daily_observation.option_icon_detected = true;
+    daily_observation.dialogue_candidates = vec![fake_auto_skip_option("每日委托奖励", 100, true)];
+    let mut daily_runtime =
+        FakeAutoSkipRuntime::new([daily_observation]).with_daily_black_confirm_results([true]);
+    let mut daily_state = AutoSkipTriggerState::default();
+
+    let daily_report =
+        execute_auto_skip_tick_plan(&daily_plan, &mut daily_state, &mut daily_runtime).unwrap();
+
+    assert!(daily_runtime.prepared_audio_reasons.is_empty());
+    assert_eq!(
+        daily_runtime.clicked_dialogue,
+        vec![(0, "每日委托奖励".to_string())]
+    );
+    assert_eq!(daily_runtime.delays, vec![800]);
+    assert_eq!(
+        daily_runtime.daily_black_confirm_assets,
+        vec![AUTO_SKIP_COMMON_BLACK_CONFIRM.to_string()]
+    );
+    assert_eq!(daily_state.previous_daily_reward_click_ms, Some(5_000));
+    assert!(daily_report
+        .executed_actions
+        .contains(&AutoSkipExecutedAction::Delay { duration_ms: 800 }));
+    assert!(daily_report.executed_actions.contains(
+        &AutoSkipExecutedAction::ClickDailyBlackConfirm {
+            asset: AUTO_SKIP_COMMON_BLACK_CONFIRM.to_string(),
+        }
+    ));
+
+    let expedition_plan = daily_plan;
+    let mut expedition_observation = fake_auto_skip_observation(7_000, true);
+    expedition_observation.option_icon_detected = true;
+    expedition_observation.dialogue_candidates = vec![fake_auto_skip_option("探索派遣", 100, true)];
+    let mut expedition_runtime = FakeAutoSkipRuntime::new([expedition_observation]);
+    let mut expedition_state = AutoSkipTriggerState::default();
+
+    let expedition_report = execute_auto_skip_tick_plan(
+        &expedition_plan,
+        &mut expedition_state,
+        &mut expedition_runtime,
+    )
+    .unwrap();
+
+    assert!(expedition_runtime.prepared_audio_reasons.is_empty());
+    assert_eq!(
+        expedition_runtime.clicked_dialogue,
+        vec![(0, "探索派遣".to_string())]
+    );
+    assert_eq!(expedition_runtime.delays, vec![800]);
+    assert_eq!(
+        expedition_runtime.expedition_texts,
+        vec!["探索派遣".to_string()]
+    );
+    assert!(expedition_report
+        .executed_actions
+        .contains(&AutoSkipExecutedAction::RunExpedition {
+            text: "探索派遣".to_string(),
+        }));
+}
+
+#[test]
+fn auto_skip_tick_executor_delays_before_quick_skip_key_press() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": true,
+        "beforeClickConfirmDelay": 66
+    }));
+    let observation = fake_auto_skip_observation(1_000, true);
+    let mut runtime = FakeAutoSkipRuntime::new([observation]);
+    let mut state = AutoSkipTriggerState::default();
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(runtime.delays, vec![66]);
+    assert_eq!(runtime.key_presses, vec!["SPACE".to_string()]);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: false,
+            },
+            AutoSkipExecutedAction::CancelOrReleaseAudioWaiter,
+            AutoSkipExecutedAction::Delay { duration_ms: 66 },
+            AutoSkipExecutedAction::PressKey {
+                key: "SPACE".to_string(),
+                reason: AutoSkipKeyPressReason::QuicklySkipConversation,
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_uses_key_based_selection_when_interaction_key_has_no_ocr_candidates() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": false,
+        "autoWaitDialogueOptionVoiceEnabled": false,
+        "afterChooseOptionSleepDelay": 50,
+        "clickChatOption": "随机选择选项"
+    }));
+    let mut observation = fake_auto_skip_observation(1_000, true);
+    observation.interaction_key_detected = true;
+    observation.random_choice_index = Some(3);
+    let mut runtime = FakeAutoSkipRuntime::new([observation]).with_key_selection_reports([
+        AutoSkipKeySelectionReport {
+            reason: AutoSkipDialogueOptionClickReason::ConfiguredRandom,
+            key_presses: vec!["S".to_string(), "F".to_string()],
+        },
+    ]);
+    let mut state = AutoSkipTriggerState::default();
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(runtime.key_selections, vec![Some(3)]);
+    assert_eq!(runtime.delays, vec![50]);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: false,
+            },
+            AutoSkipExecutedAction::CancelOrReleaseAudioWaiter,
+            AutoSkipExecutedAction::Delay { duration_ms: 50 },
+            AutoSkipExecutedAction::SelectDialogueOptionByKey {
+                reason: AutoSkipDialogueOptionClickReason::ConfiguredRandom,
+                key_presses: vec!["S".to_string(), "F".to_string()],
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_runs_not_playing_cleanup_and_black_screen_actions() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "closePopupPagedEnabled": true,
+        "submitGoodsEnabled": true
+    }));
+    let mut observation = fake_auto_skip_observation(5_000, false);
+    observation.popup_page_close_detected = true;
+    observation.bottom_triangle_detected = true;
+    observation.character_popup_detected = true;
+    observation.submit_goods_detected = true;
+    observation.black_screen_detected = true;
+    let mut runtime = FakeAutoSkipRuntime::new([observation]).with_background_modes([true]);
+    let mut state = AutoSkipTriggerState {
+        last_playing_ms: Some(4_000),
+        ..AutoSkipTriggerState::default()
+    };
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        runtime.popup_close_assets,
+        vec![AUTO_SKIP_PAGE_CLOSE.to_string()]
+    );
+    assert_eq!(runtime.bottom_triangle_clicks, 1);
+    assert_eq!(runtime.character_popup_closes, 1);
+    assert_eq!(runtime.submit_goods_count, 1);
+    assert!(runtime.black_screen_clicks.is_empty());
+    assert_eq!(state.last_close_item_popup_ms, Some(5_000));
+    assert_eq!(state.last_black_screen_click_ms, None);
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: true,
+            },
+            AutoSkipExecutedAction::CancelOrReleaseAudioWaiter,
+            AutoSkipExecutedAction::ClickPopupPageClose {
+                asset: AUTO_SKIP_PAGE_CLOSE.to_string(),
+            },
+            AutoSkipExecutedAction::ClickBottomTrianglePopup,
+            AutoSkipExecutedAction::CloseCharacterPopup,
+            AutoSkipExecutedAction::SubmitGoods,
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_brings_game_to_front_after_background_dialog() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "runBackgroundEnabled": true,
+        "bringGameToFrontAfterBackgroundDialogEnabled": true
+    }));
+    let playing = fake_auto_skip_observation(1_000, true);
+    let ended = fake_auto_skip_observation(4_100, false);
+    let mut runtime =
+        FakeAutoSkipRuntime::new([playing, ended]).with_background_modes([true, true]);
+    let mut state = AutoSkipTriggerState::default();
+
+    execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(runtime.bring_to_front_count, 1);
+    assert_eq!(state.pending_bring_to_front_since_ms, None);
+    assert_eq!(state.last_bring_to_front_ms, Some(4_100));
+    assert!(report
+        .executed_actions
+        .contains(&AutoSkipExecutedAction::BringGameToFront));
+}
+
+#[test]
+fn auto_skip_tick_executor_clicks_hangout_option_when_no_dialogue_option_exists() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": false,
+        "autoHangoutEventEnabled": true,
+        "autoHangoutEndChoose": "芭芭拉",
+        "autoHangoutChooseOptionSleepDelay": 321
+    }));
+    let mut observation = fake_auto_skip_observation(5_000, true);
+    observation.hangout_option_icons_detected = true;
+    observation.hangout_candidates = vec![
+        fake_auto_skip_hangout_option("普通选项", false),
+        fake_auto_skip_hangout_option("一起打扫教堂", false),
+    ];
+    let mut runtime = FakeAutoSkipRuntime::new([observation])
+        .with_hangout_keywords(["打扫".to_string(), "蒙德".to_string()]);
+    let mut state = AutoSkipTriggerState::default();
+
+    let report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(
+        runtime.clicked_hangout,
+        vec![(1, "一起打扫教堂".to_string())]
+    );
+    assert_eq!(runtime.delays, vec![321]);
+    assert_eq!(state.last_hangout_option_ms, Some(5_000));
+    assert_eq!(
+        report.executed_actions,
+        vec![
+            AutoSkipExecutedAction::RefreshBackgroundOperationMode {
+                background_operation_mode: false,
+            },
+            AutoSkipExecutedAction::CancelOrReleaseAudioWaiter,
+            AutoSkipExecutedAction::Delay { duration_ms: 321 },
+            AutoSkipExecutedAction::ClickHangoutOption {
+                candidate_index: 1,
+                text: "一起打扫教堂".to_string(),
+                reason: AutoSkipHangoutOptionClickReason::ConfiguredBranchKeyword,
+            },
+        ]
+    );
+}
+
+#[test]
+fn auto_skip_tick_executor_throttles_hangout_even_when_decision_does_not_click() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "enabled": true,
+        "quicklySkipConversationsEnabled": false,
+        "autoHangoutEventEnabled": true
+    }));
+    let mut first = fake_auto_skip_observation(5_000, true);
+    first.hangout_option_icons_detected = true;
+    let mut second = fake_auto_skip_observation(5_500, true);
+    second.hangout_option_icons_detected = true;
+    second.hangout_candidates = vec![fake_auto_skip_hangout_option("未选", false)];
+    let mut runtime = FakeAutoSkipRuntime::new([first, second]);
+    let mut state = AutoSkipTriggerState::default();
+
+    let first_report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+    let second_report = execute_auto_skip_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+    assert_eq!(state.last_hangout_option_ms, Some(5_000));
+    assert_eq!(
+        runtime.hangout_keyword_plan_keys,
+        vec![AUTO_SKIP_TASK_KEY.to_string()]
+    );
+    assert!(runtime.clicked_hangout.is_empty());
+    assert!(first_report.decision.hangout_decision.is_some());
+    assert!(second_report.decision.hangout_decision.is_none());
+}
+
+#[test]
+fn auto_skip_dialogue_option_filter_and_custom_options_match_legacy_rules() {
+    let plan = plan_auto_skip(AutoSkipExecutionConfig::default());
+    let filtered = filter_auto_skip_dialogue_option_candidates(
+        &[
+            fake_auto_skip_option("", 10, false),
+            fake_auto_skip_option("AB12", 20, false),
+            fake_auto_skip_option("断层前", 30, false),
+            fake_auto_skip_option("保留二", 220, false),
+            fake_auto_skip_option("普通", 240, false),
+        ],
+        &plan.option_rule,
+    );
+
+    assert_eq!(
+        filtered
+            .iter()
+            .map(|candidate| candidate.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["保留二", "普通"]
+    );
+    assert_eq!(
+        parse_auto_skip_custom_priority_options("每日\n 探索 ;派遣；\r"),
+        vec!["每日".to_string(), "探索".to_string(), "派遣".to_string()]
+    );
+
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "customPriorityOptionsEnabled": true,
+        "customPriorityOptions": "每日\n探索",
+        "clickChatOption": "优先选择最后一个选项"
+    }));
+    let decision = decide_auto_skip_dialogue_option(
+        &[
+            fake_auto_skip_option("普通问候", 100, false),
+            fake_auto_skip_option("探索派遣", 200, false),
+        ],
+        &plan.config_rule,
+        &plan.option_rule,
+        &plan.daily_reward_rule,
+        &plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+
+    assert!(decision.has_dialogue_option);
+    assert_eq!(
+        decision.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 1,
+            text: "探索派遣".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::CustomPriorityKeyword,
+        }
+    );
+}
+
+#[test]
+fn auto_skip_dialogue_option_decision_preserves_built_in_and_orange_order() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "clickChatOption": "优先选择第一个选项",
+        "autoGetDailyRewardsEnabled": true,
+        "autoReExploreEnabled": true
+    }));
+
+    let select = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("立刻出发", 100, false)],
+        &plan.config_rule,
+        &plan.option_rule,
+        &plan.daily_reward_rule,
+        &plan.expedition_rule,
+        &["出发".to_string()],
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(
+        select.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 0,
+            text: "立刻出发".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::BuiltInSelectKeyword,
+        }
+    );
+
+    let pause = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("稍后再说", 100, false)],
+        &plan.config_rule,
+        &plan.option_rule,
+        &plan.daily_reward_rule,
+        &plan.expedition_rule,
+        &[],
+        &["稍后".to_string()],
+        &[],
+        None,
+    );
+    assert_eq!(
+        pause.action,
+        AutoSkipDialogueOptionAction::NoClick {
+            reason: AutoSkipDialogueOptionNoClickReason::BuiltInPauseKeyword,
+        }
+    );
+
+    let daily = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("每日委托奖励", 100, true)],
+        &plan.config_rule,
+        &plan.option_rule,
+        &plan.daily_reward_rule,
+        &plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(
+        daily.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 0,
+            text: "每日委托奖励".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::OrangeDailyReward,
+        }
+    );
+
+    let expedition = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("探索派遣", 100, true)],
+        &plan.config_rule,
+        &plan.option_rule,
+        &plan.daily_reward_rule,
+        &plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(
+        expedition.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 0,
+            text: "探索派遣".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::OrangeExpedition,
+        }
+    );
+
+    let ordinary_orange = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("继续聊天", 100, true)],
+        &plan.config_rule,
+        &plan.option_rule,
+        &plan.daily_reward_rule,
+        &plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(
+        ordinary_orange.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 0,
+            text: "继续聊天".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::OrangeText,
+        }
+    );
+}
+
+#[test]
+fn auto_skip_dialogue_option_decision_preserves_no_click_and_default_choice() {
+    let none_plan = auto_skip_plan_with_config(serde_json::json!({
+        "clickChatOption": "不选择选项"
+    }));
+    let none = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("任意选项", 100, false)],
+        &none_plan.config_rule,
+        &none_plan.option_rule,
+        &none_plan.daily_reward_rule,
+        &none_plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+    assert!(!none.has_dialogue_option);
+    assert_eq!(
+        none.action,
+        AutoSkipDialogueOptionAction::NoClick {
+            reason: AutoSkipDialogueOptionNoClickReason::ClickNoneConfigured,
+        }
+    );
+
+    let reserved_plan = auto_skip_plan_with_config(serde_json::json!({
+        "autoGetDailyRewardsEnabled": false,
+        "autoReExploreEnabled": false
+    }));
+    let reserved = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("每日委托奖励", 100, true)],
+        &reserved_plan.config_rule,
+        &reserved_plan.option_rule,
+        &reserved_plan.daily_reward_rule,
+        &reserved_plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(
+        reserved.action,
+        AutoSkipDialogueOptionAction::NoClick {
+            reason: AutoSkipDialogueOptionNoClickReason::OrangeReservedKeyword,
+        }
+    );
+
+    let default_pause = decide_auto_skip_dialogue_option(
+        &[fake_auto_skip_option("暂时离开", 100, false)],
+        &reserved_plan.config_rule,
+        &reserved_plan.option_rule,
+        &reserved_plan.daily_reward_rule,
+        &reserved_plan.expedition_rule,
+        &[],
+        &[],
+        &["离开".to_string()],
+        None,
+    );
+    assert_eq!(
+        default_pause.action,
+        AutoSkipDialogueOptionAction::NoClick {
+            reason: AutoSkipDialogueOptionNoClickReason::BuiltInDefaultPauseKeyword,
+        }
+    );
+
+    let last_plan = auto_skip_plan_with_config(serde_json::json!({
+        "clickChatOption": "优先选择最后一个选项"
+    }));
+    let last = decide_auto_skip_dialogue_option(
+        &[
+            fake_auto_skip_option("上方", 100, false),
+            fake_auto_skip_option("下方", 200, false),
+        ],
+        &last_plan.config_rule,
+        &last_plan.option_rule,
+        &last_plan.daily_reward_rule,
+        &last_plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        None,
+    );
+    assert_eq!(
+        last.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 1,
+            text: "下方".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::ConfiguredLast,
+        }
+    );
+
+    let random_plan = auto_skip_plan_with_config(serde_json::json!({
+        "clickChatOption": "随机选择选项"
+    }));
+    let random = decide_auto_skip_dialogue_option(
+        &[
+            fake_auto_skip_option("一", 100, false),
+            fake_auto_skip_option("二", 200, false),
+            fake_auto_skip_option("三", 300, false),
+        ],
+        &random_plan.config_rule,
+        &random_plan.option_rule,
+        &random_plan.daily_reward_rule,
+        &random_plan.expedition_rule,
+        &[],
+        &[],
+        &[],
+        Some(4),
+    );
+    assert_eq!(
+        random.action,
+        AutoSkipDialogueOptionAction::Click {
+            candidate_index: 1,
+            text: "二".to_string(),
+            reason: AutoSkipDialogueOptionClickReason::ConfiguredRandom,
+        }
+    );
+}
+
+#[test]
+fn auto_skip_hangout_branch_json_and_option_decision_match_legacy_order() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "autoHangoutEventEnabled": true,
+        "autoHangoutEndChoose": "芭芭拉",
+        "autoHangoutPressSkipEnabled": true
+    }));
+    let branches =
+        parse_auto_skip_hangout_branch_options(r#"{"芭芭拉":["打扫","蒙德"],"诺艾尔":["图书馆"]}"#)
+            .unwrap();
+    let keywords = auto_skip_hangout_configured_branch_keywords(&branches, "芭芭拉");
+    assert_eq!(keywords, &["打扫".to_string(), "蒙德".to_string()]);
+
+    let branch = decide_auto_skip_hangout_option(
+        true,
+        &[
+            fake_auto_skip_hangout_option("已经选过", true),
+            fake_auto_skip_hangout_option("一起打扫教堂", false),
+        ],
+        false,
+        &plan.hangout_rule,
+        keywords,
+    );
+    assert_eq!(
+        branch.action,
+        AutoSkipHangoutOptionAction::ClickOption {
+            candidate_index: 1,
+            text: "一起打扫教堂".to_string(),
+            matched_keyword: Some("打扫".to_string()),
+            reason: AutoSkipHangoutOptionClickReason::ConfiguredBranchKeyword,
+        }
+    );
+
+    let no_branch_keywords = auto_skip_hangout_configured_branch_keywords(&branches, "不存在");
+    let first_unselected = decide_auto_skip_hangout_option(
+        true,
+        &[
+            fake_auto_skip_hangout_option("已选", true),
+            fake_auto_skip_hangout_option("未选", false),
+        ],
+        false,
+        &plan.hangout_rule,
+        no_branch_keywords,
+    );
+    assert_eq!(
+        first_unselected.action,
+        AutoSkipHangoutOptionAction::ClickOption {
+            candidate_index: 1,
+            text: "未选".to_string(),
+            matched_keyword: None,
+            reason: AutoSkipHangoutOptionClickReason::FirstUnselected,
+        }
+    );
+
+    let first_selected = decide_auto_skip_hangout_option(
+        true,
+        &[
+            fake_auto_skip_hangout_option("第一个已选", true),
+            fake_auto_skip_hangout_option("第二个已选", true),
+        ],
+        false,
+        &plan.hangout_rule,
+        no_branch_keywords,
+    );
+    assert_eq!(
+        first_selected.action,
+        AutoSkipHangoutOptionAction::ClickOption {
+            candidate_index: 0,
+            text: "第一个已选".to_string(),
+            matched_keyword: None,
+            reason: AutoSkipHangoutOptionClickReason::FirstSelected,
+        }
+    );
+}
+
+#[test]
+fn auto_skip_hangout_skip_button_and_no_click_cases_match_legacy_branches() {
+    let plan = auto_skip_plan_with_config(serde_json::json!({
+        "autoHangoutEventEnabled": true,
+        "autoHangoutPressSkipEnabled": true
+    }));
+
+    let skip = decide_auto_skip_hangout_option(true, &[], true, &plan.hangout_rule, &[]);
+    assert_eq!(
+        skip.action,
+        AutoSkipHangoutOptionAction::NoClick {
+            reason: AutoSkipHangoutOptionNoClickReason::OptionIconsDetectedButNoTextRegion,
+        }
+    );
+
+    let skip = decide_auto_skip_hangout_option(false, &[], true, &plan.hangout_rule, &[]);
+    assert_eq!(
+        skip.action,
+        AutoSkipHangoutOptionAction::ClickSkip {
+            reason: AutoSkipHangoutSkipClickReason::SkipButtonWhenNoOption,
+        }
+    );
+
+    let missing = decide_auto_skip_hangout_option(false, &[], false, &plan.hangout_rule, &[]);
+    assert_eq!(
+        missing.action,
+        AutoSkipHangoutOptionAction::NoClick {
+            reason: AutoSkipHangoutOptionNoClickReason::SkipButtonMissing,
+        }
+    );
+
+    let disabled_skip_plan = auto_skip_plan_with_config(serde_json::json!({
+        "autoHangoutEventEnabled": true,
+        "autoHangoutPressSkipEnabled": false
+    }));
+    let disabled_skip =
+        decide_auto_skip_hangout_option(false, &[], true, &disabled_skip_plan.hangout_rule, &[]);
+    assert_eq!(
+        disabled_skip.action,
+        AutoSkipHangoutOptionAction::NoClick {
+            reason: AutoSkipHangoutOptionNoClickReason::SkipDisabled,
+        }
+    );
+
+    let disabled_hangout = auto_skip_plan_with_config(serde_json::json!({
+        "autoHangoutEventEnabled": false,
+        "autoHangoutPressSkipEnabled": true
+    }));
+    let disabled = decide_auto_skip_hangout_option(
+        true,
+        &[fake_auto_skip_hangout_option("任意", false)],
+        true,
+        &disabled_hangout.hangout_rule,
+        &[],
+    );
+    assert_eq!(
+        disabled.action,
+        AutoSkipHangoutOptionAction::NoClick {
+            reason: AutoSkipHangoutOptionNoClickReason::HangoutDisabled,
+        }
+    );
+}
+
+#[test]
+fn script_dispatcher_timer_maps_to_realtime_trigger_invocation() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoPick".to_string(),
+            interval_ms: 50,
+            config: Some(serde_json::json!({"enabled": true})),
+            clears_existing_triggers: true,
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(plan.kind, TaskInvocationKind::AddRealtimeTrigger);
+    assert_eq!(plan.task_key.as_deref(), Some("AutoPick"));
+    assert_eq!(plan.interval_ms, Some(50));
+    assert!(plan.clears_existing_triggers);
+    assert_eq!(
+        plan.catalog_entry.unwrap().launch_policy,
+        TaskLaunchPolicy::RealtimeTick
+    );
+}
+
+#[test]
+fn realtime_auto_pick_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoPick".to_string(),
+            interval_ms: 125,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "autoPickConfig": {
+                    "pickKey": "G",
+                    "ocrEngine": "Yap",
+                    "blackListEnabled": false,
+                    "whiteListEnabled": true
+                },
+                "textList": ["Crystal Core"],
+                "forceInteraction": true
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::AutoPick(auto_pick)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected AutoPick realtime trigger execution plan");
+    };
+    assert_eq!(auto_pick.task_key, AUTO_PICK_TASK_KEY);
+    assert_eq!(auto_pick.config_rule.pick_key, "G");
+    assert_eq!(auto_pick.config_rule.ocr_engine, AutoPickOcrEngine::Yap);
+    assert_eq!(auto_pick.external_config.text_list, vec!["Crystal Core"]);
+    assert!(auto_pick.external_config.force_interaction);
+    assert!(auto_pick.executor_ready);
+}
+
+#[test]
+fn realtime_auto_eat_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoEat".to_string(),
+            interval_ms: 150,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "autoEatConfig": {
+                    "enabled": true,
+                    "checkInterval": 250,
+                    "eatInterval": 1500,
+                    "showNotification": false
+                }
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::AutoEat(auto_eat)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected AutoEat realtime trigger execution plan");
+    };
+    assert_eq!(auto_eat.task_key, AUTO_EAT_TASK_KEY);
+    assert_eq!(auto_eat.capture_size, Size::new(1280, 720));
+    assert!(auto_eat.config_rule.enabled);
+    assert_eq!(auto_eat.config_rule.check_interval_ms, 250);
+    assert_eq!(auto_eat.config_rule.eat_interval_ms, 1500);
+    assert_eq!(
+        auto_eat.locators.recovery_icon.roi,
+        Rect {
+            x: 1206,
+            y: 518,
+            width: 15,
+            height: 15
+        }
+    );
+    assert!(auto_eat.executor_ready);
+}
+
+#[test]
+fn realtime_auto_fish_invocation_exposes_rust_tick_plan_without_executor_ready() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoFish".to_string(),
+            interval_ms: 67,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "autoFishingConfig": {
+                    "enabled": true,
+                    "fishingTimePolicy": "DontChange"
+                }
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::AutoFish(auto_fish)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected AutoFish realtime trigger execution plan");
+    };
+    assert_eq!(auto_fish.task_key, AUTO_FISH_TASK_KEY);
+    assert_eq!(auto_fish.capture_size, Size::new(1280, 720));
+    assert!(auto_fish.config_rule.enabled);
+    assert_eq!(
+        auto_fish.config_rule.fishing_time_policy,
+        AutoFishTimePolicy::DontChange
+    );
+    assert_eq!(auto_fish.trigger_rule.tick_throttle_ms, 67);
+    assert_eq!(
+        auto_fish.locators.exit_fishing_button.roi,
+        Rect {
+            x: 1187,
+            y: 620,
+            width: 93,
+            height: 100
+        }
+    );
+    assert!(!auto_fish.executor_ready);
+}
+
+#[test]
+fn script_dispatcher_auto_cook_invocation_exposes_executor_ready_rust_task_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoCook".to_string(),
+            config: serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "assetScale": 1.5,
+                "autoCookConfig": {
+                    "checkIntervalMs": 25,
+                    "stopTaskWhenRecoverButtonDetected": true
+                }
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(plan.kind, TaskInvocationKind::RunScriptDispatcherTask);
+    assert_eq!(plan.task_key.as_deref(), Some(AUTO_COOK_TASK_KEY));
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::ExecuteReady);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(result.message.contains(AUTO_COOK_TASK_KEY));
+    assert!(result.message.contains("script-dispatcher execution plan"));
+    let Some(ScriptDispatcherExecutionPlan::AutoCook(auto_cook)) =
+        result.script_dispatcher_execution_plan
+    else {
+        panic!("expected AutoCook script-dispatcher execution plan");
+    };
+    assert_eq!(auto_cook.task_key, AUTO_COOK_TASK_KEY);
+    assert_eq!(auto_cook.capture_size, Size::new(1280, 720));
+    assert_eq!(auto_cook.asset_scale, 1.5);
+    assert_eq!(auto_cook.config_rule.effective_check_interval_ms, 25);
+    assert!(auto_cook.config_rule.stop_task_when_recover_button_detected);
+    assert_eq!(auto_cook.peak_rule.scaled_peak_min_count, 900);
+    assert_eq!(auto_cook.peak_rule.scaled_trigger_drop_count, 450);
+    assert!(auto_cook.executor_ready);
+}
+
+#[test]
+fn script_dispatcher_auto_eat_builtin_maps_to_food_plan_without_breaking_realtime_trigger() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoEat".to_string(),
+            config: serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "foodName": "甜甜花酿鸡"
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(plan.kind, TaskInvocationKind::RunScriptDispatcherTask);
+    assert_eq!(plan.task_key.as_deref(), Some(AUTO_EAT_FOOD_TASK_KEY));
+    assert_eq!(
+        plan.catalog_entry.as_ref().unwrap().launch_policy,
+        TaskLaunchPolicy::ScriptDispatcher
+    );
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::ExecuteReady);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(result.message.contains(AUTO_EAT_FOOD_TASK_KEY));
+    assert!(result.realtime_trigger_execution_plan.is_none());
+    let Some(ScriptDispatcherExecutionPlan::AutoEatFood(auto_eat_food)) =
+        result.script_dispatcher_execution_plan
+    else {
+        panic!("expected AutoEatFood script-dispatcher execution plan");
+    };
+    assert_eq!(auto_eat_food.task_key, AUTO_EAT_FOOD_TASK_KEY);
+    assert_eq!(auto_eat_food.script_task_name, AUTO_EAT_SCRIPT_TASK_NAME);
+    assert_eq!(auto_eat_food.capture_size, Size::new(1280, 720));
+    assert_eq!(auto_eat_food.food_name.as_deref(), Some("甜甜花酿鸡"));
+    assert!(!auto_eat_food.executor_ready);
+
+    let realtime = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoEat".to_string(),
+            interval_ms: 150,
+            config: None,
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+    assert_eq!(realtime.kind, TaskInvocationKind::AddRealtimeTrigger);
+    assert_eq!(realtime.task_key.as_deref(), Some(AUTO_EAT_TASK_KEY));
+}
+
+#[test]
+fn script_dispatcher_auto_fishing_invocation_exposes_rust_task_plan_without_executor_ready() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoFishing".to_string(),
+            config: serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "autoFishingConfig": {
+                    "enabled": true,
+                    "fishingTimePolicy": 2,
+                    "torchDllFullPath": "D:\\torch\\torch_cpu.dll"
+                },
+                "wholeProcessTimeoutSeconds": 444,
+                "throwRodTimeOutTimeoutSeconds": 22,
+                "saveScreenshotOnKeyTick": true
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(plan.kind, TaskInvocationKind::RunScriptDispatcherTask);
+    assert_eq!(plan.task_key.as_deref(), Some(AUTO_FISHING_TASK_KEY));
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::ExecuteReady);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(result.message.contains(AUTO_FISHING_TASK_KEY));
+    assert!(result.message.contains("script-dispatcher execution plan"));
+    assert!(result.realtime_trigger_execution_plan.is_none());
+    let Some(ScriptDispatcherExecutionPlan::AutoFishing(auto_fishing)) =
+        result.script_dispatcher_execution_plan
+    else {
+        panic!("expected AutoFishing script-dispatcher execution plan");
+    };
+    assert_eq!(auto_fishing.task_key, AUTO_FISHING_TASK_KEY);
+    assert_eq!(auto_fishing.capture_size, Size::new(1280, 720));
+    assert_eq!(auto_fishing.config_rule.whole_process_timeout_seconds, 444);
+    assert_eq!(auto_fishing.config_rule.throw_rod_timeout_seconds, 22);
+    assert_eq!(
+        auto_fishing.config_rule.fishing_time_policy,
+        AutoFishingTimePolicy::Nighttime
+    );
+    assert!(auto_fishing.config_rule.save_screenshot_on_key_tick);
+    assert_eq!(
+        auto_fishing.config_rule.torch_dll_full_path,
+        "D:\\torch\\torch_cpu.dll"
+    );
+    assert_eq!(auto_fishing.fish_model_rule.fish_types.len(), 21);
+    assert_eq!(auto_fishing.rod_net_rule.label_count, 11);
+    assert!(!auto_fishing.executor_ready);
+}
+
+#[test]
+fn realtime_skill_cd_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "SkillCd".to_string(),
+            interval_ms: 50,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "triggerInterval": 75,
+                "skillCdConfig": {
+                    "enabled": true,
+                    "triggerOnSkillUse": true,
+                    "pX": 1500.0,
+                    "pY": 240.0,
+                    "gap": 90.0
+                }
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::SkillCd(skill_cd)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected SkillCd realtime trigger execution plan");
+    };
+    assert_eq!(skill_cd.task_key, SKILL_CD_TASK_KEY);
+    assert_eq!(skill_cd.capture_size, Size::new(1280, 720));
+    assert!(skill_cd.config_rule.enabled);
+    assert!(skill_cd.input_rule.trigger_on_skill_use);
+    assert_eq!(
+        skill_cd.cooldown_rule.e_cooldown_roi,
+        Rect {
+            x: 1120,
+            y: 656,
+            width: 27,
+            height: 12
+        }
+    );
+    assert_eq!(skill_cd.cooldown_rule.ocr_rule.compensation_seconds, 0.15);
+    assert!(skill_cd.executor_ready);
+}
+
+#[test]
+fn realtime_map_mask_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "MapMask".to_string(),
+            interval_ms: 50,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "mapMaskConfig": {
+                    "enabled": true,
+                    "miniMapMaskEnabled": true,
+                    "mapPointApiProvider": "KongyingTavern"
+                }
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::MapMask(map_mask)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected MapMask realtime trigger execution plan");
+    };
+    assert_eq!(map_mask.task_key, MAP_MASK_TASK_KEY);
+    assert_eq!(map_mask.capture_size, Size::new(1280, 720));
+    assert!(map_mask.config_rule.enabled);
+    assert_eq!(
+        map_mask.config_rule.map_point_api_provider,
+        MapMaskPointProvider::KongyingTavern
+    );
+    assert_eq!(
+        map_mask.mini_map_rule.mini_map_roi,
+        Rect {
+            x: 41,
+            y: 12,
+            width: 141,
+            height: 141
+        }
+    );
+    assert!(map_mask.executor_ready);
+}
+
+#[test]
+fn realtime_auto_skip_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoSkip".to_string(),
+            interval_ms: 200,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "autoSkipConfig": {
+                    "clickChatOption": "不选择选项",
+                    "autoWaitDialogueOptionVoiceEnabled": true,
+                    "dialogueOptionVoiceMaxWaitSeconds": 10,
+                    "runBackgroundEnabled": true
+                }
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::AutoSkip(auto_skip)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected AutoSkip realtime trigger execution plan");
+    };
+    assert_eq!(auto_skip.task_key, AUTO_SKIP_TASK_KEY);
+    assert_eq!(auto_skip.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        auto_skip.config_rule.click_chat_option,
+        AutoSkipClickChatOption::None
+    );
+    assert!(
+        auto_skip
+            .config_rule
+            .auto_wait_dialogue_option_voice_enabled
+    );
+    assert_eq!(
+        auto_skip.config_rule.dialogue_option_voice_max_wait_seconds,
+        10
+    );
+    assert!(auto_skip.config_rule.run_background_enabled);
+    assert_eq!(
+        auto_skip.assets.option_icon.roi,
+        Rect {
+            x: 640,
+            y: 60,
+            width: 427,
+            height: 650
+        }
+    );
+    assert!(auto_skip.executor_ready);
+}
+
+#[test]
+fn realtime_game_loading_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "GameLoading".to_string(),
+            interval_ms: 2_000,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "genshinStartConfig": {
+                    "autoEnterGameEnabled": false,
+                    "recordGameTimeEnabled": true,
+                    "installPath": "C:/Games/Genshin Impact/GenshinImpact.exe"
+                }
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::GameLoading(game_loading)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected GameLoading realtime trigger execution plan");
+    };
+    assert_eq!(game_loading.task_key, GAME_LOADING_TASK_KEY);
+    assert_eq!(game_loading.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        game_loading.locators.enter_game.roi,
+        Rect {
+            x: 426,
+            y: 360,
+            width: 426,
+            height: 360
+        }
+    );
+    assert!(!game_loading.config_rule.auto_enter_game_enabled);
+    assert!(game_loading.starward_rule.enabled);
+    assert_eq!(
+        game_loading.config_rule.install_file_name.as_deref(),
+        Some("GenshinImpact.exe")
+    );
+    assert!(game_loading.executor_ready);
+}
+
+#[test]
+fn realtime_quick_teleport_invocation_exposes_executor_ready_rust_tick_plan() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "QuickTeleport".to_string(),
+            interval_ms: 300,
+            config: Some(serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "quickTeleportConfig": {
+                    "enabled": true,
+                    "teleportListClickDelay": 250,
+                    "waitTeleportPanelDelay": 25,
+                    "hotkeyTpEnabled": true
+                },
+                "quickTeleportTickHotkey": "MouseMiddle"
+            })),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let result = evaluate_task_invocation_plan(plan, TaskInvocationExecutionMode::PlanOnly);
+
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(RealtimeTriggerExecutionPlan::QuickTeleport(quick_teleport)) =
+        result.realtime_trigger_execution_plan
+    else {
+        panic!("expected QuickTeleport realtime trigger execution plan");
+    };
+    assert_eq!(quick_teleport.task_key, QUICK_TELEPORT_TASK_KEY);
+    assert_eq!(quick_teleport.capture_size, Size::new(1280, 720));
+    assert_eq!(quick_teleport.config_rule.teleport_list_click_delay_ms, 250);
+    assert_eq!(quick_teleport.config_rule.wait_teleport_panel_delay_ms, 25);
+    assert_eq!(
+        quick_teleport.hotkey_rule.configured_tick_hotkey.as_deref(),
+        Some("MouseMiddle")
+    );
+    assert!(quick_teleport.hotkey_rule.requires_pressed);
+    assert_eq!(
+        quick_teleport.locators.map_choose_icon_roi,
+        Rect {
+            x: 846,
+            y: 66,
+            width: 33,
+            height: 587
+        }
+    );
+    assert!(quick_teleport.executor_ready);
+}
+
+#[test]
+fn count_inventory_item_plan_preserves_legacy_grid_classifier_ocr_and_result_contract() {
+    assert_eq!(
+        serde_json::from_str::<GridScreenName>("\"CharacterDevelopmentItems\"").unwrap(),
+        GridScreenName::CharacterDevelopmentItems
+    );
+    assert_eq!(
+        serde_json::from_str::<GridScreenName>("\"ArtifactSetFilter\"").unwrap(),
+        GridScreenName::ArtifactSetFilter
+    );
+
+    let plan = plan_count_inventory_item(CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Weapons),
+        item_name: Some("精锻用魔矿".to_string()),
+        ..CountInventoryItemExecutionConfig::default()
+    })
+    .unwrap();
+
+    assert_eq!(plan.task_key, COUNT_INVENTORY_ITEM_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(
+        plan.search_mode,
+        CountInventorySearchMode::Single {
+            item_name: "精锻用魔矿".to_string()
+        }
+    );
+    assert!(plan.weapon_ore_prescroll_rule.enabled);
+    assert_eq!(plan.weapon_ore_prescroll_rule.item_name_prefix, "精锻用");
+    assert_eq!(
+        (
+            plan.weapon_ore_prescroll_rule.hold_scrollbar_bottom_x_1080p,
+            plan.weapon_ore_prescroll_rule.hold_scrollbar_bottom_y_1080p,
+            plan.weapon_ore_prescroll_rule.hold_ms,
+        ),
+        (1289, 936, 2_000)
+    );
+    assert_eq!(
+        plan.open_inventory_rule.open_inventory_action,
+        GenshinAction::OpenInventory
+    );
+    assert_eq!(plan.open_inventory_rule.open_wait_ms, 1_200);
+    assert_eq!(plan.open_inventory_rule.retry_attempts, 5);
+    assert!(plan.open_inventory_rule.retry_when_main_ui_detected);
+    assert_eq!(
+        plan.open_inventory_rule.tab_assets.checked_asset,
+        "Common/Element:bag_weapon_checked.png"
+    );
+    assert_eq!(plan.open_inventory_rule.tab_assets.checked_threshold, 0.8);
+    assert_eq!(
+        plan.open_inventory_rule.tab_assets.unchecked_threshold,
+        0.87
+    );
+    assert_eq!(plan.open_inventory_rule.tab_assets.roi_top_ratio, 0.1);
+    assert_eq!(
+        plan.grid_template.roi_1080p,
+        Rect {
+            x: 106,
+            y: 110,
+            width: 1171,
+            height: 845
+        }
+    );
+    assert_eq!(plan.grid_template.columns, 8);
+    assert_eq!(plan.grid_template.s1_round, 3);
+    assert_eq!(plan.grid_template.s2_round, 32);
+    assert_eq!(plan.grid_template.s3_scale, 0.024);
+    assert_eq!(
+        plan.grid_item_detection_rule.min_width_per_column_ratio,
+        0.66
+    );
+    assert_eq!(plan.grid_item_detection_rule.shape_ratio_target, 0.81);
+    assert_eq!(plan.grid_item_detection_rule.shape_ratio_tolerance, 0.03);
+    assert_eq!(
+        plan.grid_item_detection_rule.phantom_cell_bgr,
+        GridBgrColor {
+            b: 0xdc,
+            g: 0xe5,
+            r: 0xe9
+        }
+    );
+    assert_eq!(plan.grid_item_detection_rule.phantom_cell_tolerance, 30);
+    assert_eq!(plan.grid_icon_crop_rule.normalized_width, 125);
+    assert_eq!(plan.grid_icon_crop_rule.normalized_height, 153);
+    assert_eq!(
+        plan.grid_icon_crop_rule.icon_crop,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 125,
+            height: 125
+        }
+    );
+    assert_eq!(plan.classifier_rule.model_name, GRID_ICON_MODEL_NAME);
+    assert_eq!(plan.classifier_rule.model_path, GRID_ICON_MODEL_PATH);
+    assert_eq!(
+        plan.classifier_rule.prototype_csv_path,
+        GRID_ICON_PROTOTYPE_CSV_PATH
+    );
+    assert_eq!(plan.classifier_rule.input_name, GRID_ICON_INPUT_NAME);
+    assert_eq!(plan.classifier_rule.feature_dimensions, 64);
+    assert_eq!(plan.classifier_rule.max_distance_squared, 100.0);
+    assert_eq!(plan.count_ocr_rule.crop_top_numerator, 128);
+    assert_eq!(plan.count_ocr_rule.crop_bottom_numerator, 150);
+    assert_eq!(plan.count_ocr_rule.crop_left_numerator, 5);
+    assert_eq!(plan.count_ocr_rule.crop_right_numerator, 120);
+    assert_eq!(plan.count_ocr_rule.resize_scale, 2);
+    assert!(plan.count_ocr_rule.convert_full_width_digits);
+    assert_eq!(
+        plan.count_ocr_rule.ocr_failed_value,
+        COUNT_INVENTORY_OCR_FAILED
+    );
+    assert_eq!(plan.scroll_rule.phase_correlation_lower_threshold, 0.5);
+    assert_eq!(plan.scroll_rule.phase_correlation_upper_threshold, 0.95);
+    assert_eq!(
+        plan.result_contract.single_not_found_value,
+        COUNT_INVENTORY_SINGLE_NOT_FOUND
+    );
+    assert_eq!(
+        plan.result_contract.ocr_failed_value,
+        COUNT_INVENTORY_OCR_FAILED
+    );
+    assert!(plan.result_contract.multiple_missing_items_are_omitted);
+    assert!(plan
+        .steps
+        .iter()
+        .any(|step| step.condition == CountInventoryItemStepCondition::WhenWeaponOreRequested));
+    assert!(plan.steps.iter().any(|step| matches!(
+        step.action,
+        CountInventoryItemStepAction::LoadGridIconClassifier { .. }
+    )));
+
+    let configured = plan_common_job(
+        COUNT_INVENTORY_ITEM_TASK_KEY,
+        Some(&serde_json::json!({
+            "gridScreenName": "Materials",
+            "itemNames": ["晶核", "甜甜花"]
+        })),
+    )
+    .unwrap()
+    .unwrap();
+    let CommonJobExecutionPlan::CountInventoryItem(configured) = configured else {
+        panic!("expected CountInventoryItem common job plan");
+    };
+    assert_eq!(configured.grid_screen_name, GridScreenName::Materials);
+    assert!(!configured.weapon_ore_prescroll_rule.enabled);
+    assert_eq!(
+        configured.search_mode,
+        CountInventorySearchMode::Multiple {
+            item_names: vec!["晶核".to_string(), "甜甜花".to_string()]
+        }
+    );
+    assert_eq!(
+        configured.open_inventory_rule.tab_assets.unchecked_asset,
+        "Common/Element:bag_material_unchecked.png"
+    );
+}
+
+#[derive(Debug, Default)]
+struct FakeCountInventoryItemRuntime {
+    common_job_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    open_outcomes: VecDeque<CountInventoryOpenInventoryOutcome>,
+    confirm_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    open_tab_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    load_classifier_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    prescroll_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    grid_items: VecDeque<Vec<CountInventoryGridItemFrame>>,
+    crop_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    infer_outcomes: VecDeque<Vec<CountInventoryGridIconMatch>>,
+    count_outcomes: VecDeque<Vec<CountInventoryItemCount>>,
+    clear_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    common_job_calls: Vec<String>,
+    open_calls: usize,
+    confirm_calls: Vec<(String, f64)>,
+    open_tab_calls: Vec<CountInventoryOpenInventoryRule>,
+    load_classifier_calls: Vec<GridIconClassifierRule>,
+    prescroll_calls: Vec<WeaponOrePrescrollRule>,
+    enumerate_calls: Vec<(GridTemplate, GridItemDetectionRule, GridScrollRule)>,
+    crop_calls: Vec<(Vec<CountInventoryGridItemFrame>, GridIconCropRule)>,
+    infer_calls: Vec<(Vec<CountInventoryGridItemFrame>, GridIconClassifierRule)>,
+    count_calls: Vec<(Vec<CountInventoryGridIconMatch>, GridItemCountOcrRule)>,
+    logs: Vec<String>,
+}
+
+impl FakeCountInventoryItemRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_open_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = CountInventoryOpenInventoryOutcome>,
+    ) -> Self {
+        self.open_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_grid_items(
+        mut self,
+        batches: impl IntoIterator<Item = Vec<CountInventoryGridItemFrame>>,
+    ) -> Self {
+        self.grid_items = batches.into_iter().collect();
+        self
+    }
+
+    fn with_infer_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = Vec<CountInventoryGridIconMatch>>,
+    ) -> Self {
+        self.infer_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_count_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = Vec<CountInventoryItemCount>>,
+    ) -> Self {
+        self.count_outcomes = outcomes.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeCountInventoryItemRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, _events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        _events: &[InputEvent],
+    ) -> Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        _command: &BvPageCommand,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, _locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+}
+
+impl CountInventoryItemRuntime for FakeCountInventoryItemRuntime {
+    fn execute_count_inventory_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.common_job_calls.push(task_key.to_string());
+        Ok(self
+            .common_job_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn open_count_inventory(
+        &mut self,
+        _rule: &CountInventoryOpenInventoryRule,
+    ) -> Result<CountInventoryOpenInventoryOutcome> {
+        self.open_calls += 1;
+        Ok(self
+            .open_outcomes
+            .pop_front()
+            .unwrap_or(CountInventoryOpenInventoryOutcome {
+                expired_item_prompt_detected: false,
+                inventory_tab_checked: true,
+                still_on_main_ui: false,
+            }))
+    }
+
+    fn confirm_count_inventory_expired_item_prompt(
+        &mut self,
+        confirm_asset: &str,
+        crop_bottom_ratio: f64,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.confirm_calls
+            .push((confirm_asset.to_string(), crop_bottom_ratio));
+        Ok(self
+            .confirm_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn open_count_inventory_tab(
+        &mut self,
+        rule: &CountInventoryOpenInventoryRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.open_tab_calls.push(rule.clone());
+        Ok(self
+            .open_tab_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn load_count_inventory_grid_icon_classifier(
+        &mut self,
+        rule: &GridIconClassifierRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.load_classifier_calls.push(rule.clone());
+        Ok(self
+            .load_classifier_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn pre_scroll_count_inventory_weapon_ore(
+        &mut self,
+        rule: &WeaponOrePrescrollRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.prescroll_calls.push(rule.clone());
+        Ok(self
+            .prescroll_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn enumerate_count_inventory_grid_items(
+        &mut self,
+        template: &GridTemplate,
+        detection_rule: &GridItemDetectionRule,
+        scroll_rule: &GridScrollRule,
+    ) -> Result<Vec<CountInventoryGridItemFrame>> {
+        self.enumerate_calls.push((
+            template.clone(),
+            detection_rule.clone(),
+            scroll_rule.clone(),
+        ));
+        Ok(self.grid_items.pop_front().unwrap_or_default())
+    }
+
+    fn crop_count_inventory_grid_icons(
+        &mut self,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconCropRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.crop_calls.push((items.to_vec(), rule.clone()));
+        Ok(self
+            .crop_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn infer_count_inventory_grid_icons(
+        &mut self,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconClassifierRule,
+    ) -> Result<Vec<CountInventoryGridIconMatch>> {
+        self.infer_calls.push((items.to_vec(), rule.clone()));
+        Ok(self.infer_outcomes.pop_front().unwrap_or_default())
+    }
+
+    fn ocr_count_inventory_item_counts(
+        &mut self,
+        matches: &[CountInventoryGridIconMatch],
+        rule: &GridItemCountOcrRule,
+    ) -> Result<Vec<CountInventoryItemCount>> {
+        self.count_calls.push((matches.to_vec(), rule.clone()));
+        Ok(self.count_outcomes.pop_front().unwrap_or_default())
+    }
+
+    fn clear_count_inventory_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        Ok(self
+            .clear_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+fn fake_inventory_frame(index: u32) -> CountInventoryGridItemFrame {
+    CountInventoryGridItemFrame {
+        page_index: 0,
+        item_index: index,
+        rect: Rect::new(100 + index as i32 * 20, 120, 125, 153).unwrap(),
+    }
+}
+
+fn fake_inventory_match(index: u32, item_name: &str) -> CountInventoryGridIconMatch {
+    CountInventoryGridIconMatch {
+        frame: fake_inventory_frame(index),
+        item_name: item_name.to_string(),
+    }
+}
+
+#[test]
+fn count_inventory_item_executor_returns_single_count_with_inventory_setup() {
+    let plan = plan_count_inventory_item(CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Weapons),
+        item_name: Some("精锻用魔矿".to_string()),
+        ..CountInventoryItemExecutionConfig::default()
+    })
+    .unwrap();
+    let mut runtime = FakeCountInventoryItemRuntime::new()
+        .with_open_outcomes([CountInventoryOpenInventoryOutcome {
+            expired_item_prompt_detected: true,
+            inventory_tab_checked: false,
+            still_on_main_ui: false,
+        }])
+        .with_grid_items([vec![fake_inventory_frame(0), fake_inventory_frame(1)]])
+        .with_infer_outcomes([vec![
+            fake_inventory_match(0, "甜甜花"),
+            fake_inventory_match(1, "精锻用魔矿"),
+        ]])
+        .with_count_outcomes([vec![CountInventoryItemCount {
+            item_name: "精锻用魔矿".to_string(),
+            count: 999,
+        }]]);
+
+    let report = execute_count_inventory_item_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(CountInventoryItemExecutionResult::Single { count: 999 })
+    );
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.expired_item_prompt_confirmed, Some(true));
+    assert_eq!(report.state.inventory_tab_opened, Some(true));
+    assert!(report.state.classifier_loaded);
+    assert!(report.state.weapon_ore_prescrolled);
+    assert_eq!(report.state.grid_items.len(), 2);
+    assert_eq!(report.state.target_matches.len(), 1);
+    assert!(report.state.all_requested_items_found);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(
+        runtime.common_job_calls,
+        vec![
+            RETURN_MAIN_UI_TASK_KEY.to_string(),
+            RETURN_MAIN_UI_TASK_KEY.to_string()
+        ]
+    );
+    assert_eq!(runtime.open_calls, 1);
+    assert_eq!(runtime.confirm_calls.len(), 1);
+    assert_eq!(runtime.open_tab_calls.len(), 1);
+    assert_eq!(runtime.prescroll_calls.len(), 1);
+    assert_eq!(runtime.count_calls.len(), 1);
+}
+
+#[test]
+fn count_inventory_item_executor_returns_only_found_multiple_counts() {
+    let plan = plan_count_inventory_item(CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Materials),
+        item_names: Some(vec![
+            "晶核".to_string(),
+            "甜甜花".to_string(),
+            "薄荷".to_string(),
+        ]),
+        ..CountInventoryItemExecutionConfig::default()
+    })
+    .unwrap();
+    let mut runtime = FakeCountInventoryItemRuntime::new()
+        .with_grid_items([vec![fake_inventory_frame(0), fake_inventory_frame(1)]])
+        .with_infer_outcomes([vec![
+            fake_inventory_match(0, "晶核"),
+            fake_inventory_match(1, "甜甜花"),
+        ]])
+        .with_count_outcomes([vec![
+            CountInventoryItemCount {
+                item_name: "晶核".to_string(),
+                count: 12,
+            },
+            CountInventoryItemCount {
+                item_name: "甜甜花".to_string(),
+                count: 34,
+            },
+        ]]);
+
+    let report = execute_count_inventory_item_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(CountInventoryItemExecutionResult::Multiple {
+            counts: vec![
+                CountInventoryItemCount {
+                    item_name: "晶核".to_string(),
+                    count: 12,
+                },
+                CountInventoryItemCount {
+                    item_name: "甜甜花".to_string(),
+                    count: 34,
+                },
+            ]
+        })
+    );
+    assert!(!report.state.all_requested_items_found);
+    assert!(runtime.prescroll_calls.is_empty());
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == CountInventoryItemSkipReason::WeaponOreNotRequested }));
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == CountInventoryItemSkipReason::AllRequestedItemsNotFound }));
+}
+
+#[test]
+fn count_inventory_item_executor_returns_single_not_found_when_classifier_misses() {
+    let plan = plan_count_inventory_item(CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Materials),
+        item_name: Some("晶核".to_string()),
+        ..CountInventoryItemExecutionConfig::default()
+    })
+    .unwrap();
+    let mut runtime = FakeCountInventoryItemRuntime::new()
+        .with_grid_items([vec![fake_inventory_frame(0)]])
+        .with_infer_outcomes([vec![fake_inventory_match(0, "甜甜花")]]);
+
+    let report = execute_count_inventory_item_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(CountInventoryItemExecutionResult::Single {
+            count: COUNT_INVENTORY_SINGLE_NOT_FOUND
+        })
+    );
+    assert!(report.state.target_matches.is_empty());
+    assert!(runtime.count_calls.is_empty());
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == CountInventoryItemSkipReason::ClassifierTargetMissing }));
+}
+
+#[test]
+fn count_inventory_item_plan_rejects_invalid_legacy_parameter_combinations() {
+    let both = CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Materials),
+        item_name: Some("晶核".to_string()),
+        item_names: Some(vec!["甜甜花".to_string()]),
+        ..CountInventoryItemExecutionConfig::default()
+    };
+    assert!(matches!(
+        plan_count_inventory_item(both).unwrap_err(),
+        TaskError::InvalidTaskConfig { key, .. } if key == COUNT_INVENTORY_ITEM_TASK_KEY
+    ));
+
+    let neither = CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Materials),
+        ..CountInventoryItemExecutionConfig::default()
+    };
+    assert!(matches!(
+        plan_count_inventory_item(neither).unwrap_err(),
+        TaskError::InvalidTaskConfig { key, .. } if key == COUNT_INVENTORY_ITEM_TASK_KEY
+    ));
+
+    let empty_multi = CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Materials),
+        item_names: Some(Vec::new()),
+        ..CountInventoryItemExecutionConfig::default()
+    };
+    assert!(matches!(
+        plan_count_inventory_item(empty_multi).unwrap_err(),
+        TaskError::InvalidTaskConfig { key, .. } if key == COUNT_INVENTORY_ITEM_TASK_KEY
+    ));
+
+    let unsupported_grid = CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::ArtifactSalvage),
+        item_name: Some("任意".to_string()),
+        ..CountInventoryItemExecutionConfig::default()
+    };
+    assert!(matches!(
+        plan_count_inventory_item(unsupported_grid).unwrap_err(),
+        TaskError::InvalidTaskConfig { key, .. } if key == COUNT_INVENTORY_ITEM_TASK_KEY
+    ));
+}
+
+#[test]
+fn get_grid_icons_plan_preserves_legacy_inventory_grid_capture_and_output_rules() {
+    let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, GET_GRID_ICONS_TASK_KEY);
+    assert_eq!(plan.display_name, "获取Grid界面物品图标");
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(!plan.executor_ready);
+
+    assert_eq!(plan.config_rule.grid_screen_name, GridScreenName::Weapons);
+    assert_eq!(plan.config_rule.grid_screen_description, "武器");
+    assert!(!plan.config_rule.star_as_suffix);
+    assert!(!plan.config_rule.lv_as_suffix);
+    assert!(
+        plan.config_rule
+            .lv_as_suffix_legacy_config_present_but_unused
+    );
+    assert_eq!(plan.config_rule.max_num_to_get, i32::MAX as u64);
+
+    assert!(plan.open_rule.auto_open_inventory);
+    assert!(!plan.open_rule.requires_manual_open);
+    assert!(plan.open_rule.return_main_ui_before_inventory_open);
+    let tab_assets = plan.open_rule.inventory_tab_assets.as_ref().unwrap();
+    assert_eq!(
+        tab_assets.checked_asset,
+        "Common/Element:bag_weapon_checked.png"
+    );
+    assert_eq!(
+        tab_assets.unchecked_asset,
+        "Common/Element:bag_weapon_unchecked.png"
+    );
+    assert_eq!(tab_assets.checked_threshold, 0.8);
+    assert_eq!(tab_assets.unchecked_threshold, 0.87);
+
+    assert_eq!(
+        plan.grid_rule.grid_template.roi_1080p,
+        Rect {
+            x: 106,
+            y: 110,
+            width: 1171,
+            height: 845
+        }
+    );
+    assert_eq!(plan.grid_rule.grid_template.columns, 8);
+    assert_eq!(plan.grid_rule.detection_rule.shape_ratio_target, 0.81);
+    assert_eq!(plan.grid_rule.detection_rule.shape_ratio_tolerance, 0.03);
+    assert_eq!(plan.grid_rule.detection_rule.close_kernel_width, 5);
+    assert_eq!(plan.grid_rule.scroll_rule.page_scroll_rounds, 32);
+
+    assert_eq!(plan.capture_rule.item_click_delay_ms, 300);
+    assert_eq!(
+        plan.capture_rule.item_name_ocr_roi,
+        GetGridIconsWidthRelativeRect {
+            x_from_capture_width: 0.682,
+            y_from_capture_width: 0.0625,
+            width_from_capture_width: 0.256,
+            height_from_capture_width: 0.03125
+        }
+    );
+    assert!(plan.capture_rule.star_suffix_rule.is_none());
+    assert!(plan.capture_rule.lv_suffix_config_is_ignored_by_legacy_task);
+
+    assert_eq!(plan.output_rule.output_root, "log/gridIcons");
+    assert_eq!(
+        plan.output_rule.output_directory_pattern,
+        "log/gridIcons/{GridScreenName}{yyyyMMddHHmmss}"
+    );
+    assert!(plan.output_rule.duplicate_file_names_are_skipped);
+    assert!(plan.output_rule.file_name_is_not_sanitized_by_legacy_task);
+    assert!(plan.output_rule.saves_png_on_background_thread);
+    assert!(plan.output_rule.save_failures_are_logged_not_fatal);
+
+    assert_eq!(
+        plan.model_accuracy_rule.model_rule.model_path,
+        GRID_ICON_MODEL_PATH
+    );
+    assert!(
+        plan.model_accuracy_rule
+            .main_collection_does_not_require_model
+    );
+    assert!(plan.steps.iter().any(|step| {
+        step.action == GetGridIconsStepAction::OpenInventoryTab
+            && step.phase == GetGridIconsStepPhase::OpenGrid
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("Paddle OCR")));
+}
+
+#[test]
+fn get_grid_icons_plan_handles_numeric_grid_star_suffix_and_manual_special_grids() {
+    let artifacts_plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "gridName": 1,
+            "starAsSuffix": true,
+            "lvAsSuffix": true,
+            "maxNumToGet": 0
+        }),
+    )))
+    .unwrap();
+
+    assert_eq!(
+        artifacts_plan.config_rule.grid_screen_name,
+        GridScreenName::Artifacts
+    );
+    assert_eq!(artifacts_plan.grid_rule.grid_template.roi_1080p.y, 162);
+    assert!(
+        artifacts_plan
+            .config_rule
+            .zero_max_count_stops_without_scanning
+    );
+    let star_rule = artifacts_plan
+        .capture_rule
+        .star_suffix_rule
+        .as_ref()
+        .unwrap();
+    assert_eq!(star_rule.glyph, "★");
+    assert_eq!(
+        star_rule.yellow_bgr_lower,
+        GetGridIconsBgrColor {
+            b: 45,
+            g: 199,
+            r: 250
+        }
+    );
+    assert!(artifacts_plan
+        .steps
+        .iter()
+        .any(|step| step.action == GetGridIconsStepAction::CountStarsWhenConfigured));
+
+    let filter_plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "gridName": "ArtifactSetFilter",
+            "maxNumToGet": 3
+        }),
+    )))
+    .unwrap();
+    assert_eq!(
+        filter_plan.config_rule.grid_screen_name,
+        GridScreenName::ArtifactSetFilter
+    );
+    assert!(!filter_plan.open_rule.auto_open_inventory);
+    assert!(filter_plan.open_rule.requires_manual_open);
+    assert!(filter_plan.grid_rule.uses_artifact_set_filter_screen);
+    assert_eq!(filter_plan.grid_rule.grid_template.columns, 2);
+    assert_eq!(
+        filter_plan.grid_rule.grid_template.roi_1080p,
+        Rect {
+            x: 40,
+            y: 100,
+            width: 1300,
+            height: 852
+        }
+    );
+    let filter_rule = filter_plan.artifact_set_filter_rule.as_ref().unwrap();
+    assert_eq!(filter_rule.item_shape_ratio_target, 8.63);
+    assert_eq!(filter_rule.close_kernel_width, 3);
+    assert_eq!(filter_rule.anchor_text, "套装包含");
+    assert_eq!(filter_rule.retry_scroll_rounds, 5);
+    assert_eq!(filter_rule.icon_crop_rule.normalized_width, 125);
+    assert_eq!(
+        filter_rule.icon_crop_rule.x_formula,
+        "item_width / 2 - 237 * asset_scale - source_width / 2"
+    );
+    assert!(filter_plan
+        .steps
+        .iter()
+        .any(|step| step.action == GetGridIconsStepAction::OcrArtifactSetFlowerName));
+
+    let salvage_plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "gridName": 9
+        }),
+    )))
+    .unwrap();
+    assert_eq!(
+        salvage_plan.config_rule.grid_screen_name,
+        GridScreenName::ArtifactSalvage
+    );
+    assert!(salvage_plan.open_rule.requires_manual_open);
+    assert!(
+        salvage_plan
+            .open_rule
+            .unsupported_auto_open_still_attempts_grid_scan
+    );
+    assert_eq!(salvage_plan.grid_rule.grid_template.columns, 9);
+    assert_eq!(salvage_plan.grid_rule.grid_template.s2_round, 28);
+}
+
+#[test]
+fn get_grid_icons_plan_rejects_unknown_grid_name() {
+    let error = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "gridName": "UnknownGrid"
+        }),
+    )))
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::InvalidTaskConfig { key, .. } if key == GET_GRID_ICONS_TASK_KEY)
+    );
+}
+
+#[test]
+fn auto_artifact_salvage_plan_preserves_legacy_quick_salvage_and_five_star_rules() {
+    let plan = plan_auto_artifact_salvage(AutoArtifactSalvageExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_ARTIFACT_SALVAGE_TASK_KEY);
+    assert_eq!(plan.display_name, "圣遗物分解独立任务");
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(!plan.executor_ready);
+
+    assert_eq!(plan.config_rule.star, 4);
+    assert_eq!(
+        plan.config_rule.selected_quick_salvage_stars,
+        vec![1, 2, 3, 4]
+    );
+    assert!(plan
+        .config_rule
+        .unselected_after_quick_select_stars
+        .is_empty());
+    assert!(plan.config_rule.java_script_present);
+    assert!(!plan.config_rule.java_script_is_blank);
+    assert!(!plan.config_rule.artifact_set_filter_present);
+    assert_eq!(plan.config_rule.max_num_to_check, Some(100));
+    assert_eq!(
+        plan.config_rule.recognition_failure_policy,
+        Some(AutoArtifactRecognitionFailurePolicy::Skip)
+    );
+    assert!(
+        plan.config_rule
+            .recognition_failure_skip_does_not_consume_check_count
+    );
+    assert_eq!(
+        plan.config_rule.regular_expression_legacy_unused,
+        AUTO_ARTIFACT_SALVAGE_LEGACY_REGEX
+    );
+
+    assert_eq!(
+        plan.open_inventory_rule.grid_screen_name,
+        GridScreenName::Artifacts
+    );
+    assert_eq!(
+        plan.open_inventory_rule.open_inventory_action,
+        GenshinAction::OpenInventory
+    );
+    assert_eq!(plan.open_inventory_rule.open_wait_ms, 1_200);
+    assert_eq!(plan.open_inventory_rule.retry_attempts, 5);
+    assert_eq!(
+        plan.open_inventory_rule.inventory_tab_assets.checked_asset,
+        "Common/Element:bag_artifact_checked.png"
+    );
+
+    assert!(plan.quick_salvage_rule.destructive_native_action);
+    assert_eq!(
+        plan.quick_salvage_rule.opens_salvage_button.asset,
+        AUTO_ARTIFACT_SALVAGE_BTN_ASSET
+    );
+    assert_eq!(
+        plan.quick_salvage_rule.quick_select_ocr_rule.roi.cut,
+        "CutLeftBottom"
+    );
+    assert_eq!(
+        plan.quick_salvage_rule
+            .quick_select_ocr_rule
+            .roi
+            .width_ratio,
+        Some(0.25)
+    );
+    assert!(
+        plan.quick_salvage_rule
+            .star_option_ocr_rule
+            .legacy_inverse_selection_since_5_5
+    );
+    assert_eq!(
+        plan.quick_salvage_rule
+            .star_option_ocr_rule
+            .localized_regexes_by_star
+            .len(),
+        4
+    );
+    assert!(
+        plan.quick_salvage_rule
+            .quick_select_confirm_reused_as_filter_button
+    );
+    assert!(plan.quick_salvage_rule.no_quick_items_is_not_fatal);
+
+    let five_star = plan.five_star_rule.as_ref().unwrap();
+    assert!(five_star.artifact_set_filter_rule.is_none());
+    assert_eq!(
+        five_star.salvage_grid_rule.grid_template.roi_1080p,
+        Rect {
+            x: 48,
+            y: 106,
+            width: 1267,
+            height: 768
+        }
+    );
+    assert_eq!(five_star.salvage_grid_rule.grid_template.columns, 9);
+    assert_eq!(five_star.salvage_grid_rule.grid_template.s2_round, 28);
+    assert_eq!(
+        five_star.artifact_status_rule.locked_rule.status,
+        ArtifactGridStatus::Locked
+    );
+    assert_eq!(five_star.artifact_status_rule.locked_rule.common_hsv.h, 9.0);
+    assert_eq!(
+        five_star.artifact_status_rule.selected_rule.status,
+        ArtifactGridStatus::Selected
+    );
+    assert_eq!(
+        five_star.artifact_stat_ocr_rule.card_roi,
+        ArtifactSalvageWidthRelativeRect {
+            x_from_capture_width: 0.70,
+            y_from_capture_width: 0.112,
+            width_from_capture_width: 0.275,
+            height_from_capture_width: 0.50
+        }
+    );
+    assert_eq!(five_star.artifact_stat_ocr_rule.top_hat_kernel.width, 15);
+    assert_eq!(five_star.artifact_stat_ocr_rule.level_max, 20);
+    assert_eq!(five_star.java_script_rule.timeout_ms, 3_000);
+    assert_eq!(five_star.java_script_rule.output_binding, "Output");
+    assert!(five_star.java_script_rule.output_must_be_bool);
+    assert!(
+        five_star
+            .finish_rule
+            .does_not_click_salvage_confirm_for_five_star
+    );
+    assert!(five_star.finish_rule.logs_manual_review_required);
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("destructive 1-4 star quick salvage")));
+}
+
+#[test]
+fn auto_artifact_salvage_plan_handles_quick_only_and_nested_filter_config() {
+    let quick_only = plan_auto_artifact_salvage(AutoArtifactSalvageExecutionConfig::from_value(
+        Some(&serde_json::json!({
+            "star": "3",
+            "javaScript": null,
+            "artifactSetFilter": null,
+            "maxNumToCheck": null,
+            "recognitionFailurePolicy": null
+        })),
+    ))
+    .unwrap();
+
+    assert_eq!(quick_only.config_rule.star, 3);
+    assert_eq!(
+        quick_only.config_rule.unselected_after_quick_select_stars,
+        vec![4]
+    );
+    assert!(!quick_only.config_rule.java_script_present);
+    assert!(quick_only.five_star_rule.is_none());
+    assert!(quick_only.steps.iter().any(|step| {
+        step.action == AutoArtifactSalvageStepAction::EscapeAndReturnMainUiWhenQuickOnly
+    }));
+    assert!(!quick_only
+        .steps
+        .iter()
+        .any(|step| step.action == AutoArtifactSalvageStepAction::EvaluateJavaScriptOutput));
+
+    let filtered = plan_auto_artifact_salvage(AutoArtifactSalvageExecutionConfig::from_value(
+        Some(&serde_json::json!({
+            "autoArtifactSalvageConfig": {
+                "maxArtifactStar": "2",
+                "javaScript": "Output = true;",
+                "artifactSetFilter": "如雷的盛怒",
+                "maxNumToCheck": 0,
+                "recognitionFailurePolicy": 1
+            }
+        })),
+    ))
+    .unwrap();
+
+    assert_eq!(filtered.config_rule.star, 2);
+    assert_eq!(
+        filtered.config_rule.unselected_after_quick_select_stars,
+        vec![3, 4]
+    );
+    assert!(
+        filtered
+            .config_rule
+            .zero_max_count_still_checks_first_selected_item
+    );
+    assert_eq!(
+        filtered.config_rule.recognition_failure_policy,
+        Some(AutoArtifactRecognitionFailurePolicy::Abort)
+    );
+    let filter_rule = filtered
+        .five_star_rule
+        .as_ref()
+        .unwrap()
+        .artifact_set_filter_rule
+        .as_ref()
+        .unwrap();
+    assert_eq!(filter_rule.grid_template.columns, 2);
+    assert_eq!(filter_rule.grid_template.roi_1080p.x, 40);
+    assert_eq!(filter_rule.detection_rule.shape_ratio_target, 8.63);
+    assert_eq!(filter_rule.classifier_rule.model_path, GRID_ICON_MODEL_PATH);
+    assert!(filter_rule.match_policy.uses_string_contains);
+    assert_eq!(filter_rule.match_policy.filter_text, "如雷的盛怒");
+    assert!(filtered.steps.iter().any(|step| {
+        step.action == AutoArtifactSalvageStepAction::ClassifyAndSelectArtifactSets
+    }));
+}
+
+#[test]
+fn auto_artifact_salvage_plan_rejects_invalid_star() {
+    let error = plan_auto_artifact_salvage(AutoArtifactSalvageExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "star": 5,
+            "javaScript": null
+        }),
+    )))
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::InvalidTaskConfig { key, .. } if key == AUTO_ARTIFACT_SALVAGE_TASK_KEY)
+    );
+}
+
+#[test]
+fn auto_stygian_onslaught_plan_preserves_legacy_state_machine_and_default_rules() {
+    let plan = plan_auto_stygian_onslaught(AutoStygianOnslaughtExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_STYGIAN_ONSLAUGHT_TASK_KEY);
+    assert_eq!(plan.display_name, "自动幽境危战");
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert!(!plan.executor_ready);
+
+    assert_eq!(plan.param.boss_num, 1);
+    assert_eq!(plan.param_rule.selected_boss_num, 1);
+    assert_eq!(plan.param_rule.invalid_boss_num_falls_back_to, 1);
+    assert_eq!(plan.param_rule.combat_script_bag_path, "User/AutoFight/");
+    assert!(
+        plan.param_rule
+            .task_runner_skips_main_ui_wait_due_to_legacy_name
+    );
+    assert!(plan.param_rule.task_still_returns_main_ui_on_start);
+
+    assert!(plan.startup_rule.destroys_auto_fight_assets_before_start);
+    assert!(plan.startup_rule.parses_combat_script_bag_before_start);
+    assert!(plan.startup_rule.requires_16_to_9_resolution);
+    assert_eq!(plan.startup_rule.delay_before_artifact_salvage_ms, 3_000);
+    assert_eq!(
+        plan.startup_rule
+            .creates_lower_head_then_walk_to_task
+            .target_asset,
+        "chest_tip.png"
+    );
+
+    assert_eq!(
+        plan.state_machine_rule.navigation_target_state,
+        StygianState::BattleArena
+    );
+    assert_eq!(
+        plan.state_machine_rule.battle_loop_limit,
+        AUTO_STYGIAN_ONSLAUGHT_LOOP_LIMIT
+    );
+    assert!(plan
+        .state_machine_rule
+        .transitions
+        .iter()
+        .any(|transition| {
+            transition.from == StygianState::MainWorld
+                && transition.to.contains(&StygianState::EventMenu)
+                && transition.to.contains(&StygianState::StygianOnslaughtPage)
+        }));
+    assert!(plan
+        .state_machine_rule
+        .transitions
+        .iter()
+        .any(|transition| {
+            transition.from == StygianState::ResinSelect
+                && transition.to.contains(&StygianState::ContinueOrExit)
+                && transition.to.contains(&StygianState::DomainLobby)
+        }));
+
+    assert_eq!(
+        plan.detector_rule.detectors[0].state,
+        StygianState::ContinueOrExit
+    );
+    assert_eq!(plan.detector_rule.detectors[0].order, 10);
+    assert!(plan.detector_rule.detectors.iter().any(|detector| {
+        detector.state == StygianState::DomainEntrance
+            && matches!(
+                detector.rule,
+                StygianStateDetectorKind::Ocr {
+                    roi: StygianRoiRule::Absolute1080p(Rect {
+                        x: 1223,
+                        y: 510,
+                        width: 153,
+                        height: 56
+                    }),
+                    ..
+                }
+            )
+    }));
+
+    assert_eq!(
+        plan.navigation_rule.open_event_menu_action,
+        GenshinAction::OpenTheEventsMenu
+    );
+    assert_eq!(
+        plan.navigation_rule.event_list_roi_1080p,
+        Rect {
+            x: 195,
+            y: 201,
+            width: 296,
+            height: 654
+        }
+    );
+    assert_eq!(plan.navigation_rule.event_search_attempts, 2);
+    assert_eq!(plan.difficulty_rule.target_difficulty, "困难");
+    assert!(plan.difficulty_rule.continue_when_switch_failed);
+
+    assert_eq!(plan.boss_rule.boss_positions_1080p.len(), 3);
+    assert_eq!(
+        plan.boss_rule.boss_positions_1080p[0],
+        StygianBossPosition {
+            boss_num: 1,
+            x_1080p: 196,
+            y_1080p: 346
+        }
+    );
+    assert!(!plan.team_rule.enabled);
+    assert_eq!(plan.combat_rule.domain_end_detection.retry_attempts, 300);
+    assert_eq!(plan.combat_rule.domain_end_detection.text_contains, "返回");
+    assert_eq!(plan.reward_rule.reward_prompt_text, "地脉之花");
+    assert!(plan.reward_rule.no_reward_prompt_continues_loop);
+
+    assert!(!plan.resin_rule.specify_resin_use);
+    assert!(plan.resin_rule.specified_records.is_empty());
+    assert_eq!(
+        plan.resin_rule.default_auto_use_priority,
+        vec!["浓缩树脂".to_string(), "原粹树脂".to_string()]
+    );
+    assert!(plan.artifact_salvage_rule.quick_salvage_param.is_none());
+    assert!(plan
+        .steps
+        .iter()
+        .any(|step| { step.action == AutoStygianOnslaughtStepAction::RunCombatScriptUntilResult }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("StateMachineBase runtime")));
+}
+
+#[test]
+fn auto_stygian_onslaught_plan_handles_specified_resin_team_and_artifact_salvage() {
+    let plan = plan_auto_stygian_onslaught(AutoStygianOnslaughtExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "autoStygianOnslaughtConfig": {
+                "strategyName": "stygian",
+                "bossNum": 3,
+                "fightTeamName": "幽境队伍",
+                "autoArtifactSalvage": true,
+                "specifyResinUse": true,
+                "resinPriorityList": ["须臾树脂", "脆弱树脂"],
+                "condensedResinUseCount": 2,
+                "originalResinUseCount": 1,
+                "transientResinUseCount": 3,
+                "fragileResinUseCount": 4
+            },
+            "autoArtifactSalvageConfig": {
+                "maxArtifactStar": "bad"
+            }
+        }),
+    )))
+    .unwrap();
+
+    assert_eq!(
+        plan.param_rule.combat_script_bag_path,
+        "User/AutoFight/stygian.txt"
+    );
+    assert_eq!(plan.boss_rule.selected_boss_num, 3);
+    assert_eq!(
+        plan.boss_rule
+            .boss_positions_1080p
+            .iter()
+            .find(|position| position.boss_num == 3)
+            .unwrap(),
+        &StygianBossPosition {
+            boss_num: 3,
+            x_1080p: 203,
+            y_1080p: 728
+        }
+    );
+
+    assert!(plan.team_rule.enabled);
+    assert_eq!(plan.team_rule.fight_team_name, "幽境队伍");
+    assert_eq!(plan.team_rule.max_retries, 30);
+    assert_eq!(plan.team_rule.search_step_y_1080p, 100);
+    assert_eq!(plan.team_rule.click_found_team_times, 5);
+
+    assert!(plan.resin_rule.specify_resin_use);
+    assert!(
+        plan.resin_rule
+            .configured_priority_list_is_not_used_by_legacy_task
+    );
+    assert_eq!(
+        plan.resin_rule.configured_priority_list,
+        vec!["须臾树脂".to_string(), "脆弱树脂".to_string()]
+    );
+    assert_eq!(
+        plan.resin_rule
+            .specified_records
+            .iter()
+            .map(|record| record.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["浓缩树脂", "原粹树脂", "须臾树脂", "脆弱树脂"]
+    );
+    assert!(!plan
+        .resin_rule
+        .specified_records
+        .iter()
+        .any(|record| record.name.contains("20") || record.name.contains("40")));
+
+    assert!(plan.artifact_salvage_rule.enabled);
+    assert_eq!(plan.artifact_salvage_rule.max_artifact_star, "bad");
+    assert_eq!(plan.artifact_salvage_rule.invalid_star_falls_back_to, 4);
+    assert_eq!(
+        plan.artifact_salvage_rule
+            .quick_salvage_param
+            .as_ref()
+            .unwrap()
+            .star,
+        4
+    );
+    assert!(plan.artifact_salvage_rule.passes_java_script_none);
+    assert!(plan.steps.iter().any(|step| {
+        step.action == AutoStygianOnslaughtStepAction::RunAutoArtifactSalvageWhenEnabled
+    }));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("preset-team panel OCR")));
+}
+
+#[test]
+fn auto_stygian_onslaught_plan_rejects_empty_specified_resin_counts_and_falls_back_boss() {
+    let fallback = plan_auto_stygian_onslaught(AutoStygianOnslaughtExecutionConfig::from_value(
+        Some(&serde_json::json!({
+            "bossNum": 9
+        })),
+    ))
+    .unwrap();
+    assert_eq!(fallback.boss_rule.requested_boss_num, 9);
+    assert_eq!(fallback.boss_rule.selected_boss_num, 1);
+
+    let error = plan_auto_stygian_onslaught(AutoStygianOnslaughtExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "specifyResinUse": true,
+            "condensedResinUseCount": 0,
+            "originalResinUseCount": 0,
+            "transientResinUseCount": 0,
+            "fragileResinUseCount": 0
+        }),
+    )))
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::InvalidTaskConfig { key, .. } if key == AUTO_STYGIAN_ONSLAUGHT_TASK_KEY)
+    );
+}
+
+#[test]
+fn script_dispatcher_solo_task_maps_to_independent_invocation() {
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunSoloTask(DispatcherSoloTaskInput {
+            name: "AutoFight".to_string(),
+            config: Some(serde_json::json!({"strategy": "default"})),
+            uses_linked_cancellation: true,
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(plan.kind, TaskInvocationKind::RunIndependentTask);
+    assert_eq!(plan.task_key.as_deref(), Some("AutoFight"));
+    assert!(plan.uses_linked_cancellation);
+}
+
+#[test]
+fn script_dispatcher_builtin_task_allows_script_dispatcher_and_solo_policies() {
+    let auto_domain = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoDomain".to_string(),
+            config: serde_json::json!({"domain": "sample"}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(auto_domain.kind, TaskInvocationKind::RunIndependentTask);
+
+    let auto_fishing = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoFishing".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        auto_fishing.kind,
+        TaskInvocationKind::RunScriptDispatcherTask
+    );
+
+    let return_main_ui = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ReturnMainUi".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(return_main_ui.kind, TaskInvocationKind::RunCommonJob);
+    assert_eq!(return_main_ui.task_key.as_deref(), Some("ReturnMainUi"));
+}
+
+#[test]
+fn script_dispatcher_builtin_task_allows_supported_quick_hotkey_policies() {
+    let quick_buy = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: QUICK_BUY_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(quick_buy.kind, TaskInvocationKind::RunIndependentTask);
+    assert_eq!(quick_buy.task_key.as_deref(), Some(QUICK_BUY_TASK_KEY));
+
+    let quick_pot = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: QUICK_SERENITEA_POT_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(quick_pot.kind, TaskInvocationKind::RunIndependentTask);
+    assert_eq!(
+        quick_pot.task_key.as_deref(),
+        Some(QUICK_SERENITEA_POT_TASK_KEY)
+    );
+
+    let turn = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: TURN_AROUND_MACRO_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(turn.kind, TaskInvocationKind::RunIndependentTask);
+    assert_eq!(turn.task_key.as_deref(), Some(TURN_AROUND_MACRO_TASK_KEY));
+
+    let enhance = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(enhance.kind, TaskInvocationKind::RunIndependentTask);
+    assert_eq!(
+        enhance.task_key.as_deref(),
+        Some(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY)
+    );
+}
+
+#[test]
+fn script_dispatcher_builtin_task_rejects_unsupported_hotkey_policies() {
+    for task_name in ["AutoArtifactSalvage", "GetGridIcons"] {
+        let error = TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: task_name.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::InvalidLaunchPolicy {
+                actual: TaskLaunchPolicy::HotkeyCommand,
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn linnea_mining_common_job_plan_preserves_legacy_rules_and_catalog() {
+    let Some(CommonJobExecutionPlan::LinneaMining(default_plan)) =
+        plan_common_job(LINNEA_MINING_TASK_KEY, None).unwrap()
+    else {
+        panic!("expected LinneaMining common job plan");
+    };
+
+    assert_eq!(default_plan.task_key, LINNEA_MINING_TASK_KEY);
+    assert_eq!(default_plan.mine_count, LINNEA_MINING_DEFAULT_MINE_COUNT);
+    assert_eq!(default_plan.scan_rounds, LINNEA_MINING_DEFAULT_SCAN_ROUNDS);
+    assert!(!default_plan.prefer_right);
+    assert_eq!(default_plan.avatar_rule.avatar_name, "莉奈娅");
+    assert!(default_plan.avatar_rule.switch_avatar_before_mining);
+    assert_eq!(default_plan.avatar_rule.switch_wait_ms, 500);
+    assert_eq!(
+        default_plan.aiming_rule.aiming_mode_action,
+        GenshinAction::SwitchAimingMode
+    );
+    assert_eq!(default_plan.aiming_rule.enter_aim_wait_ms, 400);
+    assert_eq!(
+        default_plan.detection_rule.model_name,
+        LINNEA_MINING_MODEL_NAME
+    );
+    assert_eq!(
+        default_plan.detection_rule.model_relative_path,
+        LINNEA_MINING_MODEL_PATH
+    );
+    assert_eq!(default_plan.detection_rule.accepted_label, "ore");
+    assert_eq!(default_plan.detection_rule.confidence_threshold, 0.70);
+    assert_eq!(
+        default_plan.detection_rule.source,
+        LinneaMiningDetectionSource::FullCapture
+    );
+    assert_eq!(default_plan.cluster_rule.base_cluster_distance_1080p, 400.0);
+    assert_eq!(default_plan.cluster_rule.base_cluster_area_1080p, 1_800.0);
+    assert_eq!(
+        default_plan.cluster_rule.base_alignment_expansion_1080p,
+        3.0
+    );
+    assert_eq!(default_plan.cluster_rule.base_edge_ignore_1080p, 200.0);
+    assert_eq!(default_plan.cluster_rule.area_ratio_threshold, 4.0);
+    assert_eq!(default_plan.alignment_rule.max_inner_retry, 7);
+    assert_eq!(default_plan.alignment_rule.element_sight_refresh_ms, 3_000);
+    assert_eq!(default_plan.alignment_rule.aim_sensitivity_factor_x, 0.45);
+    assert_eq!(default_plan.alignment_rule.aim_sensitivity_factor_y, 0.80);
+    assert_eq!(default_plan.scan_rule.left_turn_step_1080p, -250);
+    assert_eq!(default_plan.mine_rule.compensate_up_pixels, -25);
+    assert_eq!(default_plan.mine_rule.after_attack_wait_ms, 2_000);
+    assert!(default_plan.cleanup_rule.middle_button_up);
+    assert!(default_plan.cleanup_rule.clear_vision_drawings);
+    assert!(!default_plan.executor_ready);
+    assert!(default_plan.steps.iter().any(|step| matches!(
+        step.action,
+        LinneaMiningStepAction::MarkNativePending { .. }
+    )));
+
+    let Some(CommonJobExecutionPlan::LinneaMining(configured)) = plan_common_job(
+        LINNEA_MINING_TASK_KEY,
+        Some(&serde_json::json!({"actionParams": "mines=4,rounds=2"})),
+    )
+    .unwrap() else {
+        panic!("expected configured LinneaMining common job plan");
+    };
+    assert_eq!(configured.mine_count, 4);
+    assert_eq!(configured.scan_rounds, 4);
+    assert!(configured.prefer_right);
+
+    let Some(CommonJobExecutionPlan::LinneaMining(configured_fields)) = plan_common_job(
+        LINNEA_MINING_TASK_KEY,
+        Some(&serde_json::json!({"mineCount": 0, "scanRounds": 1000})),
+    )
+    .unwrap() else {
+        panic!("expected field-configured LinneaMining common job plan");
+    };
+    assert_eq!(configured_fields.mine_count, 1);
+    assert_eq!(configured_fields.scan_rounds, 999);
+
+    let catalog = find_task_catalog_entry(LINNEA_MINING_TASK_KEY).unwrap();
+    assert_eq!(catalog.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(catalog.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(catalog.asset_roots.contains(&"Assets/Model/Mine"));
+}
+
+#[test]
+fn task_invocation_evaluation_reports_runtime_and_native_boundaries() {
+    let clear = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::ClearAllTriggers,
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::PlanOnly,
+    );
+    assert_eq!(clear.status, TaskInvocationExecutionStatus::Planned);
+    assert!(!clear.executed);
+
+    let auto_fight = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "AutoFight".to_string(),
+                config: serde_json::json!({"strategy": "default"}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        auto_fight.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(auto_fight.message.contains("AutoFight"));
+    assert!(auto_fight.message.contains("Rust execution plan"));
+    assert!(!auto_fight.executed);
+
+    let token = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::LinkedCancellationToken,
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(token.status, TaskInvocationExecutionStatus::RuntimeOnly);
+    assert!(!token.is_actionable());
+
+    let return_main_ui = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ReturnMainUi".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        return_main_ui.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(return_main_ui
+        .message
+        .contains("Rust common-job execution plan"));
+    assert!(matches!(
+        return_main_ui.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ReturnMainUi(_))
+    ));
+    let bridge = return_main_ui
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(bridge.task_key, RETURN_MAIN_UI_TASK_KEY);
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::ReturnMainUi
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert_eq!(
+        bridge.supported_actions,
+        vec![
+            CommonJobRuntimeActionKind::Log,
+            CommonJobRuntimeActionKind::Locator,
+            CommonJobRuntimeActionKind::Input,
+            CommonJobRuntimeActionKind::Page,
+        ]
+    );
+    assert!(!return_main_ui.executed);
+
+    let set_time = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "SetTime".to_string(),
+                config: serde_json::json!({"hour": 8, "minute": 30, "skip": true}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        set_time.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        set_time.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::SetTime(_))
+    ));
+    let bridge = set_time.common_job_executor_bridge_plan.as_ref().unwrap();
+    assert_eq!(bridge.task_key, SET_TIME_TASK_KEY);
+    assert_eq!(bridge.bridge_kind, CommonJobExecutorBridgeKind::SetTime);
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert_eq!(
+        bridge.supported_actions,
+        vec![
+            CommonJobRuntimeActionKind::Log,
+            CommonJobRuntimeActionKind::CommonJob,
+            CommonJobRuntimeActionKind::Input,
+            CommonJobRuntimeActionKind::Page,
+            CommonJobRuntimeActionKind::Locator,
+        ]
+    );
+    assert!(!set_time.executed);
+
+    let choose_talk_option = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ChooseTalkOption".to_string(),
+                config: serde_json::json!({
+                    "option": "Katheryne",
+                    "skipTimes": 2,
+                    "isOrange": true
+                }),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        choose_talk_option.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        choose_talk_option.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ChooseTalkOption(_))
+    ));
+    let bridge = choose_talk_option
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(bridge.task_key, CHOOSE_TALK_OPTION_TASK_KEY);
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::ChooseTalkOption
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::RecognizeOptions));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ClickMatchedOption));
+    assert!(!choose_talk_option.executed);
+
+    let check_rewards = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "CheckRewards".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        check_rewards.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        check_rewards.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::CheckRewards(_))
+    ));
+    let bridge = check_rewards
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::CheckRewards
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Notify));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Ocr));
+    assert!(!check_rewards.executed);
+
+    let one_key_expedition = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: ONE_KEY_EXPEDITION_TASK_KEY.to_string(),
+                config: serde_json::json!({"captureSize": {"width": 1280, "height": 720}}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        one_key_expedition.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(CommonJobExecutionPlan::OneKeyExpedition(one_key_plan)) =
+        one_key_expedition.common_job_execution_plan.as_ref()
+    else {
+        panic!("expected OneKeyExpedition common job plan");
+    };
+    assert_eq!(one_key_plan.capture_size, Size::new(1280, 720));
+    assert!(one_key_plan.executor_ready);
+    let bridge = one_key_expedition
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::OneKeyExpedition
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::OneKeyExpedition));
+    assert!(!one_key_expedition.executed);
+
+    let blessing = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "BlessingOfTheWelkinMoon".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        blessing.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        blessing.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::BlessingOfTheWelkinMoon(_))
+    ));
+    let bridge = blessing.common_job_executor_bridge_plan.as_ref().unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::BlessingOfTheWelkinMoon
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Locator));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Input));
+    assert!(!blessing.executed);
+
+    let battle_pass = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ClaimBattlePassRewards".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        battle_pass.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        battle_pass.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ClaimBattlePassRewards(_))
+    ));
+    let bridge = battle_pass
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::ClaimBattlePassRewards
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Ocr));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ClickMatchedText));
+    assert!(!battle_pass.executed);
+
+    let encounter_points = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ClaimEncounterPointsRewards".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        encounter_points.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        encounter_points.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ClaimEncounterPointsRewards(_))
+    ));
+    let bridge = encounter_points
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::ClaimEncounterPointsRewards
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Ocr));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ClickMatchedText));
+    assert!(!encounter_points.executed);
+
+    let mail_rewards = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ClaimMailRewards".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        mail_rewards.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        mail_rewards.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ClaimMailRewards(_))
+    ));
+    let bridge = mail_rewards
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::ClaimMailRewards
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::GenshinAction));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::CommonJob));
+    assert!(!mail_rewards.executed);
+
+    let count_inventory = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "CountInventoryItem".to_string(),
+                config: serde_json::json!({
+                    "gridScreenName": "Materials",
+                    "itemName": "晶核"
+                }),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        count_inventory.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        count_inventory.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::CountInventoryItem(_))
+    ));
+    let bridge = count_inventory
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::CountInventoryItem
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::EnumerateGridItems));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::OcrGridItemCount));
+    assert!(!count_inventory.executed);
+
+    let scan_pick_drops = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ScanPickDrops".to_string(),
+                config: serde_json::json!({"scanSeconds": 5}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        scan_pick_drops.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        scan_pick_drops.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ScanPickDrops(_))
+    ));
+    let bridge = scan_pick_drops
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::ScanPickDrops
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::YoloDetect));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::SearchSweep));
+    assert!(!scan_pick_drops.executed);
+
+    let adventurers_guild = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "GoToAdventurersGuild".to_string(),
+                config: serde_json::json!({"country": "枫丹"}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        adventurers_guild.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        adventurers_guild.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::GoToAdventurersGuild(_))
+    ));
+    let bridge = adventurers_guild
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::GoToAdventurersGuild
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Pathing));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::OneKeyExpedition));
+    assert!(!adventurers_guild.executed);
+
+    let crafting_bench = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "GoToCraftingBench".to_string(),
+                config: serde_json::json!({"country": "枫丹"}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        crafting_bench.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        crafting_bench.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::GoToCraftingBench(_))
+    ));
+    let bridge = crafting_bench
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::GoToCraftingBench
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Pathing));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::RecognizeResinCounts));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::CraftCondensedResin));
+    assert!(!crafting_bench.executed);
+
+    let serenitea_pot = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "GoToSereniteaPot".to_string(),
+                config: serde_json::json!({
+                    "sereniteaPotTpType": "尘歌壶道具",
+                    "secretTreasureObjects": ["每天重复", "摩拉"]
+                }),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        serenitea_pot.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        serenitea_pot.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::GoToSereniteaPot(_))
+    ));
+    let bridge = serenitea_pot
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::GoToSereniteaPot
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::MapEntry));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ShopPurchase));
+    assert!(!serenitea_pot.executed);
+
+    let teleport = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "Teleport".to_string(),
+                config: serde_json::json!({"x": 100.5, "y": 200.25, "force": true}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        teleport.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(teleport.message.contains("direct executor remains pending"));
+    assert!(matches!(
+        teleport.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::Teleport(_))
+    ));
+    let bridge = teleport.common_job_executor_bridge_plan.as_ref().unwrap();
+    assert_eq!(bridge.bridge_kind, CommonJobExecutorBridgeKind::Teleport);
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::TeleportAction));
+    assert!(!teleport.executed);
+
+    let walk_to_f = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "WalkToF".to_string(),
+                config: serde_json::json!({"needPress": true, "runToF": true}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        walk_to_f.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        walk_to_f.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::WalkToF(_))
+    ));
+    let bridge = walk_to_f.common_job_executor_bridge_plan.as_ref().unwrap();
+    assert_eq!(bridge.bridge_kind, CommonJobExecutorBridgeKind::WalkToF);
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(!walk_to_f.executed);
+
+    let lower_head_then_walk_to = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "LowerHeadThenWalkTo".to_string(),
+                config: serde_json::json!({
+                    "targetMatName": "chest_tip.png",
+                    "timeoutMs": 20000
+                }),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        lower_head_then_walk_to.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        lower_head_then_walk_to.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::LowerHeadThenWalkTo(_))
+    ));
+    let bridge = lower_head_then_walk_to
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::LowerHeadThenWalkTo
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::TrackingLoop));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ClearVisionDrawings));
+    assert!(!lower_head_then_walk_to.executed);
+
+    let linnea_mining = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: LINNEA_MINING_TASK_KEY.to_string(),
+                config: serde_json::json!({"mines": 2, "rounds": 3}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        linnea_mining.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(CommonJobExecutionPlan::LinneaMining(linnea_plan)) =
+        linnea_mining.common_job_execution_plan.as_ref()
+    else {
+        panic!("expected LinneaMining common job plan");
+    };
+    assert_eq!(linnea_plan.mine_count, 2);
+    assert_eq!(linnea_plan.scan_rounds, 3);
+    assert!(linnea_plan.prefer_right);
+    assert!(!linnea_plan.executor_ready);
+    let bridge = linnea_mining
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::LinneaMining
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(!bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::MiningDetection));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::MiningAlignment));
+    assert!(!linnea_mining.executed);
+
+    let scan_pick_drops = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "ScanPickDrops".to_string(),
+                config: serde_json::json!({"scanSeconds": 0}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        scan_pick_drops.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        scan_pick_drops.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::ScanPickDrops(_))
+    ));
+    assert!(!scan_pick_drops.executed);
+
+    let relogin = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "Relogin".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        relogin.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        relogin.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::Relogin(_))
+    ));
+    let bridge = relogin.common_job_executor_bridge_plan.as_ref().unwrap();
+    assert_eq!(bridge.bridge_kind, CommonJobExecutorBridgeKind::Relogin);
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::FocusGameWindow));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ThirdPartyLoginProbe));
+    assert!(!relogin.executed);
+
+    let wonderland = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "WonderlandCycle".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        wonderland.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        wonderland.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::WonderlandCycle(_))
+    ));
+    let bridge = wonderland.common_job_executor_bridge_plan.as_ref().unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::WonderlandCycle
+    );
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Locator));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ReturnResult));
+    assert!(!wonderland.executed);
+
+    let switch_party = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "SwitchParty".to_string(),
+                config: serde_json::json!({"partyName": "Team.*"}),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        switch_party.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        switch_party.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::SwitchParty(_))
+    ));
+    let bridge = switch_party
+        .common_job_executor_bridge_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(bridge.bridge_kind, CommonJobExecutorBridgeKind::SwitchParty);
+    assert!(bridge.state_machine_ready);
+    assert!(bridge.live_io_ready);
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::Ocr));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ScanPartyList));
+    assert!(bridge
+        .supported_actions
+        .contains(&CommonJobRuntimeActionKind::ConfirmParty));
+    assert!(!switch_party.executed);
+}
+
+#[test]
+fn task_invocation_execution_mutates_realtime_dispatcher_state_only_for_supported_plans() {
+    let mut dispatcher = DispatcherRuntime {
+        frame_index: 42,
+        ..DispatcherRuntime::default()
+    };
+    let first = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoPick".to_string(),
+            interval_ms: 250,
+            config: Some(serde_json::json!({"enabled": true})),
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap();
+
+    let first_result = execute_task_invocation_plan(&mut dispatcher, first);
+
+    assert!(first_result.executed);
+    assert_eq!(first_result.status, TaskInvocationExecutionStatus::Ready);
+    assert_eq!(dispatcher.registered_realtime_triggers.len(), 1);
+    assert_eq!(
+        dispatcher.registered_realtime_triggers[0].task_key,
+        "AutoPick"
+    );
+    assert_eq!(dispatcher.registered_realtime_triggers[0].interval_ms, 250);
+    assert_eq!(
+        dispatcher.registered_realtime_triggers[0].registered_at_frame,
+        42
+    );
+
+    let second = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoSkip".to_string(),
+            interval_ms: 100,
+            config: None,
+            clears_existing_triggers: true,
+        }),
+    )
+    .unwrap();
+    let second_result = execute_task_invocation_plan(&mut dispatcher, second);
+
+    assert!(second_result.executed);
+    assert_eq!(dispatcher.registered_realtime_triggers.len(), 1);
+    assert_eq!(
+        dispatcher.registered_realtime_triggers[0].task_key,
+        "AutoSkip"
+    );
+
+    let auto_fight = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoFight".to_string(),
+            config: serde_json::json!({"strategy": "default"}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    let auto_fight_result = execute_task_invocation_plan(&mut dispatcher, auto_fight);
+
+    assert!(!auto_fight_result.executed);
+    assert_eq!(
+        auto_fight_result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert_eq!(dispatcher.registered_realtime_triggers.len(), 1);
+
+    let clear = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::ClearAllTriggers,
+    )
+    .unwrap();
+    let clear_result = execute_task_invocation_plan(&mut dispatcher, clear);
+
+    assert!(clear_result.executed);
+    assert!(dispatcher.registered_realtime_triggers.is_empty());
+    assert!(clear_result.message.contains("cleared 1"));
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_return_main_ui() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ReturnMainUi".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::ReturnMainUi(plan) = plan else {
+                panic!("expected ReturnMainUi live plan");
+            };
+            assert_eq!(plan.task_key, RETURN_MAIN_UI_TASK_KEY);
+            Ok(Some(CommonJobLiveExecutionReport::ReturnMainUi(
+                ReturnMainUiExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: ReturnMainUiExecutorState {
+                        main_ui_detected: true,
+                        ..ReturnMainUiExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("completed=true"));
+    let Some(CommonJobLiveExecutionReport::ReturnMainUi(report)) = result.common_job_live_execution
+    else {
+        panic!("expected ReturnMainUi live report");
+    };
+    assert!(report.completed);
+    assert!(report.state.main_ui_detected);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_one_key_expedition() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: ONE_KEY_EXPEDITION_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::OneKeyExpedition(plan) = plan else {
+                panic!("expected OneKeyExpedition live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::OneKeyExpedition(
+                OneKeyExpeditionExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: OneKeyExpeditionExecutorState {
+                        window_activated: true,
+                        collect_attempts: 1,
+                        collect_detected: Some(true),
+                        collect_clicked: true,
+                        re_dispatch_attempts: 1,
+                        re_dispatch_detected: Some(true),
+                        re_dispatch_clicked: true,
+                        exit_dispatched: true,
+                        vision_drawings_cleared: true,
+                        result: Some(OneKeyExpeditionStepResult::Completed),
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("OneKeyExpedition"));
+    assert!(result.message.contains("completed=true"));
+    let Some(CommonJobLiveExecutionReport::OneKeyExpedition(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected OneKeyExpedition live report");
+    };
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(OneKeyExpeditionStepResult::Completed)
+    );
+    assert!(report.state.vision_drawings_cleared);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executors_runs_auto_cook_script_dispatcher_plan() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoCook".to_string(),
+            config: serde_json::json!({
+                "autoCookConfig": {
+                    "checkIntervalMs": 10
+                }
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    let mut common_job_calls = 0;
+    let mut script_dispatcher_calls = 0;
+
+    let result = execute_task_invocation_plan_with_live_executors(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| {
+            common_job_calls += 1;
+            Ok(None)
+        },
+        &mut |plan| {
+            script_dispatcher_calls += 1;
+            let ScriptDispatcherExecutionPlan::AutoCook(plan) = plan else {
+                panic!("expected AutoCook script-dispatcher plan");
+            };
+            Ok(Some(ScriptDispatcherLiveExecutionReport::AutoCook(
+                AutoCookExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    status: AutoCookExecutionStatus::RuntimeEnded,
+                    state: AutoCookExecutorState {
+                        frames_processed: 7,
+                        space_press_count: 1,
+                        white_confirm_click_count: 2,
+                        ..AutoCookExecutorState::default()
+                    },
+                    events: Vec::new(),
+                },
+            )))
+        },
+    );
+
+    assert_eq!(common_job_calls, 0);
+    assert_eq!(script_dispatcher_calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("AutoCook live execution completed"));
+    assert!(result.message.contains("frames_processed=7"));
+    assert!(result.common_job_live_execution.is_none());
+    let Some(ScriptDispatcherLiveExecutionReport::AutoCook(report)) =
+        result.script_dispatcher_live_execution
+    else {
+        panic!("expected AutoCook script-dispatcher live report");
+    };
+    assert_eq!(report.status, AutoCookExecutionStatus::RuntimeEnded);
+    assert_eq!(report.state.space_press_count, 1);
+    assert_eq!(report.state.white_confirm_click_count, 2);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_walk_to_f() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "WalkToF".to_string(),
+            config: serde_json::json!({"needPress": true}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::WalkToF(plan) = plan else {
+                panic!("expected WalkToF live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::WalkToF(
+                WalkToFExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: WalkToFExecutorState {
+                        pick_detected: true,
+                        result: Some(WalkToFStepResult::PickDetectedAndPressed),
+                        ..WalkToFExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("WalkToF"));
+    let Some(CommonJobLiveExecutionReport::WalkToF(report)) = result.common_job_live_execution
+    else {
+        panic!("expected WalkToF live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(WalkToFStepResult::PickDetectedAndPressed)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_set_time() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "SetTime".to_string(),
+            config: serde_json::json!({"hour": 8, "minute": 30, "skip": true}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::SetTime(plan) = plan else {
+                panic!("expected SetTime live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::SetTime(
+                SetTimeExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: SetTimeExecutorState {
+                        skip_animation_resolved: true,
+                        ..SetTimeExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("SetTime"));
+    let Some(CommonJobLiveExecutionReport::SetTime(report)) = result.common_job_live_execution
+    else {
+        panic!("expected SetTime live report");
+    };
+    assert!(report.completed);
+    assert!(report.state.skip_animation_resolved);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_blessing_of_the_welkin_moon() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "BlessingOfTheWelkinMoon".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::BlessingOfTheWelkinMoon(plan) = plan else {
+                panic!("expected BlessingOfTheWelkinMoon live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::BlessingOfTheWelkinMoon(
+                BlessingOfTheWelkinMoonExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: BlessingOfTheWelkinMoonExecutorState {
+                        server_time_checked: true,
+                        server_time_inside_claim_window: true,
+                        cleared: true,
+                        ..BlessingOfTheWelkinMoonExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("BlessingOfTheWelkinMoon"));
+    let Some(CommonJobLiveExecutionReport::BlessingOfTheWelkinMoon(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected BlessingOfTheWelkinMoon live report");
+    };
+    assert!(report.completed);
+    assert!(report.state.cleared);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_choose_talk_option() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ChooseTalkOption".to_string(),
+            config: serde_json::json!({"option": "Katheryne", "skipTimes": 2}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::ChooseTalkOption(plan) = plan else {
+                panic!("expected ChooseTalkOption live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::ChooseTalkOption(
+                ChooseTalkOptionExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: ChooseTalkOptionExecutorState {
+                        talk_ui_detected: true,
+                        clicked: true,
+                        result: Some(TalkOptionPlanResult::FoundAndClick),
+                        ..ChooseTalkOptionExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("ChooseTalkOption"));
+    let Some(CommonJobLiveExecutionReport::ChooseTalkOption(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected ChooseTalkOption live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(TalkOptionPlanResult::FoundAndClick)
+    );
+    assert!(report.state.clicked);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_check_rewards() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "CheckRewards".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::CheckRewards(plan) = plan else {
+                panic!("expected CheckRewards live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::CheckRewards(
+                CheckRewardsExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: CheckRewardsExecutorState {
+                        result: Some(CheckRewardsStepResult::Claimed),
+                        claimed_text_detected: Some(true),
+                        ..CheckRewardsExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("CheckRewards"));
+    let Some(CommonJobLiveExecutionReport::CheckRewards(report)) = result.common_job_live_execution
+    else {
+        panic!("expected CheckRewards live report");
+    };
+    assert_eq!(report.state.result, Some(CheckRewardsStepResult::Claimed));
+    assert_eq!(report.state.claimed_text_detected, Some(true));
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_claim_battle_pass_rewards() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ClaimBattlePassRewards".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::ClaimBattlePassRewards(plan) = plan else {
+                panic!("expected ClaimBattlePassRewards live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::ClaimBattlePassRewards(
+                ClaimBattlePassRewardsExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: ClaimBattlePassRewardsExecutorState {
+                        result: Some(BattlePassRewardStepResult::Completed),
+                        final_return_main_ui_completed: Some(true),
+                        ..ClaimBattlePassRewardsExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("ClaimBattlePassRewards"));
+    let Some(CommonJobLiveExecutionReport::ClaimBattlePassRewards(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected ClaimBattlePassRewards live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(BattlePassRewardStepResult::Completed)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_claim_encounter_points_rewards() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ClaimEncounterPointsRewards".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result = execute_task_invocation_plan_with_live_executor(
+        &mut dispatcher,
+        plan,
+        &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::ClaimEncounterPointsRewards(plan) = plan else {
+                panic!("expected ClaimEncounterPointsRewards live plan");
+            };
+            Ok(Some(
+                CommonJobLiveExecutionReport::ClaimEncounterPointsRewards(
+                    ClaimEncounterPointsRewardsExecutionReport {
+                        task_key: plan.task_key.clone(),
+                        completed: true,
+                        state: ClaimEncounterPointsRewardsExecutorState {
+                            result: Some(
+                                ClaimEncounterPointsRewardsStepResult::ClaimedAfterOpeningCommissions,
+                            ),
+                            final_return_main_ui_completed: Some(true),
+                            ..ClaimEncounterPointsRewardsExecutorState::default()
+                        },
+                        executed_steps: Vec::new(),
+                        skipped_steps: Vec::new(),
+                        nested_return_main_ui_reports: Vec::new(),
+                    },
+                ),
+            ))
+        },
+    );
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("ClaimEncounterPointsRewards"));
+    let Some(CommonJobLiveExecutionReport::ClaimEncounterPointsRewards(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected ClaimEncounterPointsRewards live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(ClaimEncounterPointsRewardsStepResult::ClaimedAfterOpeningCommissions)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_count_inventory_item() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "CountInventoryItem".to_string(),
+            config: serde_json::json!({
+                "gridScreenName": "Materials",
+                "itemName": "晶核"
+            }),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::CountInventoryItem(plan) = plan else {
+                panic!("expected CountInventoryItem live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::CountInventoryItem(
+                CountInventoryItemExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: CountInventoryItemExecutorState {
+                        result: Some(CountInventoryItemExecutionResult::Single { count: 999 }),
+                        vision_drawings_cleared: true,
+                        ..CountInventoryItemExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("CountInventoryItem"));
+    let Some(CommonJobLiveExecutionReport::CountInventoryItem(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected CountInventoryItem live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(CountInventoryItemExecutionResult::Single { count: 999 })
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_scan_pick_drops() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ScanPickDrops".to_string(),
+            config: serde_json::json!({"scanSeconds": 5}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::ScanPickDrops(plan) = plan else {
+                panic!("expected ScanPickDrops live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::ScanPickDrops(
+                ScanPickDropsExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: ScanPickDropsExecutorState {
+                        result: Some(ScanPickDropsStepResult::ScanComplete),
+                        vision_drawings_cleared: true,
+                        ..ScanPickDropsExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("ScanPickDrops"));
+    let Some(CommonJobLiveExecutionReport::ScanPickDrops(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected ScanPickDrops live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(ScanPickDropsStepResult::ScanComplete)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_lower_head_then_walk_to() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "LowerHeadThenWalkTo".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::LowerHeadThenWalkTo(plan) = plan else {
+                panic!("expected LowerHeadThenWalkTo live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::LowerHeadThenWalkTo(
+                LowerHeadThenWalkToExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: LowerHeadThenWalkToExecutorState {
+                        result: Some(LowerHeadThenWalkToStepResult::Activated),
+                        activation_text_detected: true,
+                        vision_drawings_cleared: true,
+                        ..LowerHeadThenWalkToExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("LowerHeadThenWalkTo"));
+    let Some(CommonJobLiveExecutionReport::LowerHeadThenWalkTo(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected LowerHeadThenWalkTo live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(LowerHeadThenWalkToStepResult::Activated)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_switch_party() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "SwitchParty".to_string(),
+            config: serde_json::json!({"partyName": "探索"}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::SwitchParty(plan) = plan else {
+                panic!("expected SwitchParty live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::SwitchParty(
+                SwitchPartyExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: SwitchPartyExecutorState {
+                        result: Some(SwitchPartyStepResult::Switched),
+                        party_confirmed: Some(true),
+                        ..SwitchPartyExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("SwitchParty"));
+    let Some(CommonJobLiveExecutionReport::SwitchParty(report)) = result.common_job_live_execution
+    else {
+        panic!("expected SwitchParty live report");
+    };
+    assert_eq!(report.state.result, Some(SwitchPartyStepResult::Switched));
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_go_to_crafting_bench() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "GoToCraftingBench".to_string(),
+            config: serde_json::json!({"country": "枫丹"}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::GoToCraftingBench(plan) = plan else {
+                panic!("expected GoToCraftingBench live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::GoToCraftingBench(
+                GoToCraftingBenchExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: GoToCraftingBenchExecutorState {
+                        result: Some(GoToCraftingBenchStepResult::Completed),
+                        final_return_main_ui_completed: Some(true),
+                        ..GoToCraftingBenchExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("GoToCraftingBench"));
+    let Some(CommonJobLiveExecutionReport::GoToCraftingBench(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected GoToCraftingBench live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(GoToCraftingBenchStepResult::Completed)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_go_to_adventurers_guild() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "GoToAdventurersGuild".to_string(),
+            config: serde_json::json!({"country": "枫丹"}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::GoToAdventurersGuild(plan) = plan else {
+                panic!("expected GoToAdventurersGuild live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::GoToAdventurersGuild(
+                GoToAdventurersGuildExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: GoToAdventurersGuildExecutorState {
+                        expedition_completed: Some(true),
+                        result: Some(GoToAdventurersGuildStepResult::Completed),
+                        ..GoToAdventurersGuildExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("GoToAdventurersGuild"));
+    let Some(CommonJobLiveExecutionReport::GoToAdventurersGuild(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected GoToAdventurersGuild live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(GoToAdventurersGuildStepResult::Completed)
+    );
+    assert_eq!(report.state.expedition_completed, Some(true));
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_go_to_serenitea_pot() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "GoToSereniteaPot".to_string(),
+            config: serde_json::json!({
+                "sereniteaPotTpType": "尘歌壶道具",
+                "secretTreasureObjects": ["每天重复", "摩拉"]
+            }),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::GoToSereniteaPot(plan) = plan else {
+                panic!("expected GoToSereniteaPot live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::GoToSereniteaPot(
+                GoToSereniteaPotExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: GoToSereniteaPotExecutorState {
+                        entry_succeeded: Some(true),
+                        ayuan_found: Some(true),
+                        final_finish_completed: Some(true),
+                        result: Some(GoToSereniteaPotStepResult::Completed),
+                        ..GoToSereniteaPotExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("GoToSereniteaPot"));
+    let Some(CommonJobLiveExecutionReport::GoToSereniteaPot(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected GoToSereniteaPot live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(GoToSereniteaPotStepResult::Completed)
+    );
+    assert_eq!(report.state.ayuan_found, Some(true));
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_teleport() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "Teleport".to_string(),
+            config: serde_json::json!({"x": 100.5, "y": 200.25, "force": true}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::Teleport(plan) = plan else {
+                panic!("expected Teleport live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::Teleport(
+                TeleportExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: TeleportExecutorState {
+                        teleport_panel_clicked: true,
+                        result: Some(TeleportStepResult::Planned),
+                        ..TeleportExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("Teleport"));
+    assert!(result.message.contains("skipped_steps=0"));
+    let Some(CommonJobLiveExecutionReport::Teleport(report)) = result.common_job_live_execution
+    else {
+        panic!("expected Teleport live report");
+    };
+    assert_eq!(report.state.result, Some(TeleportStepResult::Planned));
+    assert!(report.state.teleport_panel_clicked);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_claim_mail_rewards() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ClaimMailRewards".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::ClaimMailRewards(plan) = plan else {
+                panic!("expected ClaimMailRewards live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::ClaimMailRewards(
+                ClaimMailRewardsExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: ClaimMailRewardsExecutorState {
+                        result: Some(ClaimMailRewardsStepResult::Claimed),
+                        final_return_main_ui_completed: Some(true),
+                        ..ClaimMailRewardsExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("ClaimMailRewards"));
+    let Some(CommonJobLiveExecutionReport::ClaimMailRewards(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected ClaimMailRewards live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(ClaimMailRewardsStepResult::Claimed)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_wonderland_cycle() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "WonderlandCycle".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::WonderlandCycle(plan) = plan else {
+                panic!("expected WonderlandCycle live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::WonderlandCycle(
+                WonderlandCycleExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: WonderlandCycleExecutorState {
+                        result: Some(WonderlandCycleStepResult::ReturnedToTeyvat),
+                        returned_to_teyvat_main_ui: true,
+                        ..WonderlandCycleExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("WonderlandCycle"));
+    let Some(CommonJobLiveExecutionReport::WonderlandCycle(report)) =
+        result.common_job_live_execution
+    else {
+        panic!("expected WonderlandCycle live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(WonderlandCycleStepResult::ReturnedToTeyvat)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_runs_relogin() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "Relogin".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |plan| {
+            calls += 1;
+            let CommonJobExecutionPlan::Relogin(plan) = plan else {
+                panic!("expected Relogin live plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::Relogin(
+                ReloginExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    state: ReloginExecutorState {
+                        result: Some(ReloginStepResult::Completed),
+                        ..ReloginExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        });
+
+    assert_eq!(calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("Relogin"));
+    let Some(CommonJobLiveExecutionReport::Relogin(report)) = result.common_job_live_execution
+    else {
+        panic!("expected Relogin live report");
+    };
+    assert_eq!(report.state.result, Some(ReloginStepResult::Completed));
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_keeps_plan_ready_when_live_executor_declines() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "GoToSereniteaPot".to_string(),
+            config: serde_json::json!({
+                "sereniteaPotTpType": "尘歌壶道具",
+                "secretTreasureObjects": ["每天重复", "摩拉"]
+            }),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+    let mut calls = 0;
+
+    let result = execute_task_invocation_plan_with_live_executor(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| -> Result<Option<CommonJobLiveExecutionReport>> {
+            calls += 1;
+            Ok(None)
+        },
+    );
+
+    assert_eq!(calls, 1);
+    assert!(!result.executed);
+    assert_eq!(
+        result.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(matches!(
+        result.common_job_execution_plan,
+        Some(CommonJobExecutionPlan::GoToSereniteaPot(_))
+    ));
+    assert!(result.common_job_live_execution.is_none());
+}
+
+#[test]
+fn task_invocation_execution_with_live_executor_reports_return_main_ui_failure() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "ReturnMainUi".to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: false,
+        },
+    )
+    .unwrap();
+
+    let result =
+        execute_task_invocation_plan_with_live_executor(&mut dispatcher, plan, &mut |_plan| {
+            Err(TaskError::CommonJobExecution(
+                "capture unavailable".to_string(),
+            ))
+        });
+
+    assert!(!result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Invalid);
+    assert!(result.message.contains("capture unavailable"));
+    assert!(result.common_job_live_execution.is_none());
+}
+
+#[test]
+fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks() {
+    let tasks = independent_tasks();
+    let auto_fight = tasks.iter().find(|task| task.key == "AutoFight").unwrap();
+    assert!(!auto_fight.ported);
+    assert_eq!(
+        auto_fight.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let shell = tasks.iter().find(|task| task.key == "Shell").unwrap();
+    assert!(shell.ported);
+    assert_eq!(
+        shell.rust_execution_surface,
+        TaskRustExecutionSurface::DirectExecution
+    );
+
+    let auto_genius = tasks
+        .iter()
+        .find(|task| task.key == AUTO_GENIUS_INVOKATION_TASK_KEY)
+        .unwrap();
+    assert!(!auto_genius.ported);
+    assert_eq!(
+        auto_genius.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(!auto_genius.requires_main_ui_wait);
+    assert!(auto_genius
+        .asset_roots
+        .contains(&"GameTask/AutoGeniusInvokation/Assets"));
+    assert!(auto_genius
+        .asset_roots
+        .contains(&"User/AutoGeniusInvokation"));
+    let auto_genius_catalog = find_task_catalog_entry(AUTO_GENIUS_INVOKATION_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_genius_catalog.launch_policy,
+        TaskLaunchPolicy::SoloTask
+    );
+    assert_eq!(auto_genius_catalog.requires_main_ui_wait, Some(false));
+    assert_eq!(
+        auto_genius_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_genius_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_domain = tasks.iter().find(|task| task.key == "AutoDomain").unwrap();
+    assert!(!auto_domain.ported);
+    assert_eq!(
+        auto_domain.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_domain.requires_main_ui_wait, true);
+    assert!(auto_domain
+        .asset_roots
+        .contains(&"GameTask/AutoDomain/Assets"));
+    let auto_domain_catalog = find_task_catalog_entry(AUTO_DOMAIN_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_domain_catalog.launch_policy,
+        TaskLaunchPolicy::SoloTask
+    );
+    assert_eq!(
+        auto_domain_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_domain_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_track = tasks
+        .iter()
+        .find(|task| task.key == AUTO_TRACK_TASK_KEY)
+        .unwrap();
+    assert!(!auto_track.ported);
+    assert_eq!(
+        auto_track.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_track.requires_main_ui_wait, true);
+    assert!(auto_track.asset_roots.contains(&"GameTask/AutoSkip/Assets"));
+    assert!(auto_track
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_track
+        .asset_roots
+        .contains(&"GameTask/QuickTeleport/Assets"));
+    let auto_track_catalog = find_task_catalog_entry(AUTO_TRACK_TASK_KEY).unwrap();
+    assert_eq!(auto_track_catalog.launch_policy, TaskLaunchPolicy::SoloTask);
+    assert_eq!(
+        auto_track_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_track_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_track_path = tasks
+        .iter()
+        .find(|task| task.key == AUTO_TRACK_PATH_TASK_KEY)
+        .unwrap();
+    assert!(!auto_track_path.ported);
+    assert_eq!(
+        auto_track_path.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_track_path.requires_main_ui_wait, true);
+    assert!(auto_track_path
+        .asset_roots
+        .contains(&"GameTask/AutoTrackPath/Assets"));
+    assert!(auto_track_path
+        .asset_roots
+        .contains(&"GameTask/QuickTeleport/Assets"));
+    assert!(auto_track_path
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_track_path.asset_roots.contains(&"log/way"));
+    let auto_track_path_catalog = find_task_catalog_entry(AUTO_TRACK_PATH_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_track_path_catalog.launch_policy,
+        TaskLaunchPolicy::SoloTask
+    );
+    assert_eq!(
+        auto_track_path_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_track_path_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_music_game = tasks
+        .iter()
+        .find(|task| task.key == AUTO_MUSIC_GAME_TASK_KEY)
+        .unwrap();
+    assert!(!auto_music_game.ported);
+    assert_eq!(
+        auto_music_game.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(!auto_music_game.requires_main_ui_wait);
+    assert!(auto_music_game
+        .asset_roots
+        .contains(&"GameTask/AutoMusicGame/Assets"));
+    let auto_music_game_catalog = find_task_catalog_entry(AUTO_MUSIC_GAME_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_music_game_catalog.launch_policy,
+        TaskLaunchPolicy::SoloTask
+    );
+    assert_eq!(auto_music_game_catalog.requires_main_ui_wait, Some(false));
+    assert_eq!(
+        auto_music_game_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_music_game_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_stygian = tasks
+        .iter()
+        .find(|task| task.key == AUTO_STYGIAN_ONSLAUGHT_TASK_KEY)
+        .unwrap();
+    assert!(!auto_stygian.ported);
+    assert_eq!(
+        auto_stygian.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_stygian.requires_main_ui_wait, false);
+    assert!(auto_stygian
+        .asset_roots
+        .contains(&"GameTask/AutoFight/Assets"));
+    assert!(auto_stygian
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_stygian
+        .asset_roots
+        .contains(&"GameTask/QuickTeleport/Assets"));
+    assert!(auto_stygian
+        .asset_roots
+        .contains(&"GameTask/AutoPick/Assets"));
+    assert!(auto_stygian.asset_roots.contains(&"User/AutoFight"));
+    let auto_stygian_catalog = find_task_catalog_entry(AUTO_STYGIAN_ONSLAUGHT_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_stygian_catalog.launch_policy,
+        TaskLaunchPolicy::SoloTask
+    );
+    assert_eq!(auto_stygian_catalog.requires_main_ui_wait, Some(false));
+    assert_eq!(
+        auto_stygian_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_stygian_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_boss = tasks
+        .iter()
+        .find(|task| task.key == AUTO_BOSS_TASK_KEY)
+        .unwrap();
+    assert!(!auto_boss.ported);
+    assert_eq!(
+        auto_boss.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_boss.requires_main_ui_wait, true);
+    assert!(auto_boss.asset_roots.contains(&"GameTask/AutoBoss/Assets"));
+    assert!(auto_boss.asset_roots.contains(&"GameTask/AutoFight/Assets"));
+    assert!(auto_boss
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_boss.asset_roots.contains(&"User/AutoFight"));
+    let auto_boss_catalog = find_task_catalog_entry(AUTO_BOSS_TASK_KEY).unwrap();
+    assert_eq!(auto_boss_catalog.launch_policy, TaskLaunchPolicy::SoloTask);
+    assert_eq!(
+        auto_boss_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_boss_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_artifact_salvage = tasks
+        .iter()
+        .find(|task| task.key == AUTO_ARTIFACT_SALVAGE_TASK_KEY)
+        .unwrap();
+    assert!(!auto_artifact_salvage.ported);
+    assert_eq!(
+        auto_artifact_salvage.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_artifact_salvage.requires_main_ui_wait, true);
+    assert!(auto_artifact_salvage
+        .asset_roots
+        .contains(&"GameTask/AutoArtifactSalvage"));
+    assert!(auto_artifact_salvage
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_artifact_salvage
+        .asset_roots
+        .contains(&"Assets/Model/Item"));
+    let auto_artifact_salvage_catalog =
+        find_task_catalog_entry(AUTO_ARTIFACT_SALVAGE_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_artifact_salvage_catalog.launch_policy,
+        TaskLaunchPolicy::HotkeyCommand
+    );
+    assert_eq!(
+        auto_artifact_salvage_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_artifact_salvage_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_ley_line = tasks
+        .iter()
+        .find(|task| task.key == AUTO_LEY_LINE_OUTCROP_TASK_KEY)
+        .unwrap();
+    assert!(!auto_ley_line.ported);
+    assert_eq!(
+        auto_ley_line.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_ley_line.requires_main_ui_wait, true);
+    assert!(auto_ley_line
+        .asset_roots
+        .contains(&"GameTask/AutoLeyLineOutcrop/Assets"));
+    assert!(auto_ley_line
+        .asset_roots
+        .contains(&"GameTask/AutoFight/Assets"));
+    assert!(auto_ley_line
+        .asset_roots
+        .contains(&"GameTask/AutoPick/Assets"));
+    assert!(auto_ley_line.asset_roots.contains(&"User/AutoFight"));
+    let auto_ley_line_catalog = find_task_catalog_entry(AUTO_LEY_LINE_OUTCROP_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_ley_line_catalog.launch_policy,
+        TaskLaunchPolicy::SoloTask
+    );
+    assert_eq!(
+        auto_ley_line_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_ley_line_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let get_grid_icons = tasks
+        .iter()
+        .find(|task| task.key == GET_GRID_ICONS_TASK_KEY)
+        .unwrap();
+    assert!(!get_grid_icons.ported);
+    assert_eq!(
+        get_grid_icons.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(get_grid_icons.requires_main_ui_wait, true);
+    assert!(get_grid_icons
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(get_grid_icons.asset_roots.contains(&"Assets/Model/Item"));
+    let get_grid_icons_catalog = find_task_catalog_entry(GET_GRID_ICONS_TASK_KEY).unwrap();
+    assert_eq!(
+        get_grid_icons_catalog.launch_policy,
+        TaskLaunchPolicy::HotkeyCommand
+    );
+    assert_eq!(
+        get_grid_icons_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        get_grid_icons_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_wood = tasks
+        .iter()
+        .find(|task| task.key == AUTO_WOOD_TASK_KEY)
+        .unwrap();
+    assert!(!auto_wood.ported);
+    assert_eq!(
+        auto_wood.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_wood.requires_main_ui_wait, true);
+    assert!(auto_wood.asset_roots.contains(&"GameTask/AutoWood/Assets"));
+    let auto_wood_catalog = find_task_catalog_entry(AUTO_WOOD_TASK_KEY).unwrap();
+    assert_eq!(auto_wood_catalog.launch_policy, TaskLaunchPolicy::SoloTask);
+    assert_eq!(
+        auto_wood_catalog.port_state,
+        TaskPortState::RuntimeScaffolded
+    );
+    assert_eq!(
+        auto_wood_catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let auto_pick = find_task_catalog_entry("AutoPick").unwrap();
+    assert_eq!(auto_pick.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(auto_pick.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_pick.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(auto_pick.asset_roots.contains(&"GameTask/AutoPick/Assets"));
+    assert!(auto_pick.asset_roots.contains(&"GameTask/AutoSkip/Assets"));
+    assert!(auto_pick.asset_roots.contains(&"Assets/Config/Pick"));
+
+    let auto_eat = find_task_catalog_entry(AUTO_EAT_TASK_KEY).unwrap();
+    assert_eq!(auto_eat.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(auto_eat.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_eat.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(auto_eat.asset_roots.contains(&"GameTask/AutoEat/Assets"));
+
+    let auto_eat_food = find_task_catalog_entry(AUTO_EAT_FOOD_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_eat_food.launch_policy,
+        TaskLaunchPolicy::ScriptDispatcher
+    );
+    assert_eq!(auto_eat_food.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_eat_food.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_eat_food.requires_main_ui_wait, Some(true));
+    assert!(auto_eat_food
+        .asset_roots
+        .contains(&"GameTask/AutoEat/Assets"));
+    assert!(auto_eat_food
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_eat_food.asset_roots.contains(&"Assets/Model/Item"));
+
+    let auto_fish = find_task_catalog_entry(AUTO_FISH_TASK_KEY).unwrap();
+    assert_eq!(auto_fish.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(auto_fish.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_fish.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(auto_fish
+        .asset_roots
+        .contains(&"GameTask/AutoFishing/Assets"));
+
+    let auto_fishing = find_task_catalog_entry(AUTO_FISHING_TASK_KEY).unwrap();
+    assert_eq!(
+        auto_fishing.launch_policy,
+        TaskLaunchPolicy::ScriptDispatcher
+    );
+    assert_eq!(auto_fishing.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_fishing.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_fishing.requires_main_ui_wait, Some(true));
+    assert!(auto_fishing
+        .asset_roots
+        .contains(&"GameTask/AutoFishing/Assets"));
+
+    let auto_cook = find_task_catalog_entry(AUTO_COOK_TASK_KEY).unwrap();
+    assert_eq!(auto_cook.launch_policy, TaskLaunchPolicy::ScriptDispatcher);
+    assert_eq!(auto_cook.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_cook.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(auto_cook.requires_main_ui_wait, Some(true));
+    assert!(auto_cook
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let auto_skip = find_task_catalog_entry(AUTO_SKIP_TASK_KEY).unwrap();
+    assert_eq!(auto_skip.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(auto_skip.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        auto_skip.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(auto_skip.asset_roots.contains(&"GameTask/AutoSkip/Assets"));
+    assert!(auto_skip.asset_roots.contains(&"GameTask/AutoPick/Assets"));
+    assert!(auto_skip
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(auto_skip.asset_roots.contains(&"Assets/Config/Skip"));
+
+    let game_loading = find_task_catalog_entry(GAME_LOADING_TASK_KEY).unwrap();
+    assert_eq!(game_loading.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(game_loading.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        game_loading.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(game_loading
+        .asset_roots
+        .contains(&"GameTask/GameLoading/Assets"));
+    assert!(game_loading
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let quick_teleport = find_task_catalog_entry(QUICK_TELEPORT_TASK_KEY).unwrap();
+    assert_eq!(quick_teleport.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(quick_teleport.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        quick_teleport.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(quick_teleport
+        .asset_roots
+        .contains(&"GameTask/QuickTeleport/Assets"));
+
+    let skill_cd = find_task_catalog_entry(SKILL_CD_TASK_KEY).unwrap();
+    assert_eq!(skill_cd.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(skill_cd.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        skill_cd.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(skill_cd.asset_roots.contains(&"GameTask/AutoFight/Assets"));
+
+    let map_mask = find_task_catalog_entry(MAP_MASK_TASK_KEY).unwrap();
+    assert_eq!(map_mask.launch_policy, TaskLaunchPolicy::RealtimeTick);
+    assert_eq!(map_mask.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        map_mask.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(map_mask.asset_roots.contains(&"GameTask/MapMask/Assets"));
+    assert!(map_mask
+        .asset_roots
+        .contains(&"GameTask/QuickTeleport/Assets"));
+    assert!(map_mask
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(map_mask.asset_roots.contains(&"Assets/Map"));
+    assert!(map_mask.asset_roots.contains(&"User/AutoPathing"));
+
+    let return_main_ui = find_task_catalog_entry("ReturnMainUi").unwrap();
+    assert_eq!(
+        return_main_ui.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let get_grid_icons = find_task_catalog_entry("GetGridIcons").unwrap();
+    assert!(get_grid_icons
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(get_grid_icons.asset_roots.contains(&"Assets/Model/Item"));
+    assert_eq!(get_grid_icons.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        get_grid_icons.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let count_inventory = find_task_catalog_entry(COUNT_INVENTORY_ITEM_TASK_KEY).unwrap();
+    assert_eq!(count_inventory.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(count_inventory.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        count_inventory.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(count_inventory
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(count_inventory.asset_roots.contains(&"Assets/Model/Item"));
+
+    let set_time = find_task_catalog_entry("SetTime").unwrap();
+    assert_eq!(
+        set_time.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    let choose_talk_option = find_task_catalog_entry("ChooseTalkOption").unwrap();
+    assert_eq!(
+        choose_talk_option.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(choose_talk_option
+        .asset_roots
+        .contains(&"GameTask/AutoSkip/Assets"));
+
+    let check_rewards = find_task_catalog_entry("CheckRewards").unwrap();
+    assert_eq!(
+        check_rewards.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(check_rewards
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let blessing = find_task_catalog_entry("BlessingOfTheWelkinMoon").unwrap();
+    assert_eq!(
+        blessing.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(blessing
+        .asset_roots
+        .contains(&"GameTask/GameLoading/Assets"));
+
+    let battle_pass = find_task_catalog_entry("ClaimBattlePassRewards").unwrap();
+    assert_eq!(
+        battle_pass.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(battle_pass
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let encounter_points = find_task_catalog_entry("ClaimEncounterPointsRewards").unwrap();
+    assert_eq!(
+        encounter_points.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(encounter_points
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let mail_rewards = find_task_catalog_entry("ClaimMailRewards").unwrap();
+    assert_eq!(
+        mail_rewards.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(mail_rewards
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let adventurers_guild = find_task_catalog_entry("GoToAdventurersGuild").unwrap();
+    assert_eq!(
+        adventurers_guild.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(adventurers_guild
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(adventurers_guild
+        .asset_roots
+        .contains(&"GameTask/AutoSkip/Assets"));
+    assert!(adventurers_guild
+        .asset_roots
+        .contains(&"GameTask/AutoPick/Assets"));
+
+    let crafting_bench = find_task_catalog_entry("GoToCraftingBench").unwrap();
+    assert_eq!(
+        crafting_bench.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(crafting_bench
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(crafting_bench
+        .asset_roots
+        .contains(&"GameTask/AutoSkip/Assets"));
+    assert!(crafting_bench
+        .asset_roots
+        .contains(&"GameTask/AutoPick/Assets"));
+
+    let serenitea_pot = find_task_catalog_entry("GoToSereniteaPot").unwrap();
+    assert_eq!(serenitea_pot.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(
+        serenitea_pot.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(serenitea_pot
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(serenitea_pot
+        .asset_roots
+        .contains(&"GameTask/QuickTeleport/Assets"));
+    assert!(serenitea_pot
+        .asset_roots
+        .contains(&"GameTask/QuickSereniteaPot/Assets"));
+    assert!(serenitea_pot.asset_roots.contains(&"User/OneDragon"));
+
+    let teleport = find_task_catalog_entry("Teleport").unwrap();
+    assert_eq!(teleport.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(teleport.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        teleport.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(teleport.asset_roots.contains(&"GameTask/Common/Map"));
+    assert!(teleport
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let walk_to_f = find_task_catalog_entry("WalkToF").unwrap();
+    assert_eq!(walk_to_f.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(
+        walk_to_f.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(walk_to_f.asset_roots.contains(&"GameTask/AutoPick/Assets"));
+
+    let lower_head_then_walk_to = find_task_catalog_entry("LowerHeadThenWalkTo").unwrap();
+    assert_eq!(
+        lower_head_then_walk_to.launch_policy,
+        TaskLaunchPolicy::CommonJob
+    );
+    assert_eq!(
+        lower_head_then_walk_to.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(lower_head_then_walk_to
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(lower_head_then_walk_to
+        .asset_roots
+        .contains(&"GameTask/AutoPick/Assets"));
+
+    let scan_pick_drops = find_task_catalog_entry("ScanPickDrops").unwrap();
+    assert_eq!(scan_pick_drops.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(
+        scan_pick_drops.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(scan_pick_drops.asset_roots.contains(&"Assets/Model/World"));
+
+    let relogin = find_task_catalog_entry("Relogin").unwrap();
+    assert_eq!(
+        relogin.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(relogin.asset_roots.contains(&"GameTask/AutoWood/Assets"));
+    assert!(relogin
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let wonderland = find_task_catalog_entry("WonderlandCycle").unwrap();
+    assert_eq!(
+        wonderland.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(wonderland
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    let switch_party = find_task_catalog_entry("SwitchParty").unwrap();
+    assert_eq!(
+        switch_party.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(switch_party
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+
+    for key in [
+        "ReturnMainUi",
+        "SetTime",
+        "ChooseTalkOption",
+        "CheckRewards",
+        "BlessingOfTheWelkinMoon",
+        "ClaimBattlePassRewards",
+        "ClaimEncounterPointsRewards",
+        "ClaimMailRewards",
+        "CountInventoryItem",
+        "GoToAdventurersGuild",
+        "GoToCraftingBench",
+        "GoToSereniteaPot",
+        "Teleport",
+        "WalkToF",
+        "LowerHeadThenWalkTo",
+        "ScanPickDrops",
+        "Relogin",
+        "WonderlandCycle",
+        "SwitchParty",
+    ] {
+        let entry = find_task_catalog_entry(key).unwrap();
+        assert_eq!(entry.launch_policy, TaskLaunchPolicy::CommonJob, "{key}");
+        assert_eq!(entry.port_state, TaskPortState::RuntimeScaffolded, "{key}");
+    }
+}
+
+#[test]
+fn auto_open_chest_plan_preserves_legacy_locators_rules_and_catalog() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, AUTO_OPEN_CHEST_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.search_rule.time_limit_seconds, 60);
+    assert_eq!(plan.search_rule.loop_delay_ms, 500);
+    assert_eq!(plan.search_rule.backward_delay_ms, 30);
+    assert_eq!(plan.search_rule.backward_y_threshold_1080p, 600);
+    assert_eq!(plan.search_rule.center_gap_divisor, 2);
+    assert!(plan.search_rule.requires_initial_chest_f_prompt);
+    assert!(plan.search_rule.always_releases_forward_on_loop_exit);
+    assert_eq!(
+        plan.search_rule.flower_handler_action,
+        GenshinAction::OpenPaimonMenu
+    );
+
+    assert_eq!(
+        plan.locators.chest_icon.recognition_object.name.as_deref(),
+        Some(AUTO_OPEN_CHEST_CHEST_ASSET)
+    );
+    assert_eq!(
+        plan.locators
+            .chest_icon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(330, 130, 1250, 840).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .chest_f_icon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(1150, 450, 100, 300).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .flower_f_icon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(1150, 450, 100, 300).unwrap())
+    );
+    assert!(plan
+        .steps
+        .iter()
+        .any(|step| step.action == AutoOpenChestStepAction::ReleaseMoveForward));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("TaskContext/SystemControl preflight")));
+
+    let entry = find_task_catalog_entry(AUTO_OPEN_CHEST_TASK_KEY).unwrap();
+    assert_eq!(entry.launch_policy, TaskLaunchPolicy::SoloTask);
+    assert_eq!(entry.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        entry.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+
+    for asset_name in ["chest.png", "chest_F_icon.png", "flower_F_icon.png"] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join("AutoOpenChest")
+            .join("Assets")
+            .join("1920x1080")
+            .join(asset_name)
+            .exists());
+    }
+}
+
+#[test]
+fn auto_open_chest_plan_scales_legacy_rois() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        asset_scale: 2.0 / 3.0,
+    })
+    .unwrap();
+
+    assert_eq!(plan.asset_scale, 2.0 / 3.0);
+    assert_eq!(plan.search_rule.scaled_backward_y_threshold, 400);
+    assert_eq!(
+        plan.locators
+            .chest_icon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(220, 87, 833, 560).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .chest_f_icon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(767, 300, 67, 200).unwrap())
+    );
+}
+
+#[test]
+fn independent_auto_open_chest_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_open_chest(
+        AutoOpenChestExecutionConfig::default(),
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_OPEN_CHEST_TASK_KEY);
+    let IndependentTaskExecution::AutoOpenChestPlan(plan) = result.execution else {
+        panic!("expected auto-open-chest execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_OPEN_CHEST_TASK_KEY);
+    assert!(plan.executor_ready);
+}
+
+#[test]
+fn auto_open_chest_decision_handles_terminal_prompt_and_interaction_cases() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+
+    let initial_missing = decide_auto_open_chest_step(
+        &plan,
+        AutoOpenChestObservation {
+            initial_chest_f_icon_exists: false,
+            chest_icon: None,
+            chest_f_icon_exists: false,
+            flower_f_icon_exists: false,
+            capture_width: 1920,
+        },
+    );
+    assert_eq!(
+        initial_missing.result,
+        AutoOpenChestDecisionResult::InitialPromptMissing
+    );
+    assert!(initial_missing.is_terminal);
+    assert!(initial_missing.actions.is_empty());
+    assert!(initial_missing.post_loop_actions.is_empty());
+
+    let chest_missing = decide_auto_open_chest_step(
+        &plan,
+        AutoOpenChestObservation {
+            initial_chest_f_icon_exists: true,
+            chest_icon: None,
+            chest_f_icon_exists: false,
+            flower_f_icon_exists: false,
+            capture_width: 1920,
+        },
+    );
+    assert_eq!(
+        chest_missing.result,
+        AutoOpenChestDecisionResult::ChestIconMissing
+    );
+    assert!(chest_missing.actions.contains(&AutoOpenChestAction::Log {
+        message: "未找到宝箱图标".to_string()
+    }));
+    assert!(chest_missing
+        .actions
+        .contains(&AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: AutoOpenChestActionPress::KeyUp
+        }));
+    assert!(chest_missing.post_loop_actions.is_empty());
+
+    let chest_interact = decide_auto_open_chest_step(
+        &plan,
+        AutoOpenChestObservation {
+            initial_chest_f_icon_exists: true,
+            chest_icon: Some(Rect::new(900, 400, 80, 80).unwrap()),
+            chest_f_icon_exists: true,
+            flower_f_icon_exists: false,
+            capture_width: 1920,
+        },
+    );
+    assert_eq!(
+        chest_interact.result,
+        AutoOpenChestDecisionResult::ChestInteracted
+    );
+    assert!(chest_interact.is_terminal);
+    assert!(chest_interact
+        .actions
+        .contains(&AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::PickUpOrInteract,
+            press: AutoOpenChestActionPress::KeyPress
+        }));
+    assert!(chest_interact.post_loop_actions.is_empty());
+
+    let flower_interact = decide_auto_open_chest_step(
+        &plan,
+        AutoOpenChestObservation {
+            initial_chest_f_icon_exists: true,
+            chest_icon: Some(Rect::new(900, 400, 80, 80).unwrap()),
+            chest_f_icon_exists: false,
+            flower_f_icon_exists: true,
+            capture_width: 1920,
+        },
+    );
+    assert_eq!(
+        flower_interact.result,
+        AutoOpenChestDecisionResult::FlowerInteracted
+    );
+    assert!(flower_interact.is_flower);
+    assert!(flower_interact
+        .actions
+        .contains(&AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::PickUpOrInteract,
+            press: AutoOpenChestActionPress::KeyPress
+        }));
+    assert!(flower_interact
+        .post_loop_actions
+        .contains(&AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::OpenPaimonMenu,
+            press: AutoOpenChestActionPress::KeyPress
+        }));
+}
+
+#[test]
+fn auto_open_chest_decision_preserves_search_movement_rules() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+
+    let behind = decide_auto_open_chest_step(
+        &plan,
+        AutoOpenChestObservation {
+            initial_chest_f_icon_exists: true,
+            chest_icon: Some(Rect::new(30, 700, 100, 100).unwrap()),
+            chest_f_icon_exists: false,
+            flower_f_icon_exists: false,
+            capture_width: 1920,
+        },
+    );
+    assert_eq!(
+        behind.result,
+        AutoOpenChestDecisionResult::SearchingContinue
+    );
+    assert!(!behind.is_terminal);
+    assert_eq!(
+        behind.actions,
+        vec![
+            AutoOpenChestAction::GenshinAction {
+                action: GenshinAction::MoveForward,
+                press: AutoOpenChestActionPress::KeyDown
+            },
+            AutoOpenChestAction::GenshinAction {
+                action: GenshinAction::MoveBackward,
+                press: AutoOpenChestActionPress::KeyPress
+            },
+            AutoOpenChestAction::Delay { duration_ms: 30 },
+            AutoOpenChestAction::MouseMiddleClick,
+            AutoOpenChestAction::Delay { duration_ms: 500 }
+        ]
+    );
+
+    let turn = decide_auto_open_chest_step(
+        &plan,
+        AutoOpenChestObservation {
+            initial_chest_f_icon_exists: true,
+            chest_icon: Some(Rect::new(700, 300, 100, 100).unwrap()),
+            chest_f_icon_exists: false,
+            flower_f_icon_exists: false,
+            capture_width: 1920,
+        },
+    );
+    assert_eq!(
+        turn.actions,
+        vec![
+            AutoOpenChestAction::MouseMoveBy {
+                delta_x: 130,
+                delta_y: 0
+            },
+            AutoOpenChestAction::Delay { duration_ms: 500 }
+        ]
+    );
+}
+
+#[derive(Debug)]
+struct FakeAutoOpenChestRuntime {
+    elapsed: VecDeque<u64>,
+    cancelled: VecDeque<bool>,
+    observations: VecDeque<AutoOpenChestObservation>,
+    actions: Vec<AutoOpenChestAction>,
+}
+
+impl FakeAutoOpenChestRuntime {
+    fn new(observations: impl IntoIterator<Item = AutoOpenChestObservation>) -> Self {
+        Self {
+            elapsed: VecDeque::new(),
+            cancelled: VecDeque::new(),
+            observations: observations.into_iter().collect(),
+            actions: Vec::new(),
+        }
+    }
+
+    fn with_elapsed(mut self, elapsed: impl IntoIterator<Item = u64>) -> Self {
+        self.elapsed = elapsed.into_iter().collect();
+        self
+    }
+
+    fn with_cancelled(mut self, cancelled: impl IntoIterator<Item = bool>) -> Self {
+        self.cancelled = cancelled.into_iter().collect();
+        self
+    }
+}
+
+impl AutoOpenChestRuntime for FakeAutoOpenChestRuntime {
+    fn elapsed_auto_open_chest_ms(&mut self) -> Result<u64> {
+        Ok(self.elapsed.pop_front().unwrap_or(0))
+    }
+
+    fn is_auto_open_chest_cancelled(&mut self) -> Result<bool> {
+        Ok(self.cancelled.pop_front().unwrap_or(false))
+    }
+
+    fn observe_auto_open_chest(
+        &mut self,
+        _plan: &AutoOpenChestExecutionPlan,
+    ) -> Result<AutoOpenChestObservation> {
+        Ok(self
+            .observations
+            .pop_front()
+            .expect("fake auto-open-chest observation"))
+    }
+
+    fn dispatch_auto_open_chest_action(&mut self, action: &AutoOpenChestAction) -> Result<()> {
+        self.actions.push(action.clone());
+        Ok(())
+    }
+}
+
+fn fake_auto_open_chest_observation(
+    initial_chest_f_icon_exists: bool,
+    chest_icon: Option<Rect>,
+    chest_f_icon_exists: bool,
+    flower_f_icon_exists: bool,
+    capture_width: u32,
+) -> AutoOpenChestObservation {
+    AutoOpenChestObservation {
+        initial_chest_f_icon_exists,
+        chest_icon,
+        chest_f_icon_exists,
+        flower_f_icon_exists,
+        capture_width,
+    }
+}
+
+#[test]
+fn auto_open_chest_executor_returns_without_cleanup_when_initial_prompt_missing() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+    let mut runtime = FakeAutoOpenChestRuntime::new([fake_auto_open_chest_observation(
+        false, None, false, false, 1920,
+    )]);
+
+    let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.status,
+        AutoOpenChestExecutionStatus::InitialPromptMissing
+    );
+    assert_eq!(report.state.iterations, 1);
+    assert_eq!(
+        report.state.final_result,
+        Some(AutoOpenChestDecisionResult::InitialPromptMissing)
+    );
+    assert!(report.dispatched_actions.is_empty());
+    assert!(report.cleanup_actions.is_empty());
+    assert!(runtime.actions.is_empty());
+}
+
+#[test]
+fn auto_open_chest_executor_dispatches_search_then_chest_interaction_and_cleanup() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+    let mut runtime = FakeAutoOpenChestRuntime::new([
+        fake_auto_open_chest_observation(
+            true,
+            Some(Rect::new(700, 300, 100, 100).unwrap()),
+            false,
+            false,
+            1920,
+        ),
+        fake_auto_open_chest_observation(
+            false,
+            Some(Rect::new(900, 400, 80, 80).unwrap()),
+            true,
+            false,
+            1920,
+        ),
+    ])
+    .with_elapsed([0, 500]);
+
+    let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.status, AutoOpenChestExecutionStatus::ChestInteracted);
+    assert_eq!(report.state.iterations, 2);
+    assert_eq!(
+        report
+            .decisions
+            .iter()
+            .map(|decision| decision.result)
+            .collect::<Vec<_>>(),
+        vec![
+            AutoOpenChestDecisionResult::SearchingContinue,
+            AutoOpenChestDecisionResult::ChestInteracted,
+        ]
+    );
+    assert_eq!(
+        report.dispatched_actions,
+        vec![
+            AutoOpenChestAction::MouseMoveBy {
+                delta_x: 130,
+                delta_y: 0,
+            },
+            AutoOpenChestAction::Delay { duration_ms: 500 },
+            AutoOpenChestAction::GenshinAction {
+                action: GenshinAction::PickUpOrInteract,
+                press: AutoOpenChestActionPress::KeyPress,
+            },
+            AutoOpenChestAction::GenshinAction {
+                action: GenshinAction::MoveForward,
+                press: AutoOpenChestActionPress::KeyUp,
+            },
+        ]
+    );
+    assert_eq!(
+        report.cleanup_actions,
+        vec![AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: AutoOpenChestActionPress::KeyUp,
+        }]
+    );
+    assert!(report.post_loop_actions.is_empty());
+    assert_eq!(
+        runtime.actions,
+        report
+            .dispatched_actions
+            .iter()
+            .chain(report.cleanup_actions.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn auto_open_chest_executor_runs_flower_post_loop_after_cleanup() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+    let mut runtime = FakeAutoOpenChestRuntime::new([fake_auto_open_chest_observation(
+        true,
+        Some(Rect::new(900, 400, 80, 80).unwrap()),
+        false,
+        true,
+        1920,
+    )]);
+
+    let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.status, AutoOpenChestExecutionStatus::FlowerInteracted);
+    assert!(report.state.flower_detected);
+    assert_eq!(
+        report.post_loop_actions,
+        vec![AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::OpenPaimonMenu,
+            press: AutoOpenChestActionPress::KeyPress,
+        }]
+    );
+    assert_eq!(
+        runtime.actions.last(),
+        Some(&AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::OpenPaimonMenu,
+            press: AutoOpenChestActionPress::KeyPress,
+        })
+    );
+    assert_eq!(
+        runtime.actions[runtime.actions.len() - 2],
+        AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: AutoOpenChestActionPress::KeyUp,
+        }
+    );
+}
+
+#[test]
+fn auto_open_chest_executor_times_out_and_releases_forward() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+    let mut runtime =
+        FakeAutoOpenChestRuntime::new([]).with_elapsed([plan.search_rule.time_limit_seconds * 1000]);
+
+    let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(report.status, AutoOpenChestExecutionStatus::TimedOut);
+    assert!(report.state.timed_out);
+    assert_eq!(report.state.iterations, 0);
+    assert_eq!(
+        report.cleanup_actions,
+        vec![AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: AutoOpenChestActionPress::KeyUp,
+        }]
+    );
+    assert_eq!(runtime.actions, report.cleanup_actions);
+}
+
+#[test]
+fn auto_open_chest_executor_cancelled_releases_forward() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+    let mut runtime = FakeAutoOpenChestRuntime::new([])
+        .with_elapsed([0])
+        .with_cancelled([true]);
+
+    let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(report.status, AutoOpenChestExecutionStatus::Cancelled);
+    assert!(report.state.cancelled);
+    assert_eq!(report.state.iterations, 0);
+    assert_eq!(
+        runtime.actions,
+        vec![AutoOpenChestAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: AutoOpenChestActionPress::KeyUp,
+        }]
+    );
+}
+
+#[test]
+fn auto_open_chest_executor_preserves_scaled_720p_turning_rule() {
+    let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig {
+        capture_size: Size::new(1280, 720),
+        asset_scale: 2.0 / 3.0,
+    })
+    .unwrap();
+    let mut runtime = FakeAutoOpenChestRuntime::new([fake_auto_open_chest_observation(
+        true,
+        Some(Rect::new(500, 200, 67, 67).unwrap()),
+        false,
+        false,
+        1280,
+    )])
+    .with_elapsed([0, plan.search_rule.time_limit_seconds * 1000]);
+
+    let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(report.status, AutoOpenChestExecutionStatus::TimedOut);
+    assert_eq!(
+        report.dispatched_actions,
+        vec![
+            AutoOpenChestAction::MouseMoveBy {
+                delta_x: 70,
+                delta_y: 0,
+            },
+            AutoOpenChestAction::Delay { duration_ms: 500 },
+        ]
+    );
+    assert_eq!(report.state.iterations, 1);
+}
+
+#[test]
+fn quick_buy_plan_preserves_legacy_hotkey_branches_and_catalog() {
+    let plan = plan_quick_buy(QuickBuyExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, QUICK_BUY_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert!(plan.preflight_rule.requires_initialized_task_context);
+    assert_eq!(plan.preflight_rule.toast_message, "请先启动");
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("GameCaptureRegion")));
+
+    let locator = &plan.serenitea_pot_coin_rule.locator;
+    assert_eq!(locator.operation, BvLocatorOperation::IsExist);
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(QUICK_BUY_SERENITEA_POT_COIN)
+    );
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(1610, 28, 160, 45).unwrap())
+    );
+    assert!(locator.recognition_object.template.use_3_channels);
+    assert!(locator.recognition_object.template.draw_on_window);
+
+    assert_eq!(
+        plan.serenitea_pot_purchase_rule.branch,
+        QuickBuyBranch::SereniteaPotCoinPurchase
+    );
+    assert_eq!(
+        plan.serenitea_pot_purchase_rule.drag_start,
+        QuickBuyScreenPoint {
+            x_1080p: 1450.0,
+            y_1080p: 690.0,
+            screen_x: 1450.0,
+            screen_y: 690.0
+        }
+    );
+    assert_eq!(plan.serenitea_pot_purchase_rule.drag_delta_x, 1000);
+    assert_eq!(
+        plan.serenitea_pot_purchase_rule.final_clicks,
+        vec![
+            QuickBuyClickTarget::Fixed1080p(QuickBuyScreenPoint {
+                x_1080p: 1600.0,
+                y_1080p: 1020.0,
+                screen_x: 1600.0,
+                screen_y: 1020.0
+            }),
+            QuickBuyClickTarget::Fixed1080p(QuickBuyScreenPoint {
+                x_1080p: 960.0,
+                y_1080p: 850.0,
+                screen_x: 960.0,
+                screen_y: 850.0
+            })
+        ]
+    );
+
+    assert_eq!(
+        plan.normal_purchase_rule.branch,
+        QuickBuyBranch::NormalPurchase
+    );
+    assert_eq!(
+        plan.normal_purchase_rule.drag_start,
+        QuickBuyScreenPoint {
+            x_1080p: 742.0,
+            y_1080p: 601.0,
+            screen_x: 742.0,
+            screen_y: 601.0
+        }
+    );
+    assert_eq!(plan.normal_purchase_rule.drag_delta_x, 1000);
+    assert_eq!(
+        plan.normal_purchase_rule.final_clicks[0],
+        QuickBuyClickTarget::BottomRightOffset {
+            x_from_right_1080p: 225.0,
+            y_from_bottom_1080p: 60.0,
+            screen_x: 1695.0,
+            screen_y: 1020.0
+        }
+    );
+    assert_eq!(
+        plan.normal_purchase_rule.final_clicks[1],
+        QuickBuyClickTarget::Fixed1080p(QuickBuyScreenPoint {
+            x_1080p: 1100.0,
+            y_1080p: 780.0,
+            screen_x: 1100.0,
+            screen_y: 780.0
+        })
+    );
+
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == QuickBuyStepPhase::SereniteaPotCoinPurchase
+            && step.condition == QuickBuyStepCondition::WhenSereniteaPotCoinDetected
+            && matches!(
+                &step.action,
+                QuickBuyStepAction::Input {
+                    events
+                } if events == &vec![InputEvent::MouseMoveRelative { dx: 1000, dy: 0 }]
+            )
+    }));
+    assert_eq!(
+        plan.steps.last().map(|step| &step.action),
+        Some(&QuickBuyStepAction::ClearVisionDrawings)
+    );
+
+    let entry = find_task_catalog_entry(QUICK_BUY_TASK_KEY).unwrap();
+    assert_eq!(entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);
+    assert_eq!(entry.requires_main_ui_wait, Some(false));
+    assert_eq!(
+        entry.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(entry.asset_roots.contains(&"GameTask/QuickBuy/Assets"));
+}
+
+#[derive(Debug)]
+struct FakeQuickBuyRuntime {
+    preflight_passed: bool,
+    locator_matches: VecDeque<bool>,
+    preflight_rules: Vec<QuickBuyPreflightRule>,
+    locator_calls: Vec<BvLocatorPlan>,
+    moves: Vec<QuickBuyScreenPoint>,
+    page_commands: Vec<BvPageCommand>,
+    input_batches: Vec<Vec<InputEvent>>,
+    clicks: Vec<QuickBuyClickTarget>,
+    clear_calls: usize,
+}
+
+impl Default for FakeQuickBuyRuntime {
+    fn default() -> Self {
+        Self {
+            preflight_passed: true,
+            locator_matches: VecDeque::new(),
+            preflight_rules: Vec::new(),
+            locator_calls: Vec::new(),
+            moves: Vec::new(),
+            page_commands: Vec::new(),
+            input_batches: Vec::new(),
+            clicks: Vec::new(),
+            clear_calls: 0,
+        }
+    }
+}
+
+impl FakeQuickBuyRuntime {
+    fn with_locator_matches(matches: impl IntoIterator<Item = bool>) -> Self {
+        Self {
+            locator_matches: matches.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    fn with_preflight_passed(preflight_passed: bool) -> Self {
+        Self {
+            preflight_passed,
+            ..Self::default()
+        }
+    }
+}
+
+impl QuickBuyRuntime for FakeQuickBuyRuntime {
+    fn quick_buy_preflight(&mut self, rule: &QuickBuyPreflightRule) -> Result<bool> {
+        self.preflight_rules.push(rule.clone());
+        Ok(self.preflight_passed)
+    }
+
+    fn locate_quick_buy_template(&mut self, locator: &BvLocatorPlan) -> Result<bool> {
+        self.locator_calls.push(locator.clone());
+        Ok(self.locator_matches.pop_front().unwrap_or(false))
+    }
+
+    fn move_quick_buy_cursor(&mut self, point: &QuickBuyScreenPoint) -> Result<()> {
+        self.moves.push(*point);
+        Ok(())
+    }
+
+    fn execute_quick_buy_page_command(&mut self, command: &BvPageCommand) -> Result<()> {
+        self.page_commands.push(command.clone());
+        Ok(())
+    }
+
+    fn dispatch_quick_buy_input(&mut self, events: &[InputEvent]) -> Result<()> {
+        self.input_batches.push(events.to_vec());
+        Ok(())
+    }
+
+    fn click_quick_buy_target(&mut self, target: &QuickBuyClickTarget) -> Result<()> {
+        self.clicks.push(*target);
+        Ok(())
+    }
+
+    fn clear_quick_buy_vision_drawings(&mut self) -> Result<()> {
+        self.clear_calls += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn quick_buy_executor_runs_normal_purchase_when_coin_missing() {
+    let plan = plan_quick_buy(QuickBuyExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickBuyRuntime::with_locator_matches([false]);
+
+    let report = execute_quick_buy_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(QuickBuyExecutionResult::Completed)
+    );
+    assert_eq!(
+        report.state.selected_branch,
+        Some(QuickBuyBranch::NormalPurchase)
+    );
+    assert_eq!(runtime.preflight_rules.len(), 1);
+    assert_eq!(runtime.locator_calls.len(), 1);
+    assert_eq!(runtime.moves, vec![plan.normal_purchase_rule.drag_start]);
+    assert_eq!(
+        wait_milliseconds(&runtime.page_commands),
+        vec![100, 100, 50, 200, 100, 200, 200]
+    );
+    assert_eq!(runtime.input_batches.len(), 3);
+    assert_eq!(runtime.clicks, plan.normal_purchase_rule.final_clicks);
+    assert_eq!(runtime.clear_calls, 1);
+}
+
+#[test]
+fn quick_buy_executor_runs_serenitea_pot_coin_purchase_when_coin_detected() {
+    let plan = plan_quick_buy(QuickBuyExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickBuyRuntime::with_locator_matches([true]);
+
+    let report = execute_quick_buy_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.selected_branch,
+        Some(QuickBuyBranch::SereniteaPotCoinPurchase)
+    );
+    assert_eq!(
+        runtime.moves,
+        vec![plan.serenitea_pot_purchase_rule.drag_start]
+    );
+    assert_eq!(
+        wait_milliseconds(&runtime.page_commands),
+        vec![100, 50, 200, 200, 200]
+    );
+    assert_eq!(runtime.input_batches.len(), 3);
+    assert_eq!(
+        runtime.clicks,
+        plan.serenitea_pot_purchase_rule.final_clicks
+    );
+    assert_eq!(runtime.clear_calls, 1);
+}
+
+#[test]
+fn quick_buy_executor_skips_io_and_cleanup_when_preflight_fails() {
+    let plan = plan_quick_buy(QuickBuyExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickBuyRuntime::with_preflight_passed(false);
+
+    let report = execute_quick_buy_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(QuickBuyExecutionResult::PreflightSkipped)
+    );
+    assert_eq!(runtime.preflight_rules.len(), 1);
+    assert!(runtime.locator_calls.is_empty());
+    assert!(runtime.moves.is_empty());
+    assert!(runtime.input_batches.is_empty());
+    assert!(runtime.clicks.is_empty());
+    assert_eq!(runtime.clear_calls, 0);
+}
+
+#[test]
+fn quick_serenitea_pot_plan_preserves_legacy_inventory_gadget_and_interaction_flow() {
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, QUICK_SERENITEA_POT_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert!(plan.preflight_rule.destroys_asset_singleton_before_run);
+    assert_eq!(plan.preflight_rule.toast_message, "请先启动");
+
+    let bag_close = &plan.locators.bag_close_button;
+    assert_eq!(bag_close.operation, BvLocatorOperation::WaitFor);
+    assert_eq!(bag_close.timeout_ms, 2500);
+    assert_eq!(bag_close.retry_interval_ms, 500);
+    assert_eq!(bag_close.retry_count, 5);
+    assert_eq!(
+        bag_close.recognition_object.name.as_deref(),
+        Some(QUICK_SERENITEA_POT_BAG_CLOSE_BUTTON)
+    );
+    assert_eq!(
+        bag_close.recognition_object.region_of_interest,
+        Some(Rect::new(1813, 19, 58, 58).unwrap())
+    );
+    assert!(bag_close.recognition_object.template.draw_on_window);
+
+    let pot_icon = &plan.locators.serenitea_pot_icon;
+    assert_eq!(pot_icon.operation, BvLocatorOperation::Click);
+    assert_eq!(pot_icon.timeout_ms, 600);
+    assert_eq!(pot_icon.retry_interval_ms, 200);
+    assert_eq!(pot_icon.retry_count, 3);
+    assert_eq!(
+        pot_icon.recognition_object.name.as_deref(),
+        Some(QUICK_SERENITEA_POT_ICON)
+    );
+    assert_eq!(
+        pot_icon.recognition_object.region_of_interest,
+        Some(Rect::new(100, 100, 1190, 860).unwrap())
+    );
+
+    let white_confirm = &plan.locators.white_confirm_button;
+    assert_eq!(white_confirm.operation, BvLocatorOperation::Click);
+    assert_eq!(white_confirm.timeout_ms, 1);
+    assert_eq!(white_confirm.retry_count, 1);
+    assert!(white_confirm.recognition_object.template.use_3_channels);
+    assert!(!white_confirm.recognition_object.template.draw_on_window);
+
+    assert_eq!(
+        plan.bag_rule.open_inventory_action,
+        GenshinAction::OpenInventory
+    );
+    assert_eq!(plan.bag_rule.wait_after_open_inventory_ms, 500);
+    assert_eq!(plan.bag_rule.bag_open_attempts, 5);
+    assert_eq!(plan.bag_rule.bag_open_retry_interval_ms, 500);
+    assert_eq!(
+        plan.bag_rule.gadget_tab_click,
+        QuickSereniteaPotScreenPoint {
+            x_1080p: 1050.0,
+            y_1080p: 50.0,
+            screen_x: 1050.0,
+            screen_y: 50.0
+        }
+    );
+
+    assert_eq!(plan.placement_rule.find_pot_attempts, 3);
+    assert_eq!(plan.placement_rule.find_pot_retry_interval_ms, 200);
+    assert_eq!(plan.placement_rule.white_confirm_pre_click_delay_ms, 500);
+    assert!(plan.placement_rule.ignore_missing_white_confirm);
+    assert_eq!(plan.placement_rule.wait_after_confirm_ms, 800);
+    assert_eq!(plan.placement_rule.main_ui_success_checks, 5);
+    assert_eq!(plan.placement_rule.big_map_reopen_attempts, 5);
+    assert_eq!(
+        plan.placement_rule.reopen_inventory_action,
+        GenshinAction::OpenInventory
+    );
+
+    assert_eq!(plan.interaction_rule.enter_text, "进入");
+    assert_eq!(plan.interaction_rule.leave_text, "离开");
+    assert_eq!(plan.interaction_rule.object_text, "尘歌壶");
+    assert_eq!(
+        plan.interaction_rule.interact_action,
+        GenshinAction::PickUpOrInteract
+    );
+    assert_eq!(plan.interaction_rule.wait_after_interact_ms, 200);
+    assert_eq!(
+        plan.interaction_rule.confirm_click,
+        QuickSereniteaPotScreenPoint {
+            x_1080p: 1010.0,
+            y_1080p: 760.0,
+            screen_x: 1010.0,
+            screen_y: 760.0
+        }
+    );
+
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == QuickSereniteaPotStepPhase::OpenBag
+            && matches!(
+                &step.action,
+                QuickSereniteaPotStepAction::GenshinAction {
+                    action: GenshinAction::OpenInventory
+                }
+            )
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.phase == QuickSereniteaPotStepPhase::Interact
+            && step.condition == QuickSereniteaPotStepCondition::WhenEnterOrLeaveFound
+            && matches!(
+                &step.action,
+                QuickSereniteaPotStepAction::Click1080p {
+                    point
+                } if point.x_1080p == 1010.0 && point.y_1080p == 760.0
+            )
+    }));
+    assert_eq!(
+        plan.steps.last().map(|step| &step.action),
+        Some(&QuickSereniteaPotStepAction::ClearVisionDrawings)
+    );
+
+    let entry = find_task_catalog_entry(QUICK_SERENITEA_POT_TASK_KEY).unwrap();
+    assert_eq!(entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);
+    assert_eq!(entry.requires_main_ui_wait, Some(false));
+    assert!(entry
+        .asset_roots
+        .contains(&"GameTask/QuickSereniteaPot/Assets"));
+    assert!(entry.asset_roots.contains(&"GameTask/QuickTeleport/Assets"));
+    assert!(entry
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+    assert!(entry.asset_roots.contains(&"GameTask/AutoPick/Assets"));
+}
+
+#[derive(Debug)]
+struct FakeQuickSereniteaPotRuntime {
+    preflight_passed: bool,
+    locator_matches: VecDeque<bool>,
+    white_confirm_matches: VecDeque<bool>,
+    placement_outcomes: VecDeque<QuickSereniteaPotPlacementOutcome>,
+    interaction_outcomes: VecDeque<QuickSereniteaPotInteractionOutcome>,
+    preflight_rules: Vec<QuickSereniteaPotPreflightRule>,
+    actions: Vec<GenshinAction>,
+    locator_calls: Vec<BvLocatorPlan>,
+    white_confirm_calls: Vec<(BvLocatorPlan, u32, bool)>,
+    clicks: Vec<QuickSereniteaPotScreenPoint>,
+    page_commands: Vec<BvPageCommand>,
+    placement_rules: Vec<QuickSereniteaPotPlacementRule>,
+    interaction_rules: Vec<QuickSereniteaPotInteractionRule>,
+    clear_calls: usize,
+}
+
+impl Default for FakeQuickSereniteaPotRuntime {
+    fn default() -> Self {
+        Self {
+            preflight_passed: true,
+            locator_matches: VecDeque::from([true, true]),
+            white_confirm_matches: VecDeque::from([true]),
+            placement_outcomes: VecDeque::from([QuickSereniteaPotPlacementOutcome {
+                main_ui_reached: true,
+                big_map_detected: false,
+            }]),
+            interaction_outcomes: VecDeque::from([QuickSereniteaPotInteractionOutcome::Enter]),
+            preflight_rules: Vec::new(),
+            actions: Vec::new(),
+            locator_calls: Vec::new(),
+            white_confirm_calls: Vec::new(),
+            clicks: Vec::new(),
+            page_commands: Vec::new(),
+            placement_rules: Vec::new(),
+            interaction_rules: Vec::new(),
+            clear_calls: 0,
+        }
+    }
+}
+
+impl FakeQuickSereniteaPotRuntime {
+    fn with_preflight_passed(preflight_passed: bool) -> Self {
+        Self {
+            preflight_passed,
+            ..Self::default()
+        }
+    }
+
+    fn with_placement_outcome(outcome: QuickSereniteaPotPlacementOutcome) -> Self {
+        Self {
+            placement_outcomes: VecDeque::from([outcome]),
+            ..Self::default()
+        }
+    }
+
+    fn with_interaction_outcome(outcome: QuickSereniteaPotInteractionOutcome) -> Self {
+        Self {
+            interaction_outcomes: VecDeque::from([outcome]),
+            ..Self::default()
+        }
+    }
+
+    fn with_white_confirm_match(matched: bool) -> Self {
+        Self {
+            white_confirm_matches: VecDeque::from([matched]),
+            ..Self::default()
+        }
+    }
+}
+
+impl QuickSereniteaPotRuntime for FakeQuickSereniteaPotRuntime {
+    fn quick_serenitea_pot_preflight(
+        &mut self,
+        rule: &QuickSereniteaPotPreflightRule,
+    ) -> Result<bool> {
+        self.preflight_rules.push(rule.clone());
+        Ok(self.preflight_passed)
+    }
+
+    fn dispatch_quick_serenitea_pot_action(&mut self, action: GenshinAction) -> Result<()> {
+        self.actions.push(action);
+        Ok(())
+    }
+
+    fn locate_quick_serenitea_pot_template(&mut self, locator: &BvLocatorPlan) -> Result<bool> {
+        self.locator_calls.push(locator.clone());
+        Ok(self.locator_matches.pop_front().unwrap_or(true))
+    }
+
+    fn click_quick_serenitea_pot_point(
+        &mut self,
+        point: &QuickSereniteaPotScreenPoint,
+    ) -> Result<()> {
+        self.clicks.push(*point);
+        Ok(())
+    }
+
+    fn execute_quick_serenitea_pot_page_command(&mut self, command: &BvPageCommand) -> Result<()> {
+        self.page_commands.push(command.clone());
+        Ok(())
+    }
+
+    fn verify_quick_serenitea_pot_placement(
+        &mut self,
+        rule: &QuickSereniteaPotPlacementRule,
+    ) -> Result<QuickSereniteaPotPlacementOutcome> {
+        self.placement_rules.push(rule.clone());
+        Ok(self.placement_outcomes.pop_front().unwrap_or_default())
+    }
+
+    fn click_quick_serenitea_pot_white_confirm(
+        &mut self,
+        locator: &BvLocatorPlan,
+        pre_click_delay_ms: u32,
+        missing_is_ok: bool,
+    ) -> Result<bool> {
+        self.white_confirm_calls
+            .push((locator.clone(), pre_click_delay_ms, missing_is_ok));
+        Ok(self.white_confirm_matches.pop_front().unwrap_or(true))
+    }
+
+    fn find_quick_serenitea_pot_interaction(
+        &mut self,
+        rule: &QuickSereniteaPotInteractionRule,
+    ) -> Result<QuickSereniteaPotInteractionOutcome> {
+        self.interaction_rules.push(rule.clone());
+        Ok(self
+            .interaction_outcomes
+            .pop_front()
+            .unwrap_or(QuickSereniteaPotInteractionOutcome::Missing))
+    }
+
+    fn clear_quick_serenitea_pot_vision_drawings(&mut self) -> Result<()> {
+        self.clear_calls += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn quick_serenitea_pot_executor_runs_enter_interaction_flow() {
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickSereniteaPotRuntime::default();
+
+    let report = execute_quick_serenitea_pot_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(QuickSereniteaPotExecutionResult::Completed)
+    );
+    assert_eq!(report.state.bag_opened, Some(true));
+    assert_eq!(report.state.pot_icon_found, Some(true));
+    assert_eq!(report.state.white_confirm_clicked, Some(true));
+    assert_eq!(
+        report.state.interaction_outcome,
+        Some(QuickSereniteaPotInteractionOutcome::Enter)
+    );
+    assert!(report.state.interaction_action_dispatched);
+    assert!(report.state.confirmation_clicked);
+    assert_eq!(
+        runtime.actions,
+        vec![
+            GenshinAction::OpenInventory,
+            GenshinAction::PickUpOrInteract
+        ]
+    );
+    assert_eq!(runtime.locator_calls.len(), 2);
+    assert_eq!(runtime.white_confirm_calls.len(), 1);
+    assert_eq!(runtime.white_confirm_calls[0].1, 500);
+    assert!(runtime.white_confirm_calls[0].2);
+    assert_eq!(
+        wait_milliseconds(&runtime.page_commands),
+        vec![500, 200, 200, 800, 200]
+    );
+    assert_eq!(runtime.clear_calls, 1);
+}
+
+#[test]
+fn quick_serenitea_pot_executor_returns_after_big_map_detection() {
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig::default()).unwrap();
+    let mut runtime =
+        FakeQuickSereniteaPotRuntime::with_placement_outcome(QuickSereniteaPotPlacementOutcome {
+            main_ui_reached: false,
+            big_map_detected: true,
+        });
+
+    let report = execute_quick_serenitea_pot_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(QuickSereniteaPotExecutionResult::ReturnedFromBigMap)
+    );
+    assert_eq!(runtime.actions, vec![GenshinAction::OpenInventory]);
+    assert!(runtime.interaction_rules.is_empty());
+    assert_eq!(runtime.clear_calls, 1);
+}
+
+#[test]
+fn quick_serenitea_pot_executor_treats_missing_interaction_as_completed_noop() {
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickSereniteaPotRuntime::with_interaction_outcome(
+        QuickSereniteaPotInteractionOutcome::Missing,
+    );
+
+    let report = execute_quick_serenitea_pot_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(QuickSereniteaPotExecutionResult::InteractionMissing)
+    );
+    assert_eq!(runtime.actions, vec![GenshinAction::OpenInventory]);
+    assert!(!report.state.interaction_action_dispatched);
+    assert!(!report.state.confirmation_clicked);
+    assert_eq!(runtime.clear_calls, 1);
+}
+
+#[test]
+fn quick_serenitea_pot_executor_ignores_missing_white_confirm_like_legacy() {
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickSereniteaPotRuntime::with_white_confirm_match(false);
+
+    let report = execute_quick_serenitea_pot_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.white_confirm_clicked, Some(false));
+    assert_eq!(
+        report.state.result,
+        Some(QuickSereniteaPotExecutionResult::Completed)
+    );
+    assert_eq!(runtime.white_confirm_calls.len(), 1);
+    assert_eq!(runtime.clear_calls, 1);
+}
+
+#[test]
+fn quick_serenitea_pot_executor_skips_io_and_cleanup_when_preflight_fails() {
+    let plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig::default()).unwrap();
+    let mut runtime = FakeQuickSereniteaPotRuntime::with_preflight_passed(false);
+
+    let report = execute_quick_serenitea_pot_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(QuickSereniteaPotExecutionResult::PreflightSkipped)
+    );
+    assert_eq!(runtime.preflight_rules.len(), 1);
+    assert!(runtime.actions.is_empty());
+    assert!(runtime.locator_calls.is_empty());
+    assert_eq!(runtime.clear_calls, 0);
+}
+
+#[test]
+fn quick_hotkey_tasks_execute_as_rust_independent_plans() {
+    let quick_buy = execute_independent_task_with_cancel(
+        &IndependentTaskExecutionRequest::quick_buy(QuickBuyExecutionConfig::default(), "."),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(quick_buy.task_key, QUICK_BUY_TASK_KEY);
+    assert!(matches!(
+        quick_buy.execution,
+        IndependentTaskExecution::QuickBuyPlan(_)
+    ));
+
+    let quick_pot = execute_independent_task_with_cancel(
+        &IndependentTaskExecutionRequest::quick_serenitea_pot(
+            QuickSereniteaPotExecutionConfig::default(),
+            ".",
+        ),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(quick_pot.task_key, QUICK_SERENITEA_POT_TASK_KEY);
+    assert!(matches!(
+        quick_pot.execution,
+        IndependentTaskExecution::QuickSereniteaPotPlan(_)
+    ));
+
+    let descriptors = independent_tasks();
+    let quick_buy_descriptor = descriptors
+        .iter()
+        .find(|task| task.key == QUICK_BUY_TASK_KEY)
+        .unwrap();
+    assert_eq!(quick_buy_descriptor.kind, IndependentTaskKind::QuickBuy);
+    assert_eq!(
+        quick_buy_descriptor.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(!quick_buy_descriptor.requires_main_ui_wait);
+
+    let quick_pot_descriptor = descriptors
+        .iter()
+        .find(|task| task.key == QUICK_SERENITEA_POT_TASK_KEY)
+        .unwrap();
+    assert_eq!(
+        quick_pot_descriptor.kind,
+        IndependentTaskKind::QuickSereniteaPot
+    );
+    assert_eq!(
+        quick_pot_descriptor.rust_execution_surface,
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(!quick_pot_descriptor.requires_main_ui_wait);
+}
+
+#[derive(Default)]
+struct FakeMacroHotkeyRuntime {
+    preflight_passed: bool,
+    preflight_rules: Vec<MacroHotkeyPreflightRule>,
+    moves_by: Vec<(i64, i64)>,
+    clicks: Vec<MacroHotkeyScreenPoint>,
+    moves_to: Vec<MacroHotkeyScreenPoint>,
+    waits: Vec<u64>,
+}
+
+impl FakeMacroHotkeyRuntime {
+    fn initialized() -> Self {
+        Self {
+            preflight_passed: true,
+            ..Self::default()
+        }
+    }
+}
+
+impl MacroHotkeyRuntime for FakeMacroHotkeyRuntime {
+    fn macro_hotkey_preflight(&mut self, rule: &MacroHotkeyPreflightRule) -> Result<bool> {
+        self.preflight_rules.push(rule.clone());
+        Ok(self.preflight_passed)
+    }
+
+    fn move_macro_hotkey_mouse_by(&mut self, dx: i64, dy: i64) -> Result<()> {
+        self.moves_by.push((dx, dy));
+        Ok(())
+    }
+
+    fn click_macro_hotkey_capture_point(&mut self, point: &MacroHotkeyScreenPoint) -> Result<()> {
+        self.clicks.push(*point);
+        Ok(())
+    }
+
+    fn move_macro_hotkey_capture_point(&mut self, point: &MacroHotkeyScreenPoint) -> Result<()> {
+        self.moves_to.push(*point);
+        Ok(())
+    }
+
+    fn wait_macro_hotkey(&mut self, delay_ms: u64) -> Result<()> {
+        self.waits.push(delay_ms);
+        Ok(())
+    }
+}
+
+#[test]
+fn macro_hotkey_turn_around_plan_preserves_legacy_zero_interval_rewrite() {
+    let plan = plan_turn_around_macro(MacroHotkeyExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "macroConfig": {
+                "runaroundMouseXInterval": 0,
+                "runaroundInterval": 42
+            }
+        }),
+    )));
+
+    assert_eq!(plan.task_key, TURN_AROUND_MACRO_TASK_KEY);
+    assert_eq!(plan.kind, MacroHotkeyKind::TurnAround);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.config_rule.original_runaround_mouse_x_interval, 0);
+    assert_eq!(plan.config_rule.effective_runaround_mouse_x_interval, 1);
+    assert!(plan.config_rule.zero_runaround_mouse_x_is_rewritten_to_one);
+    assert_eq!(plan.config_rule.runaround_interval_ms, 42);
+    assert_eq!(plan.steps.len(), 2);
+    assert_eq!(
+        plan.steps[0].action,
+        MacroHotkeyStepAction::MoveMouseBy { dx: 1, dy: 0 }
+    );
+    assert_eq!(
+        plan.steps[1].action,
+        MacroHotkeyStepAction::Delay { delay_ms: 42 }
+    );
+
+    let mut runtime = FakeMacroHotkeyRuntime::default();
+    let report = execute_macro_hotkey_plan(&plan, &mut runtime).unwrap();
+    assert!(report.completed);
+    assert_eq!(runtime.moves_by, vec![(1, 0)]);
+    assert_eq!(runtime.waits, vec![42]);
+    assert_eq!(
+        report.state.result,
+        Some(MacroHotkeyExecutionResult::Completed)
+    );
+}
+
+#[test]
+fn macro_hotkey_quick_enhance_artifact_plan_preserves_click_chain_and_preflight() {
+    let plan = plan_quick_enhance_artifact_macro(MacroHotkeyExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "captureSize": { "width": 1280, "height": 720 },
+            "macroConfig": {
+                "enhanceWaitDelay": 250
+            }
+        }),
+    )));
+
+    assert_eq!(plan.task_key, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY);
+    assert_eq!(plan.kind, MacroHotkeyKind::QuickEnhanceArtifact);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.capture_size, Size::new(1280, 720));
+    assert_eq!(plan.config_rule.enhance_wait_delay_ms, 250);
+    assert_eq!(
+        plan.preflight_rule
+            .as_ref()
+            .unwrap()
+            .uninitialized_toast_message,
+        "请先启动"
+    );
+    assert_eq!(plan.steps.len(), 10);
+    let click_points: Vec<MacroHotkeyScreenPoint> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step.action {
+            MacroHotkeyStepAction::ClickCapturePoint { point } => Some(point),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        click_points,
+        vec![
+            MacroHotkeyScreenPoint {
+                x_1080p: 1760.0,
+                y_1080p: 770.0,
+                screen_x: 1173.3333333333333,
+                screen_y: 513.3333333333334,
+            },
+            MacroHotkeyScreenPoint {
+                x_1080p: 1760.0,
+                y_1080p: 1020.0,
+                screen_x: 1173.3333333333333,
+                screen_y: 680.0,
+            },
+            MacroHotkeyScreenPoint {
+                x_1080p: 150.0,
+                y_1080p: 150.0,
+                screen_x: 100.0,
+                screen_y: 100.0,
+            },
+            MacroHotkeyScreenPoint {
+                x_1080p: 150.0,
+                y_1080p: 220.0,
+                screen_x: 100.0,
+                screen_y: 146.66666666666666,
+            },
+        ]
+    );
+    let delays: Vec<u64> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step.action {
+            MacroHotkeyStepAction::Delay { delay_ms } => Some(delay_ms),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(delays, vec![100, 350, 100, 100]);
+    assert!(matches!(
+        plan.steps.last().unwrap().action,
+        MacroHotkeyStepAction::MoveCapturePoint { point }
+            if point.x_1080p == 1760.0 && point.y_1080p == 770.0
+    ));
+
+    let mut runtime = FakeMacroHotkeyRuntime::initialized();
+    let report = execute_macro_hotkey_plan(&plan, &mut runtime).unwrap();
+    assert!(report.completed);
+    assert_eq!(runtime.preflight_rules.len(), 1);
+    assert_eq!(runtime.clicks.len(), 4);
+    assert_eq!(runtime.waits, vec![100, 350, 100, 100]);
+    assert_eq!(runtime.moves_to.len(), 1);
+
+    let mut blocked_runtime = FakeMacroHotkeyRuntime::default();
+    let blocked = execute_macro_hotkey_plan(&plan, &mut blocked_runtime).unwrap();
+    assert!(!blocked.completed);
+    assert_eq!(
+        blocked.state.result,
+        Some(MacroHotkeyExecutionResult::PreflightSkipped)
+    );
+    assert_eq!(blocked_runtime.preflight_rules.len(), 1);
+    assert!(blocked_runtime.clicks.is_empty());
+    assert_eq!(blocked.skipped_steps.len(), 9);
+}
+
+#[test]
+fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
+    let turn = execute_independent_task_with_cancel(
+        &IndependentTaskExecutionRequest::turn_around_macro(
+            MacroHotkeyExecutionConfig::default(),
+            ".",
+        ),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(turn.task_key, TURN_AROUND_MACRO_TASK_KEY);
+    assert!(matches!(
+        turn.execution,
+        IndependentTaskExecution::TurnAroundMacroPlan(_)
+    ));
+
+    let enhance = execute_independent_task_with_cancel(
+        &IndependentTaskExecutionRequest::quick_enhance_artifact_macro(
+            MacroHotkeyExecutionConfig::default(),
+            ".",
+        ),
+        || false,
+    )
+    .unwrap();
+    assert_eq!(enhance.task_key, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY);
+    assert!(matches!(
+        enhance.execution,
+        IndependentTaskExecution::QuickEnhanceArtifactMacroPlan(_)
+    ));
+
+    let turn_entry = find_task_catalog_entry(TURN_AROUND_MACRO_TASK_KEY).unwrap();
+    assert_eq!(turn_entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);
+    assert_eq!(
+        turn_entry.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(turn_entry.hotkey_fields, &["turnAroundHotkey"]);
+
+    let enhance_entry = find_task_catalog_entry(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY).unwrap();
+    assert_eq!(enhance_entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);
+    assert_eq!(
+        enhance_entry.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert_eq!(enhance_entry.hotkey_fields, &["enhanceArtifactHotkey"]);
+
+    let descriptors = independent_tasks();
+    assert!(descriptors.iter().any(|task| {
+        task.kind == IndependentTaskKind::TurnAroundMacro
+            && task.key == TURN_AROUND_MACRO_TASK_KEY
+            && !task.requires_main_ui_wait
+    }));
+    assert!(descriptors.iter().any(|task| {
+        task.kind == IndependentTaskKind::QuickEnhanceArtifactMacro
+            && task.key == QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY
+            && !task.requires_main_ui_wait
+    }));
+}
+
+#[test]
+fn script_dispatcher_invocation_rejects_wrong_catalog_policy() {
+    let error = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
+            name: "AutoFight".to_string(),
+            interval_ms: 50,
+            config: None,
+            clears_existing_triggers: false,
+        }),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::InvalidLaunchPolicy {
+            key,
+            expected: TaskLaunchPolicy::RealtimeTick,
+            actual: TaskLaunchPolicy::SoloTask
+        } if key == "AutoFight"
+    ));
+}
+
+#[test]
+fn shell_config_matches_legacy_defaults_and_camel_case() {
+    let config = ShellConfig::default();
+    assert!(!config.disable);
+    assert_eq!(config.timeout, 60);
+    assert!(config.no_window);
+    assert!(config.output);
+
+    let config = ShellConfig::from_value(Some(&serde_json::json!({
+        "disable": true,
+        "timeout": -1,
+        "noWindow": false,
+        "output": false
+    })));
+    assert!(config.disable);
+    assert_eq!(config.timeout, -1);
+    assert!(!config.no_window);
+    assert!(!config.output);
+}
+
+#[test]
+fn shell_task_executes_and_captures_output() {
+    let param = ShellTaskParam::build_from_config(
+        shell_echo_command("hello-shell"),
+        ShellConfig::default(),
+        ".",
+    );
+
+    let result = execute_shell_task(&param).unwrap();
+
+    assert_eq!(result.status, ShellExecutionStatus::Completed);
+    assert!(result.waited_for_exit);
+    assert!(result.has_output());
+    assert!(
+        format!("{}\n{}", result.output_shell, result.output).contains("hello-shell"),
+        "unexpected shell output: {:?}",
+        result
+    );
+}
+
+#[test]
+fn shell_task_timeout_zero_starts_without_waiting() {
+    let param = ShellTaskParam::build_from_config(
+        shell_echo_command("fire-and-forget"),
+        ShellConfig {
+            timeout: 0,
+            ..ShellConfig::default()
+        },
+        ".",
+    );
+
+    let result = execute_shell_task(&param).unwrap();
+
+    assert_eq!(result.status, ShellExecutionStatus::Started);
+    assert!(!result.waited_for_exit);
+    assert_eq!(result.output_shell, "");
+    assert_eq!(result.output, "");
+}
+
+#[test]
+fn shell_task_disabled_and_empty_commands_do_not_spawn() {
+    let disabled = ShellTaskParam::build_from_config(
+        "definitely-not-a-command",
+        ShellConfig {
+            disable: true,
+            ..ShellConfig::default()
+        },
+        ".",
+    );
+    assert_eq!(
+        execute_shell_task(&disabled).unwrap().status,
+        ShellExecutionStatus::Disabled
+    );
+
+    let empty = ShellTaskParam::build_from_config("", ShellConfig::default(), ".");
+    assert_eq!(
+        execute_shell_task(&empty).unwrap().status,
+        ShellExecutionStatus::EmptyCommand
+    );
+}
+
+#[test]
+fn shell_task_reports_timeout() {
+    let param = ShellTaskParam::build_from_config(
+        shell_sleep_command(2),
+        ShellConfig {
+            timeout: 1,
+            ..ShellConfig::default()
+        },
+        ".",
+    );
+
+    let result = execute_shell_task(&param).unwrap();
+
+    assert_eq!(result.status, ShellExecutionStatus::TimedOut);
+    assert!(result.waited_for_exit);
+}
+
+#[test]
+fn shell_task_can_be_cancelled() {
+    let param = ShellTaskParam::build_from_config(
+        shell_sleep_command(2),
+        ShellConfig {
+            timeout: 30,
+            ..ShellConfig::default()
+        },
+        ".",
+    );
+
+    let result = execute_shell_task_with_cancel(&param, || true).unwrap();
+
+    assert_eq!(result.status, ShellExecutionStatus::Cancelled);
+    assert!(result.waited_for_exit);
+}
+
+#[test]
+fn independent_shell_task_executes_through_native_boundary() {
+    let request = IndependentTaskExecutionRequest::shell(
+        shell_echo_command("independent-shell-ok"),
+        ShellConfig::default(),
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, "Shell");
+    let IndependentTaskExecution::Shell(shell) = result.execution else {
+        panic!("expected shell execution result");
+    };
+    assert_eq!(shell.status, ShellExecutionStatus::Completed);
+    assert!(
+        format!("{}\n{}", shell.output_shell, shell.output).contains("independent-shell-ok"),
+        "unexpected shell output: {:?}",
+        shell
+    );
+}
+
+#[test]
+fn independent_use_redeem_code_returns_execution_plan() {
+    let codes = redeem_code_entries_from_strings(["ABCD1234EFGH"].into_iter());
+    let request =
+        IndependentTaskExecutionRequest::use_redeem_code(codes, Size::new(1920, 1080), ".");
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, "UseRedeemCode");
+    let IndependentTaskExecution::UseRedeemCodePlan(plan) = result.execution else {
+        panic!("expected use-redeem-code execution plan");
+    };
+    assert_eq!(plan.task_key, "UseRedeemCode");
+    assert_eq!(plan.codes.len(), 1);
+    assert_eq!(plan.codes[0].code, "ABCD1234EFGH");
+    assert!(plan.executor_ready);
+    assert!(plan.steps.len() > 10);
+}
+
+#[test]
+fn use_redeem_code_config_accepts_plain_code_strings() {
+    let config = UseRedeemCodeExecutionConfig::from_value(Some(&serde_json::json!({
+        "codes": ["ABCD1234EFGH", { "code": "WXYZ9876IJKL", "items": "Primogems" }],
+        "captureSize": { "width": 1280, "height": 720 }
+    })));
+
+    assert_eq!(config.capture_size, Size::new(1280, 720));
+    assert_eq!(config.codes.len(), 2);
+    assert_eq!(config.codes[0].code, "ABCD1234EFGH");
+    assert_eq!(config.codes[0].items, None);
+    assert_eq!(config.codes[1].code, "WXYZ9876IJKL");
+    assert_eq!(config.codes[1].items.as_deref(), Some("Primogems"));
+}
+
+#[test]
+fn independent_auto_pathing_returns_execution_plan_for_user_route() {
+    let root = unique_test_root("auto-pathing");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "mining route", "type": "mining", "map_name": "Teyvat" },
+                "config": { "realtime_triggers": { "AutoPick": true } },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "target", "action": "fight" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let request = IndependentTaskExecutionRequest::auto_pathing("liyue/route.json", &root);
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, "AutoPathing");
+    let IndependentTaskExecution::AutoPathingPlan(plan) = result.execution else {
+        panic!("expected auto-pathing execution plan");
+    };
+    assert_eq!(plan.summary.name, "mining route");
+    assert_eq!(
+        plan.normalized_path,
+        PathBuf::from("liyue").join("route.json")
+    );
+    assert_eq!(plan.execution_plan.segment_count, 1);
+    assert_eq!(plan.execution_plan.waypoint_count, 2);
+    assert_eq!(plan.execution_plan.expected_fight_count, 1);
+    assert!(plan.execution_plan.autopick_realtime_trigger_enabled);
+    assert!(!plan.dispatched);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phases() {
+    let root = unique_test_root("auto-pathing-action-boundary");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("time_route.json"),
+        r#"{
+                "info": { "name": "time route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "teleport", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "path", "move_mode": "walk", "action": "set_time", "action_params": "8:30:false" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/time_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            let CommonJobExecutionPlan::SetTime(set_time) = common_job_plan else {
+                panic!("expected SetTime common-job plan");
+            };
+            assert_eq!(set_time.requested_hour, 8);
+            assert_eq!(set_time.requested_minute, 30);
+            assert!(!set_time.skip_time_adjustment_animation);
+            Ok(Some(CommonJobLiveExecutionReport::SetTime(
+                SetTimeExecutionReport {
+                    task_key: set_time.task_key.clone(),
+                    completed: true,
+                    state: SetTimeExecutorState {
+                        skip_animation_resolved: false,
+                        ..SetTimeExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                    nested_return_main_ui_reports: Vec::new(),
+                },
+            )))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 1);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 1);
+    assert_eq!(report.invalid_actions, 0);
+    assert!(report.unsupported_phases >= 3);
+    assert!(report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .any(|phase| {
+            phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport
+                && phase.status == PathingBoundaryStatus::Unsupported
+        }));
+    assert!(report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .any(|phase| {
+            phase.phase == bgi_core::PathingWaypointPhase::MoveTo
+                && phase.status == PathingBoundaryStatus::Unsupported
+        }));
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected set_time action report");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Executed);
+    assert_eq!(
+        action_report.common_job_task_key.as_deref(),
+        Some("SetTime")
+    );
+    assert!(matches!(
+        action_report.common_job_live_execution,
+        Some(CommonJobLiveExecutionReport::SetTime(_))
+    ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_rejects_invalid_set_time_without_live_call() {
+    let root = unique_test_root("auto-pathing-invalid-set-time");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("bad_time_route.json"),
+        r#"{
+                "info": { "name": "bad time route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 3.0, "y": 4.0, "type": "path", "move_mode": "walk", "action": "set_time", "action_params": "bad" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/bad_time_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            panic!("invalid set_time must not call live executor");
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 0);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.invalid_actions, 1);
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected invalid set_time action report");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Invalid);
+    assert!(action_report.message.contains("HH:mm"));
+    assert!(action_report.common_job_plan.is_none());
+    assert!(action_report.common_job_live_execution.is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_runtime_report_stops_on_unsupported_phase_without_success_end() {
+    let root = unique_test_root("auto-pathing-runtime-unsupported");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "runtime route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let mut runtime = UnsupportedAutoPathingRuntime;
+
+    let report = execute_auto_pathing_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert!(!report.success_end);
+    assert!(!report.preflight_completed);
+    assert_eq!(report.executed_waypoints, 0);
+    assert_eq!(report.unsupported_preflight_phases, 1);
+    assert_eq!(report.unsupported_phases, 0);
+    assert!(report.failed_waypoint.is_none());
+    let failed = report.failed_preflight.as_ref().unwrap();
+    assert_eq!(failed.phase, AutoPathingPreflightPhase::SwitchPartyBefore);
+    assert!(failed.message.contains("native-pending"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_runtime_report_empty_route_preserves_legacy_success_end_false() {
+    let root = unique_test_root("auto-pathing-runtime-empty-route");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "empty route", "type": "collect", "map_name": "Teyvat" },
+                "positions": []
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let mut runtime = ExecutingAutoPathingRuntime::default();
+
+    let report = execute_auto_pathing_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert!(!report.success_end);
+    assert!(!report.preflight_completed);
+    assert_eq!(report.expected_fight_count, 0);
+    assert_eq!(report.success_fight_count, 0);
+    assert!(report.failed_preflight.is_none());
+    assert!(report.preflight_reports.is_empty());
+    assert!(report.failed_waypoint.is_none());
+    assert!(report.phase_reports.is_empty());
+    assert!(runtime.preflight_phases.is_empty());
+    assert!(runtime.phases.is_empty());
+    assert!(report.notes.contains("no waypoints"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_resolution_preflight_matches_legacy_screen_guards() {
+    let root = unique_test_root("auto-pathing-resolution-preflight");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "resolution route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+
+    let passed = evaluate_auto_pathing_resolution_preflight(
+        &plan.execution_plan.preflight,
+        Size::new(1920, 1080),
+    );
+    assert_eq!(passed.status, AutoPathingResolutionPreflightStatus::Passed);
+    assert_eq!(passed.minimum_width, 1920);
+    assert_eq!(passed.minimum_height, 1080);
+
+    let not_16_by_9 = evaluate_auto_pathing_resolution_preflight(
+        &plan.execution_plan.preflight,
+        Size::new(1920, 1200),
+    );
+    assert_eq!(
+        not_16_by_9.status,
+        AutoPathingResolutionPreflightStatus::Not16By9
+    );
+    assert!(not_16_by_9.message.contains("不是 16:9"));
+    assert!(not_16_by_9.message.contains("1920x1200"));
+
+    let below_minimum = evaluate_auto_pathing_resolution_preflight(
+        &plan.execution_plan.preflight,
+        Size::new(1600, 900),
+    );
+    assert_eq!(
+        below_minimum.status,
+        AutoPathingResolutionPreflightStatus::BelowMinimum
+    );
+    assert!(below_minimum.message.contains("小于 1920x1080"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_resolution_preflight_skips_empty_routes() {
+    let root = unique_test_root("auto-pathing-resolution-empty-route");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "empty resolution route", "type": "collect", "map_name": "Teyvat" },
+                "positions": []
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+
+    let skipped = evaluate_auto_pathing_resolution_preflight(
+        &plan.execution_plan.preflight,
+        Size::new(1280, 720),
+    );
+
+    assert_eq!(
+        skipped.status,
+        AutoPathingResolutionPreflightStatus::Skipped
+    );
+    assert!(skipped.message.contains("skipped"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_runtime_report_counts_successful_fight_actions() {
+    let root = unique_test_root("auto-pathing-runtime-fight-count");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "fight route", "type": "farming", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "target", "action": "fight" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let mut runtime = ExecutingAutoPathingRuntime::default();
+
+    let report = execute_auto_pathing_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.success_end);
+    assert!(report.preflight_completed);
+    assert_eq!(report.executed_preflight_phases, 6);
+    assert_eq!(
+        runtime.preflight_phases,
+        vec![
+            AutoPathingPreflightPhase::SwitchPartyBefore,
+            AutoPathingPreflightPhase::ValidateGameWithTask,
+            AutoPathingPreflightPhase::InitializePathing,
+            AutoPathingPreflightPhase::ConvertWaypointsForTrack,
+            AutoPathingPreflightPhase::DelayBeforeWarmUpNavigation,
+            AutoPathingPreflightPhase::WarmUpNavigation,
+        ]
+    );
+    assert_eq!(report.expected_fight_count, 1);
+    assert_eq!(report.success_fight_count, 1);
+    assert_eq!(report.executed_waypoints, 2);
+    assert!(report.failed_waypoint.is_none());
+    assert!(runtime
+        .phases
+        .iter()
+        .any(|phase| *phase == bgi_core::PathingWaypointPhase::RunAction));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_runtime_report_stops_when_waypoint_conversion_fails() {
+    let root = unique_test_root("auto-pathing-runtime-convert-failure");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "convert failure route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let mut runtime = FailingPreflightRuntime {
+        fail_phase: AutoPathingPreflightPhase::ConvertWaypointsForTrack,
+        preflight_phases: Vec::new(),
+        phases: Vec::new(),
+    };
+
+    let report = execute_auto_pathing_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert!(!report.success_end);
+    assert!(!report.preflight_completed);
+    assert_eq!(report.executed_preflight_phases, 3);
+    assert_eq!(report.failed_preflight_phases, 1);
+    assert_eq!(
+        report.failed_preflight.as_ref().unwrap().phase,
+        AutoPathingPreflightPhase::ConvertWaypointsForTrack
+    );
+    assert_eq!(
+        runtime.preflight_phases,
+        vec![
+            AutoPathingPreflightPhase::SwitchPartyBefore,
+            AutoPathingPreflightPhase::ValidateGameWithTask,
+            AutoPathingPreflightPhase::InitializePathing,
+            AutoPathingPreflightPhase::ConvertWaypointsForTrack,
+        ]
+    );
+    assert!(runtime.phases.is_empty());
+    assert!(report.phase_reports.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_runtime_report_can_cancel_during_preflight() {
+    let root = unique_test_root("auto-pathing-runtime-preflight-cancel");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "cancel route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let mut runtime = ExecutingAutoPathingRuntime::default();
+
+    let report =
+        execute_auto_pathing_with_runtime_and_cancellation(&plan, &mut runtime, || true).unwrap();
+
+    assert!(report.cancelled);
+    assert!(!report.preflight_completed);
+    assert!(!report.completed);
+    assert!(report.phase_reports.is_empty());
+    assert_eq!(
+        report.failed_preflight.as_ref().unwrap().phase,
+        AutoPathingPreflightPhase::SwitchPartyBefore
+    );
+    assert!(runtime.preflight_phases.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[derive(Default)]
+struct ExecutingAutoPathingRuntime {
+    preflight_phases: Vec<AutoPathingPreflightPhase>,
+    phases: Vec<bgi_core::PathingWaypointPhase>,
+}
+
+impl AutoPathingRuntime for ExecutingAutoPathingRuntime {
+    fn execute_preflight(
+        &mut self,
+        context: AutoPathingPreflightExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.preflight_phases.push(context.phase);
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed {:?}",
+            context.phase
+        )))
+    }
+
+    fn execute_phase(
+        &mut self,
+        context: AutoPathingPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.phases.push(context.phase);
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed {:?}",
+            context.phase
+        )))
+    }
+}
+
+struct FailingPreflightRuntime {
+    fail_phase: AutoPathingPreflightPhase,
+    preflight_phases: Vec<AutoPathingPreflightPhase>,
+    phases: Vec<bgi_core::PathingWaypointPhase>,
+}
+
+impl AutoPathingRuntime for FailingPreflightRuntime {
+    fn execute_preflight(
+        &mut self,
+        context: AutoPathingPreflightExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.preflight_phases.push(context.phase);
+        if context.phase == self.fail_phase {
+            return Ok(AutoPathingPhaseExecution::failed(format!(
+                "failed {:?}",
+                context.phase
+            )));
+        }
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed {:?}",
+            context.phase
+        )))
+    }
+
+    fn execute_phase(
+        &mut self,
+        context: AutoPathingPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.phases.push(context.phase);
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed {:?}",
+            context.phase
+        )))
+    }
+}
+
+#[test]
+fn independent_auto_pathing_rejects_paths_outside_user_root() {
+    let request = IndependentTaskExecutionRequest::auto_pathing("../route.json", ".");
+
+    let error = execute_independent_task_with_cancel(&request, || false).unwrap_err();
+
+    assert!(matches!(error, TaskError::InvalidPathingRoute(route) if route == "../route.json"));
+}
+
+#[test]
+fn independent_auto_fight_returns_combat_strategy_plan() {
+    let root = unique_test_root("auto-fight");
+    let strategy_dir = root.join("User").join("AutoFight");
+    fs::create_dir_all(&strategy_dir).unwrap();
+    fs::write(
+        strategy_dir.join("daily.txt"),
+        "帝君 e(hold), wait(0.2)\nYelan round(1-2), keypress(q)",
+    )
+    .unwrap();
+    let mut param = AutoFightParam::new(Some("daily"));
+    param.action_scheduler_by_cd = "钟离,12;夜兰".to_string();
+    param.team_names = "钟离,夜兰,秋秋人,班爷".to_string();
+    param.fight_finish_detect_enabled = true;
+    param.finish_detect_config.rotate_find_enemy_enabled = true;
+    param.finish_detect_config.fast_check_enabled = true;
+    param.check_before_burst = true;
+    param.pick_drops_after_fight_enabled = true;
+    param.battle_threshold_for_loot = 2;
+    param.exp_based_pickup_enabled = true;
+    write_test_combat_avatar_catalog(&root);
+    let request = IndependentTaskExecutionRequest {
+        task_key: "AutoFight".to_string(),
+        command: None,
+        config: serde_json::to_value(AutoFightExecutionConfig { param }).ok(),
+        working_directory: root.clone(),
+    };
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, "AutoFight");
+    let IndependentTaskExecution::AutoFightPlan(plan) = result.execution else {
+        panic!("expected auto-fight execution plan");
+    };
+    assert_eq!(plan.param.combat_strategy_path, "User/AutoFight/daily.txt");
+    assert!(!plan.dispatched);
+    assert_eq!(plan.combat_scripts.scripts.len(), 1);
+    assert_eq!(plan.combat_scripts.scripts[0].name, "daily");
+    assert_eq!(plan.combat_scripts.scripts[0].commands.len(), 3);
+    assert_eq!(
+        plan.combat_scripts.scripts[0].commands[2].activating_rounds,
+        vec![1, 2]
+    );
+    assert_eq!(plan.script_execution_plans.len(), 1);
+    assert_eq!(plan.playback_evaluation.total_commands, 3);
+    assert_eq!(plan.playback_evaluation.context_bound_commands, 2);
+    assert!(!plan.playback_evaluation.dispatch_ready);
+    assert_eq!(
+        plan.team_selection.status,
+        CombatScriptTeamSelectionStatus::PartialFallback
+    );
+    assert_eq!(
+        plan.team_selection.executable_avatar_names,
+        vec!["钟离".to_string(), "夜兰".to_string()]
+    );
+    assert_eq!(plan.team_selection.executable_commands.len(), 3);
+    let team_plan = plan.team_plan.as_ref().expect("expected team plan");
+    assert_eq!(team_plan.avatars.len(), 4);
+    assert_eq!(team_plan.avatars[0].index, 1);
+    assert_eq!(team_plan.avatars[0].name, "钟离");
+    assert_eq!(team_plan.avatars[0].skill_cd_seconds, Some(4.0));
+    assert_eq!(team_plan.avatars[0].skill_hold_cd_seconds, Some(12.0));
+    assert_eq!(team_plan.avatars[0].manual_skill_cd_seconds, 12.0);
+    assert!(team_plan.avatars[0].action_scheduler_configured);
+    assert_eq!(team_plan.avatars[2].name, "行秋");
+    assert!(!team_plan.avatars[2].action_scheduler_configured);
+    assert_eq!(
+        team_plan.command_avatar_names,
+        vec!["钟离".to_string(), "夜兰".to_string()]
+    );
+    assert_eq!(
+        team_plan.can_be_skipped_avatar_names,
+        vec!["钟离".to_string(), "夜兰".to_string()]
+    );
+    assert!(team_plan.all_command_avatars_can_be_skipped);
+    assert_eq!(plan.fight_loop_plan.command_count, 3);
+    assert_eq!(plan.fight_loop_plan.executable_command_count, 3);
+    assert!(plan.fight_loop_plan.rotate_find_enemy_enabled);
+    assert!(plan.fight_loop_plan.check_before_burst_enabled);
+    assert!(plan.fight_loop_plan.kazuha_pickup_enabled);
+    assert!(plan.fight_loop_plan.pickup_drops_after_fight_enabled);
+    let scan_pick_drops_plan = plan
+        .fight_loop_plan
+        .scan_pick_drops_plan
+        .as_ref()
+        .expect("expected scan-pick child plan");
+    assert_eq!(
+        scan_pick_drops_plan.scan_seconds,
+        SCAN_PICK_DROPS_DEFAULT_SCAN_SECONDS
+    );
+    assert_eq!(
+        scan_pick_drops_plan.yolo_rule.model_name,
+        SCAN_PICK_DROPS_WORLD_MODEL_NAME
+    );
+    assert!(!plan.fight_loop_plan.native_dispatch_ready);
+    assert!(plan.fight_loop_plan.steps.iter().any(|step| {
+        step.enabled && step.kind == CombatFightLoopStepKind::WaitAllConfiguredSkillCooldowns
+    }));
+    assert!(plan.fight_loop_plan.steps.iter().any(|step| {
+        step.enabled
+            && step.kind == CombatFightLoopStepKind::InitialSeekEnemy
+            && step.command_index == Some(0)
+    }));
+    assert!(plan.fight_loop_plan.steps.iter().any(|step| {
+        step.enabled
+            && step.kind == CombatFightLoopStepKind::CheckBeforeBurst
+            && step.command_index == Some(2)
+    }));
+    assert!(plan
+        .fight_loop_plan
+        .steps
+        .iter()
+        .any(|step| { step.enabled && step.kind == CombatFightLoopStepKind::ScanPickDrops }));
+    assert!(plan.fight_loop_plan.steps.iter().any(|step| {
+        step.enabled && step.kind == CombatFightLoopStepKind::ApplyBattleThresholdForLoot
+    }));
+    assert_eq!(
+        plan.finish_detection_plan.progress_pixel,
+        AUTO_FIGHT_FINISH_PROGRESS_PIXEL
+    );
+    assert_eq!(
+        plan.finish_detection_plan.white_tile_pixel,
+        AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL
+    );
+    assert_eq!(
+        plan.finish_detection_plan.pre_detect_delay_ms,
+        AUTO_FIGHT_DEFAULT_FINISH_DELAY_MS
+    );
+    assert_eq!(
+        plan.finish_detection_plan.detect_delay_ms,
+        AUTO_FIGHT_DEFAULT_FINISH_DETECT_DELAY_MS
+    );
+    assert!(plan
+        .finish_detection_plan
+        .steps
+        .iter()
+        .any(|step| step.enabled && step.kind == AutoFightFinishDetectionStepKind::SeekEnemy));
+    assert_eq!(plan.action_scheduler_plans.len(), 1);
+    assert!(
+        plan.action_scheduler_plans[0]
+            .scheduler
+            .all_command_avatars_can_be_skipped
+    );
+    assert_eq!(
+        plan.action_scheduler_plans[0]
+            .scheduler
+            .skipped_avatar_names,
+        vec!["钟离".to_string(), "夜兰".to_string()]
+    );
+    assert_eq!(plan.script_execution_plans[0].commands.len(), 3);
+    assert!(matches!(
+        plan.script_execution_plans[0].commands[0].action,
+        CombatCommandActionPlan::Skill {
+            hold: true,
+            cooldown_policy: CombatSkillCooldownPolicy::None,
+            ..
+        }
+    ));
+    assert_eq!(
+        plan.script_execution_plans[0].commands[2].default_input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::Q.vk(),
+                extended: None,
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::Q.vk(),
+                extended: None,
+            }
+        ]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn independent_auto_wood_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_wood(0, 0, ".");
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_WOOD_TASK_KEY);
+    let IndependentTaskExecution::AutoWoodPlan(plan) = result.execution else {
+        panic!("expected auto-wood execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_WOOD_TASK_KEY);
+    assert_eq!(plan.param_rule.normalized_round_num, 9999);
+    assert_eq!(plan.param_rule.normalized_daily_max_count, 9999);
+    assert_eq!(
+        plan.refresh_rule.default_strategy,
+        AutoWoodRefreshStrategy::WonderlandCycle
+    );
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_domain_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest {
+        task_key: AUTO_DOMAIN_TASK_KEY.to_string(),
+        command: None,
+        config: Some(serde_json::json!({
+            "domainRoundNum": 0,
+            "strategyName": "daily",
+            "autoDomainConfig": {
+                "domainName": "太山府",
+                "specifyResinUse": false
+            }
+        })),
+        working_directory: ".".into(),
+    };
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_DOMAIN_TASK_KEY);
+    let IndependentTaskExecution::AutoDomainPlan(plan) = result.execution else {
+        panic!("expected AutoDomain execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_DOMAIN_TASK_KEY);
+    assert_eq!(plan.param_rule.normalized_domain_round_num, 9999);
+    assert_eq!(plan.param.combat_strategy_path, "User/AutoFight/daily.txt");
+    assert_eq!(plan.param.domain_name, "太山府");
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_genius_invokation_returns_execution_plan() {
+    let strategy_text = r#"
+        角色定义:
+        角色1=刻晴|雷{技能2消耗=3雷骰子}
+        角色2=莫娜|水{技能1消耗=1水骰子+2任意}
+        角色3=甘雨|冰{技能4消耗=1冰骰子}
+        策略定义:
+        刻晴 使用 技能2 骰子减少1
+    "#;
+    let request =
+        IndependentTaskExecutionRequest::auto_genius_invokation("test", strategy_text, ".");
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_GENIUS_INVOKATION_TASK_KEY);
+    let IndependentTaskExecution::AutoGeniusInvokationPlan(plan) = result.execution else {
+        panic!("expected AutoGeniusInvokation execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_GENIUS_INVOKATION_TASK_KEY);
+    assert_eq!(plan.config_rule.strategy_name, "test");
+    assert!(plan.strategy_source.inline_strategy);
+    assert_eq!(plan.strategy.characters.len(), 3);
+    assert_eq!(plan.strategy.action_commands[0].all_cost, Some(2));
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_track_path_returns_execution_plan() {
+    let root = unique_test_root("auto-track-path-independent");
+    let way_file = root.join("log").join("way").join("way2.json");
+    write_test_file(
+        &way_file,
+        r#"{
+  "WayPointList": [
+    { "Pt": { "X": 1.0, "Y": 2.0 }, "MatchPt": { "X": 10.0, "Y": 20.0 }, "Index": 0, "Type": "Normal" },
+    { "Pt": { "X": 3.0, "Y": 4.0 }, "MatchPt": { "X": 30.0, "Y": 40.0 }, "Index": 1, "Type": "Fighting" }
+  ]
+}"#,
+    );
+    let request = IndependentTaskExecutionRequest::auto_track_path("log/way/way2.json", &root);
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_TRACK_PATH_TASK_KEY);
+    let IndependentTaskExecution::AutoTrackPathPlan(plan) = result.execution else {
+        panic!("expected AutoTrackPath execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_TRACK_PATH_TASK_KEY);
+    assert_eq!(plan.path_summary.waypoint_count, 2);
+    assert_eq!(plan.path_summary.key_point_indices, vec![1]);
+    assert!(!plan.executor_ready);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn independent_auto_boss_returns_execution_plan() {
+    let root = unique_test_root("auto-boss-independent");
+    write_test_file(
+        &root.join("User").join("AutoFight").join("boss.txt"),
+        "香菱 q, wait(0.2)",
+    );
+    write_test_file(
+        &root
+            .join("GameTask")
+            .join("AutoBoss")
+            .join("Assets")
+            .join("Pathing")
+            .join("爆炎树前往.json"),
+        r#"{"positions":[]}"#,
+    );
+    let request = IndependentTaskExecutionRequest::auto_boss("爆炎树", "boss", &root);
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_BOSS_TASK_KEY);
+    let IndependentTaskExecution::AutoBossPlan(plan) = result.execution else {
+        panic!("expected AutoBoss execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_BOSS_TASK_KEY);
+    assert_eq!(plan.param.boss_name, "爆炎树");
+    assert_eq!(
+        plan.pathing_rule.first_navigation_files,
+        vec!["爆炎树前往.json"]
+    );
+    assert!(!plan.executor_ready);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn independent_auto_music_game_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_music_game(
+        AutoMusicGameExecutionConfig {
+            auto_music_game_config: AutoMusicGameConfig {
+                must_canorus_level: false,
+                music_level: "困难".to_string(),
+                ..AutoMusicGameConfig::default()
+            },
+            ..AutoMusicGameExecutionConfig::default()
+        },
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_MUSIC_GAME_TASK_KEY);
+    let IndependentTaskExecution::AutoMusicGamePlan(plan) = result.execution else {
+        panic!("expected AutoMusicGame execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_MUSIC_GAME_TASK_KEY);
+    assert_eq!(plan.album_rule.selected_music_level, "困难");
+    assert_eq!(plan.album_rule.selected_difficulties.len(), 1);
+    assert_eq!(plan.album_rule.selected_difficulties[0].name, "困难");
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_track_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_track(".");
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_TRACK_TASK_KEY);
+    let IndependentTaskExecution::AutoTrackPlan(plan) = result.execution else {
+        panic!("expected AutoTrack execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_TRACK_TASK_KEY);
+    assert_eq!(plan.mission_text_rule.long_distance_threshold_meters, 150);
+    assert_eq!(plan.tracking_rule.arrival_distance_meters, 3);
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_ley_line_outcrop_returns_execution_plan() {
+    let root = unique_test_root("auto-ley-line-independent");
+    write_test_ley_line_static_data(&root);
+    let request = IndependentTaskExecutionRequest::auto_ley_line_outcrop(
+        AutoLeyLineOutcropExecutionConfig::from_value(Some(&serde_json::json!({
+            "country": "蒙德",
+            "leyLineOutcropType": "启示之花",
+            "count": 2
+        }))),
+        &root,
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_LEY_LINE_OUTCROP_TASK_KEY);
+    let IndependentTaskExecution::AutoLeyLineOutcropPlan(plan) = result.execution else {
+        panic!("expected AutoLeyLineOutcrop execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_LEY_LINE_OUTCROP_TASK_KEY);
+    assert_eq!(plan.param.count, 2);
+    assert_eq!(plan.data_rule.selected_country_ley_line_positions, 1);
+    assert_eq!(
+        plan.pathing_rule
+            .selected_position_plan
+            .as_ref()
+            .unwrap()
+            .target_route,
+        "assets/pathing/target/蒙德-test-1.json"
+    );
+    assert!(!plan.executor_ready);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn independent_auto_artifact_salvage_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_artifact_salvage(
+        AutoArtifactSalvageExecutionConfig::from_value(Some(&serde_json::json!({
+            "star": 4,
+            "javaScript": null
+        }))),
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_ARTIFACT_SALVAGE_TASK_KEY);
+    let IndependentTaskExecution::AutoArtifactSalvagePlan(plan) = result.execution else {
+        panic!("expected AutoArtifactSalvage execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_ARTIFACT_SALVAGE_TASK_KEY);
+    assert!(plan.quick_salvage_rule.destructive_native_action);
+    assert!(plan.five_star_rule.is_none());
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_get_grid_icons_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::get_grid_icons(
+        GetGridIconsExecutionConfig::from_value(Some(&serde_json::json!({
+            "gridName": "ArtifactSetFilter",
+            "maxNumToGet": 5
+        }))),
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, GET_GRID_ICONS_TASK_KEY);
+    let IndependentTaskExecution::GetGridIconsPlan(plan) = result.execution else {
+        panic!("expected GetGridIcons execution plan");
+    };
+    assert_eq!(plan.task_key, GET_GRID_ICONS_TASK_KEY);
+    assert_eq!(
+        plan.config_rule.grid_screen_name,
+        GridScreenName::ArtifactSetFilter
+    );
+    assert!(plan.open_rule.requires_manual_open);
+    assert!(plan.artifact_set_filter_rule.is_some());
+    assert!(!plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_fight_rejects_paths_outside_user_root() {
+    let mut param = AutoFightParam::default();
+    param.combat_strategy_path = "../fight.txt".to_string();
+    let request = IndependentTaskExecutionRequest {
+        task_key: "AutoFight".to_string(),
+        command: None,
+        config: serde_json::to_value(AutoFightExecutionConfig { param }).ok(),
+        working_directory: ".".into(),
+    };
+
+    let error = execute_independent_task_with_cancel(&request, || false).unwrap_err();
+
+    assert!(matches!(error, TaskError::InvalidCombatStrategyPath(path) if path == "../fight.txt"));
+}
+
+#[test]
+fn independent_auto_stygian_onslaught_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_stygian_onslaught(
+        AutoStygianOnslaughtExecutionConfig::from_value(Some(&serde_json::json!({
+            "bossNum": 2,
+            "strategyName": "stygian"
+        }))),
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_STYGIAN_ONSLAUGHT_TASK_KEY);
+    let IndependentTaskExecution::AutoStygianOnslaughtPlan(plan) = result.execution else {
+        panic!("expected AutoStygianOnslaught execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_STYGIAN_ONSLAUGHT_TASK_KEY);
+    assert_eq!(plan.boss_rule.selected_boss_num, 2);
+    assert_eq!(
+        plan.param_rule.combat_script_bag_path,
+        "User/AutoFight/stygian.txt"
+    );
+    assert!(!plan.executor_ready);
+}
+
+#[cfg(windows)]
+fn shell_echo_command(message: &str) -> String {
+    format!("echo {message} & exit")
+}
+
+#[cfg(not(windows))]
+fn shell_echo_command(message: &str) -> String {
+    format!("echo {message}; exit")
+}
+
+#[cfg(windows)]
+fn shell_sleep_command(seconds: u64) -> String {
+    format!("ping -n {} 127.0.0.1 > nul & exit", seconds + 1)
+}
+
+#[cfg(not(windows))]
+fn shell_sleep_command(seconds: u64) -> String {
+    format!("sleep {seconds}; exit")
+}
+
+fn test_team_avatar(index: usize, name: &str) -> CombatTeamAvatarPlan {
+    CombatTeamAvatarPlan {
+        index,
+        name: name.to_string(),
+        id: format!("avatar-{index}"),
+        name_en: name.to_string(),
+        weapon: "Sword".to_string(),
+        skill_cd_seconds: None,
+        skill_hold_cd_seconds: None,
+        burst_cd_seconds: None,
+        manual_skill_cd_seconds: -1.0,
+        action_scheduler_configured: false,
+    }
+}
+
+fn unique_test_root(name: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("bgi-task-{name}-{nonce}"))
+}
+
+fn write_test_file(path: &Path, content: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, content).unwrap();
+}
+
+fn write_test_combat_avatar_catalog(root: &Path) {
+    let path = root.join(COMBAT_AVATAR_CATALOG_PATH);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        r#"[
+  {
+    "alias": ["钟离", "Zhongli", "帝君"],
+    "burstCD": 12,
+    "id": "10000030",
+    "name": "钟离",
+    "nameEn": "Zhongli",
+    "skillCD": 4,
+    "skillHoldCD": 12,
+    "weapon": "13"
+  },
+  {
+    "alias": ["夜兰", "Yelan"],
+    "burstCD": 18,
+    "id": "10000060",
+    "name": "夜兰",
+    "nameEn": "Yelan",
+    "skillCD": 10,
+    "weapon": "12"
+  },
+  {
+    "alias": ["行秋", "秋秋人"],
+    "burstCD": 20,
+    "id": "10000025",
+    "name": "行秋",
+    "nameEn": "Xingqiu",
+    "skillCD": 21,
+    "weapon": "1"
+  },
+  {
+    "alias": ["班尼特", "班爷"],
+    "burstCD": 15,
+    "id": "10000032",
+    "name": "班尼特",
+    "nameEn": "Bennett",
+    "skillCD": 5,
+    "weapon": "1"
+  },
+  {
+    "alias": ["枫原万叶", "叶天帝", "万叶"],
+    "burstCD": 15,
+    "id": "10000047",
+    "name": "枫原万叶",
+    "nameEn": "Kazuha",
+    "skillCD": 6,
+    "skillHoldCD": 9,
+    "weapon": "1"
+  }
+]"#,
+    )
+    .unwrap();
+}
+
+fn write_test_index_templates(root: &Path) -> Vec<BgrImage> {
+    let patterns = [
+        [255, 0, 0, 0, 255, 0, 0, 0, 255],
+        [0, 255, 0, 255, 255, 255, 0, 255, 0],
+        [255, 255, 255, 0, 255, 0, 0, 255, 0],
+        [255, 0, 255, 0, 255, 0, 255, 0, 255],
+    ];
+    AUTO_FIGHT_AVATAR_INDEX_TEMPLATE_ASSETS
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, asset_name)| {
+            let pixels = patterns[index]
+                .into_iter()
+                .flat_map(|gray| [gray, gray, gray])
+                .collect();
+            let template = BgrImage::new(Size::new(3, 3), pixels).unwrap();
+            let path = common_element_asset_path(root, asset_name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            template.write_png(&path).unwrap();
+            template
+        })
+        .collect()
+}
+
+fn write_test_current_avatar_arrow_template(root: &Path) -> BgrImage {
+    let template = BgrImage::new(
+        Size::new(2, 2),
+        vec![255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255, 255],
+    )
+    .unwrap();
+    let path = common_element_asset_path(root, AUTO_FIGHT_CURRENT_AVATAR_THRESHOLD_ASSET);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    template.write_png(&path).unwrap();
+    template
+}
+
+fn write_test_auto_fight_template(root: &Path, asset_name: &str) -> BgrImage {
+    let template = BgrImage::new(
+        Size::new(2, 2),
+        vec![0, 0, 0, 255, 255, 255, 80, 80, 80, 200, 200, 200],
+    )
+    .unwrap();
+    let path = auto_fight_asset_path(root, asset_name);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    template.write_png(&path).unwrap();
+    template
+}
+
+fn common_element_asset_path(root: &Path, asset_name: &str) -> PathBuf {
+    root.join("GameTask")
+        .join("Common")
+        .join("Element")
+        .join("Assets")
+        .join("1920x1080")
+        .join(asset_name)
+}
+
+fn auto_fight_asset_path(root: &Path, asset_name: &str) -> PathBuf {
+    root.join("GameTask")
+        .join(AUTO_FIGHT_FEATURE)
+        .join("Assets")
+        .join("1920x1080")
+        .join(asset_name)
+}
+
+struct RecordingAvatarSideClassifier {
+    classes: Vec<(&'static str, f32)>,
+    calls: Vec<Rect>,
+}
+
+impl CombatAvatarSideClassifier for RecordingAvatarSideClassifier {
+    fn classify_avatar_side(
+        &mut self,
+        index: usize,
+        image: &BgrImage,
+        side_icon_rect: Rect,
+    ) -> Result<CombatAvatarSideClassification> {
+        assert_eq!(image.size, Size::new(82, 82));
+        self.calls.push(side_icon_rect);
+        let (class_name, confidence) = self.classes[index - 1];
+        Ok(CombatAvatarSideClassification {
+            class_name: class_name.to_string(),
+            confidence,
+        })
+    }
+}
+
+fn blank_bgr_image(size: Size) -> BgrImage {
+    BgrImage::new(
+        size,
+        vec![0; size.width as usize * size.height as usize * 3],
+    )
+    .unwrap()
+}
+
+fn small_avatar_index_rects() -> Vec<Rect> {
+    vec![
+        Rect::new(0, 0, 4, 4).unwrap(),
+        Rect::new(5, 0, 4, 4).unwrap(),
+        Rect::new(10, 0, 4, 4).unwrap(),
+        Rect::new(15, 0, 4, 4).unwrap(),
+    ]
+}
+
+fn set_bgr_pixel(image: &mut BgrImage, position: (u32, u32), pixel: RgbPixel) {
+    let index = ((position.1 * image.size.width + position.0) as usize) * 3;
+    image.pixels[index] = pixel.b;
+    image.pixels[index + 1] = pixel.g;
+    image.pixels[index + 2] = pixel.r;
+}
+
+fn fill_rect_gray(image: &mut BgrImage, rect: Rect, gray: u8) {
+    for y in rect.y as u32..rect.bottom() as u32 {
+        for x in rect.x as u32..rect.right() as u32 {
+            set_bgr_pixel(
+                image,
+                (x, y),
+                RgbPixel {
+                    r: gray,
+                    g: gray,
+                    b: gray,
+                },
+            );
+        }
+    }
+}
+
+fn draw_circle_gray(image: &mut BgrImage, center: (i32, i32), radius: i32, gray: u8) {
+    for sample in 0..192 {
+        let angle = sample as f64 * std::f64::consts::TAU / 192.0;
+        let x = center.0 + (radius as f64 * angle.cos()).round() as i32;
+        let y = center.1 + (radius as f64 * angle.sin()).round() as i32;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let px = x + dx;
+                let py = y + dy;
+                if px >= 0
+                    && py >= 0
+                    && px < image.size.width as i32
+                    && py < image.size.height as i32
+                {
+                    set_bgr_pixel(
+                        image,
+                        (px as u32, py as u32),
+                        RgbPixel {
+                            r: gray,
+                            g: gray,
+                            b: gray,
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn blit_bgr_image(target: &mut BgrImage, source: &BgrImage, x: u32, y: u32) {
+    for source_y in 0..source.size.height {
+        for source_x in 0..source.size.width {
+            let target_index = (((y + source_y) * target.size.width + x + source_x) as usize) * 3;
+            let source_index = ((source_y * source.size.width + source_x) as usize) * 3;
+            target.pixels[target_index..target_index + 3]
+                .copy_from_slice(&source.pixels[source_index..source_index + 3]);
+        }
+    }
+}
+
+fn draw_rect_edge_gray(image: &mut BgrImage, rect: Rect, gray: u8) {
+    for x in rect.x as u32..rect.right() as u32 {
+        set_bgr_pixel(
+            image,
+            (x, rect.y as u32),
+            RgbPixel {
+                r: gray,
+                g: gray,
+                b: gray,
+            },
+        );
+        set_bgr_pixel(
+            image,
+            (x, (rect.bottom() - 1) as u32),
+            RgbPixel {
+                r: gray,
+                g: gray,
+                b: gray,
+            },
+        );
+    }
+    for y in rect.y as u32 + 1..(rect.bottom() - 1) as u32 {
+        set_bgr_pixel(
+            image,
+            (rect.x as u32, y),
+            RgbPixel {
+                r: gray,
+                g: gray,
+                b: gray,
+            },
+        );
+        set_bgr_pixel(
+            image,
+            ((rect.right() - 1) as u32, y),
+            RgbPixel {
+                r: gray,
+                g: gray,
+                b: gray,
+            },
+        );
+    }
+}
+
+#[test]
+fn task_parameter_models_preserve_legacy_defaults() {
+    let params = task_parameter_models();
+
+    assert!(params.auto_skip.enabled);
+    assert!(params.auto_skip.quickly_skip_conversations_enabled);
+    assert_eq!(params.auto_skip.dialogue_option_voice_max_wait_seconds, 30);
+    assert!(params.auto_skip.is_click_first_chat_option());
+    assert_eq!(
+        params.auto_skip.picture_in_picture_source_type,
+        "CaptureLoop"
+    );
+
+    assert_eq!(params.auto_domain.domain_round_num, 9999);
+    assert_eq!(
+        params.auto_domain.resin_priority_list,
+        vec!["浓缩树脂".to_string(), "原粹树脂".to_string()]
+    );
+    assert_eq!(params.auto_domain.max_artifact_star, "4");
+
+    assert_eq!(params.auto_boss.strategy_name, AUTO_STRATEGY_NAME);
+    assert_eq!(params.auto_boss.run_count, 1);
+    assert_eq!(params.auto_boss.revive_retry_count, 3);
+
+    assert_eq!(params.auto_fight.timeout, 120);
+    assert_eq!(params.auto_fight.pick_drops_after_fight_seconds, 15);
+    assert_eq!(params.auto_fight.battle_threshold_for_loot, -1);
+    assert!(params.auto_fight.kazuha_pickup_enabled);
+
+    assert!(
+        params
+            .auto_ley_line_outcrop
+            .fight_config
+            .fight_finish_detect_enabled
+    );
+    assert_eq!(
+        params
+            .auto_ley_line_outcrop
+            .fight_config
+            .seek_enemy_rotary_factor,
+        6
+    );
+
+    assert_eq!(
+        params.auto_stygian_onslaught.resin_priority_list,
+        vec!["浓缩树脂".to_string(), "原粹树脂".to_string()]
+    );
+}
+
+#[test]
+fn task_parameter_models_match_legacy_strategy_path_rules() {
+    assert_eq!(
+        combat_strategy_path(Some(AUTO_STRATEGY_NAME)),
+        "User/AutoFight/"
+    );
+    assert_eq!(
+        combat_strategy_path(Some("daily")),
+        "User/AutoFight/daily.txt"
+    );
+
+    let domain = AutoDomainParam::new(0, Some("daily"));
+    assert_eq!(domain.domain_round_num, 9999);
+    assert_eq!(domain.combat_strategy_path, "User/AutoFight/daily.txt");
+
+    let mut boss = AutoBossParam::default();
+    boss.set_strategy_name(Some("boss"));
+    assert_eq!(boss.combat_strategy_path, "User/AutoFight/boss.txt");
+    boss.set_run_count(0);
+    assert_eq!(boss.run_count, 1);
+    boss.use_fragile_resin = true;
+    boss.use_transient_resin = true;
+    boss.set_specify_run_count(false);
+    assert!(!boss.use_fragile_resin);
+    assert!(!boss.use_transient_resin);
+
+    let fight = AutoFightParam::new(Some("abyss"));
+    assert_eq!(fight.combat_strategy_path, "User/AutoFight/abyss.txt");
+
+    let ley_line = AutoLeyLineOutcropParam::new(3, "蒙德", "启示之花");
+    assert_eq!(ley_line.count, 3);
+    assert_eq!(ley_line.country, "蒙德");
+    assert_eq!(ley_line.ley_line_outcrop_type, "启示之花");
+
+    let mut stygian = AutoStygianOnslaughtParam::default();
+    stygian.set_combat_strategy_path(Some("stygian"));
+    assert_eq!(stygian.combat_script_bag_path, "User/AutoFight/stygian.txt");
+    stygian.set_resin_priority_list(["须臾树脂", "脆弱树脂"]);
+    assert_eq!(
+        stygian.resin_priority_list,
+        vec!["须臾树脂".to_string(), "脆弱树脂".to_string()]
+    );
+}
+
+#[test]
+fn redeem_code_clipboard_extraction_matches_legacy_regex() {
+    let codes = extract_redeem_codes_from_text(
+        "prefix GENSHINGIFT1 123456789012 ABCDEFGHIJKL abcdefghijkl XABCDE123456Z",
+    );
+
+    assert_eq!(
+        codes,
+        vec!["GENSHINGIFT1".to_string(), "ABCDEFGHIJKL".to_string()]
+    );
+}
+
+#[test]
+fn return_main_ui_plan_preserves_legacy_escape_loop() {
+    let plan = plan_return_main_ui(Size::new(1920, 1080), 2).unwrap();
+
+    assert_eq!(plan.task_key, RETURN_MAIN_UI_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.max_escape_attempts, 2);
+    assert_eq!(plan.steps.len(), 2 + 6 * 2 + 4);
+
+    let CommonJobStepAction::Locator { locator } = &plan.steps[1].action else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::IsExist);
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(RETURN_MAIN_UI_PAIMON_MENU)
+    );
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 480, 270).unwrap())
+    );
+
+    assert_eq!(plan.steps[2].attempt, Some(1));
+    assert_eq!(
+        plan.steps[2].condition,
+        CommonJobStepCondition::WhenMainUiNotDetected
+    );
+    let CommonJobStepAction::Input { events } = &plan.steps[2].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+
+    let CommonJobStepAction::Locator { locator } = &plan.steps[5].action else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::Click);
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(RETURN_MAIN_UI_EXIT_DOOR)
+    );
+    assert_eq!(
+        plan.steps[5].condition,
+        CommonJobStepCondition::WhenExitDoorDetected
+    );
+
+    let fallback = plan.steps.last().unwrap();
+    assert_eq!(fallback.phase, CommonJobStepPhase::Fallback);
+    assert_eq!(fallback.condition, CommonJobStepCondition::AfterRetryLimit);
+    let CommonJobStepAction::Input { events } = &fallback.action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+
+    let config = serde_json::json!({
+        "maxEscapeAttempts": 1,
+        "captureSize": { "width": 1280, "height": 720 }
+    });
+    let Some(CommonJobExecutionPlan::ReturnMainUi(configured)) =
+        plan_common_job(RETURN_MAIN_UI_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured.max_escape_attempts, 1);
+    assert_eq!(configured.capture_size, Size::new(1280, 720));
+}
+
+#[test]
+fn return_main_ui_executor_stops_after_main_ui_is_detected() {
+    let plan = plan_return_main_ui(Size::new(1920, 1080), 2).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false, false, true]);
+
+    let report = execute_return_main_ui_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.last_escape_attempt, Some(1));
+    assert!(!report.state.fallback_used);
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert_eq!(
+        runtime
+            .locator_calls
+            .iter()
+            .filter(|locator| locator.operation == BvLocatorOperation::IsExist)
+            .count(),
+        3
+    );
+    assert!(!runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::Click
+            && locator.recognition_object.name.as_deref() == Some(RETURN_MAIN_UI_EXIT_DOOR)
+    }));
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.reason == CommonJobSkipReason::RetryLimitNotReached
+            && step.condition == CommonJobStepCondition::AfterRetryLimit
+    }));
+}
+
+#[test]
+fn return_main_ui_executor_clicks_exit_door_and_uses_fallback_when_still_blocked() {
+    let plan = plan_return_main_ui(Size::new(1920, 1080), 1).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false, true, false]);
+
+    let report = execute_return_main_ui_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(report.state.last_escape_attempt, Some(1));
+    assert!(report.state.fallback_used);
+    assert_eq!(runtime.input_batches.len(), 3);
+    assert!(runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::Click
+            && locator.recognition_object.name.as_deref() == Some(RETURN_MAIN_UI_EXIT_DOOR)
+    }));
+    assert!(report.executed_steps.iter().any(|step| {
+        step.condition == CommonJobStepCondition::AfterRetryLimit
+            && step.action_kind == CommonJobRuntimeActionKind::Input
+    }));
+}
+
+#[test]
+fn return_main_ui_executor_requires_match_result_for_template_probe() {
+    let plan = plan_return_main_ui(Size::new(1920, 1080), 1).unwrap();
+    let mut runtime =
+        RecordingCommonJobRuntime::with_locator_outcomes([CommonJobRuntimeOutcome::None]);
+
+    let error = execute_return_main_ui_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("did not return a match result"))
+    );
+}
+
+#[derive(Debug)]
+struct QueueFrameSource {
+    frames: VecDeque<BgrImage>,
+    captures: usize,
+}
+
+impl QueueFrameSource {
+    fn new(frames: impl IntoIterator<Item = BgrImage>) -> Self {
+        Self {
+            frames: frames.into_iter().collect(),
+            captures: 0,
+        }
+    }
+}
+
+impl CommonJobFrameSource for QueueFrameSource {
+    fn capture_frame(&mut self) -> Result<BgrImage> {
+        self.captures += 1;
+        self.frames
+            .pop_front()
+            .ok_or_else(|| TaskError::CommonJobExecution("test frame queue exhausted".to_string()))
+    }
+}
+
+#[derive(Debug, Default)]
+struct TestCommonJobInputDriver {
+    event_batches: Vec<Vec<InputEvent>>,
+    clicks: Vec<(i32, i32)>,
+    focus_calls: usize,
+    third_party_login_rules: Vec<ReloginThirdPartyRule>,
+    third_party_login_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+}
+
+impl CommonJobInputDriver for TestCommonJobInputDriver {
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<()> {
+        self.event_batches.push(events.to_vec());
+        Ok(())
+    }
+
+    fn click_capture_point(&mut self, x: i32, y: i32) -> Result<()> {
+        self.clicks.push((x, y));
+        Ok(())
+    }
+}
+
+impl ReloginPlatformDriver for TestCommonJobInputDriver {
+    fn focus_game_window(&mut self) -> Result<()> {
+        self.focus_calls += 1;
+        Ok(())
+    }
+
+    fn execute_third_party_login_probe(
+        &mut self,
+        rule: &ReloginThirdPartyRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.third_party_login_rules.push(rule.clone());
+        Ok(self
+            .third_party_login_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+#[derive(Debug, Default)]
+struct TestCommonJobClock {
+    waits: Vec<u32>,
+}
+
+impl CommonJobClock for TestCommonJobClock {
+    fn wait(&mut self, milliseconds: u32) -> Result<()> {
+        self.waits.push(milliseconds);
+        Ok(())
+    }
+}
+
+fn varied_template() -> BgrImage {
+    BgrImage::new(
+        Size::new(2, 2),
+        vec![255, 255, 255, 0, 0, 0, 0, 0, 255, 0, 255, 0],
+    )
+    .unwrap()
+}
+
+fn frame_with_template(size: Size, template: &BgrImage, x: u32, y: u32) -> BgrImage {
+    let mut pixels = vec![0; size.width as usize * size.height as usize * 3];
+    for ty in 0..template.size.height {
+        for tx in 0..template.size.width {
+            let source = ((ty * template.size.width + tx) as usize) * 3;
+            let target = (((y + ty) * size.width + x + tx) as usize) * 3;
+            pixels[target..target + 3].copy_from_slice(&template.pixels[source..source + 3]);
+        }
+    }
+    BgrImage::new(size, pixels).unwrap()
+}
+
+fn blank_frame(size: Size) -> BgrImage {
+    BgrImage::new(
+        size,
+        vec![0; size.width as usize * size.height as usize * 3],
+    )
+    .unwrap()
+}
+
+#[test]
+fn template_common_job_runtime_completes_return_main_ui_when_template_is_visible() {
+    let capture_size = Size::new(20, 20);
+    let plan = plan_return_main_ui(capture_size, 1).unwrap();
+    let template = varied_template();
+    let CommonJobStepAction::Locator { locator } = &plan.steps[1].action else {
+        unreachable!()
+    };
+    let template_path = locator
+        .recognition_object
+        .template
+        .template_asset
+        .clone()
+        .unwrap();
+    let backend = PureRustVisionBackend::new().with_template(template_path, template.clone());
+    let frame_source = QueueFrameSource::new([frame_with_template(capture_size, &template, 1, 1)]);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+    let mut runtime = TemplateCommonJobRuntime::new(backend, frame_source, input_driver, clock);
+
+    let report = execute_return_main_ui_plan(&plan, &mut runtime).unwrap();
+    let (_, frame_source, input_driver, clock, logs) = runtime.into_parts();
+
+    assert!(report.completed);
+    assert_eq!(frame_source.captures, 1);
+    assert!(input_driver.event_batches.is_empty());
+    assert!(input_driver.clicks.is_empty());
+    assert!(clock.waits.is_empty());
+    assert_eq!(logs, vec!["start ReturnMainUi common job plan".to_string()]);
+}
+
+#[test]
+fn return_main_ui_live_uses_task_asset_template_root() {
+    let capture_size = Size::new(1920, 1080);
+    let plan = plan_return_main_ui(capture_size, 1).unwrap();
+    let CommonJobStepAction::Locator { locator } = &plan.steps[1].action else {
+        unreachable!()
+    };
+    let template_path = locator
+        .recognition_object
+        .template
+        .template_asset
+        .clone()
+        .unwrap();
+    let template = BgrImage::read(task_asset_root().join(template_path)).unwrap();
+    let frame_source =
+        QueueFrameSource::new([frame_with_template(capture_size, &template, 12, 12)]);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+
+    let report =
+        execute_return_main_ui_live(capture_size, 1, frame_source, input_driver, clock).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.last_escape_attempt, None);
+    assert!(!report.state.fallback_used);
+}
+
+#[test]
+fn return_main_ui_live_rejects_unsupported_capture_size_before_io() {
+    let error = execute_return_main_ui_live(
+        Size::new(1280, 720),
+        1,
+        QueueFrameSource::new([blank_frame(Size::new(1280, 720))]),
+        TestCommonJobInputDriver::default(),
+        TestCommonJobClock::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("1920x1080"))
+    );
+}
+
+#[test]
+fn cancellable_common_job_clock_rejects_pre_cancelled_wait() {
+    let cancellation = std::sync::Arc::new(InputCancellationToken::new());
+    cancellation.cancel();
+    let mut clock = CancellableCommonJobClock::new(cancellation);
+
+    let error = clock.wait(10_000).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message) if message.contains("cancelled")
+    ));
+}
+
+#[test]
+fn template_common_job_runtime_clicks_detected_exit_door_center() {
+    let capture_size = Size::new(20, 20);
+    let plan = plan_return_main_ui(capture_size, 1).unwrap();
+    let template = varied_template();
+    let CommonJobStepAction::Locator {
+        locator: paimon_locator,
+    } = &plan.steps[1].action
+    else {
+        unreachable!()
+    };
+    let CommonJobStepAction::Locator {
+        locator: exit_locator,
+    } = &plan.steps[4].action
+    else {
+        unreachable!()
+    };
+    let backend = PureRustVisionBackend::new()
+        .with_template(
+            paimon_locator
+                .recognition_object
+                .template
+                .template_asset
+                .clone()
+                .unwrap(),
+            template.clone(),
+        )
+        .with_template(
+            exit_locator
+                .recognition_object
+                .template
+                .template_asset
+                .clone()
+                .unwrap(),
+            template.clone(),
+        );
+    let blank = blank_frame(capture_size);
+    let exit_frame = frame_with_template(capture_size, &template, 6, 7);
+    let mut frames = Vec::new();
+    frames
+        .extend(std::iter::repeat_with(|| blank.clone()).take(paimon_locator.retry_count as usize));
+    frames.push(exit_frame.clone());
+    frames.push(exit_frame);
+    frames
+        .extend(std::iter::repeat_with(|| blank.clone()).take(paimon_locator.retry_count as usize));
+    let frame_source = QueueFrameSource::new(frames);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+    let mut runtime = TemplateCommonJobRuntime::new(backend, frame_source, input_driver, clock);
+
+    let report = execute_return_main_ui_plan(&plan, &mut runtime).unwrap();
+    let (_, frame_source, input_driver, clock, _) = runtime.into_parts();
+
+    assert!(!report.completed);
+    assert!(report.state.fallback_used);
+    assert_eq!(
+        frame_source.captures,
+        (paimon_locator.retry_count * 2 + 2) as usize
+    );
+    assert_eq!(input_driver.clicks, vec![(7, 8)]);
+    assert_eq!(input_driver.event_batches.len(), 3);
+    let mut expected_waits = Vec::new();
+    expected_waits.extend(
+        std::iter::repeat(paimon_locator.retry_interval_ms)
+            .take(paimon_locator.retry_count.saturating_sub(1) as usize),
+    );
+    expected_waits.push(900);
+    expected_waits.push(5_000);
+    expected_waits.extend(
+        std::iter::repeat(paimon_locator.retry_interval_ms)
+            .take(paimon_locator.retry_count.saturating_sub(1) as usize),
+    );
+    expected_waits.push(500);
+    expected_waits.push(500);
+    assert_eq!(clock.waits, expected_waits);
+}
+
+#[test]
+fn set_time_plan_preserves_legacy_clock_dial_flow() {
+    let plan = plan_set_time(Size::new(1920, 1080), 7, 10, true).unwrap();
+
+    assert_eq!(plan.task_key, SET_TIME_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.requested_hour, 7);
+    assert_eq!(plan.requested_minute, 10);
+    assert_eq!(plan.target_hour, 7);
+    assert_eq!(plan.target_minute, 10);
+    assert!(plan.skip_time_adjustment_animation);
+    assert_eq!(plan.dial_end_index, 770);
+    assert_eq!(plan.dial_click_points.len(), 3);
+    assert_eq!(plan.dial_click_points[0].index, -190.0);
+    assert_eq!(plan.dial_click_points[2].index, 770.0);
+    assert_eq!(plan.dial_drag.from.radius, 150.0);
+    assert_eq!(plan.dial_drag.to.radius, 300.0);
+    assert_eq!(plan.steps.len(), 6 + 3 + 6 + 8 + 3);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        CommonJobStepAction::CommonJob { ref task_key, .. }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+
+    let CommonJobStepAction::Page {
+        command:
+            BvPageCommand::Click1080p {
+                x,
+                y,
+                screen_x,
+                screen_y,
+                ..
+            },
+    } = &plan.steps[4].action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*x, *y, *screen_x, *screen_y), (50.0, 700.0, 50.0, 700.0));
+
+    let CommonJobStepAction::Input { events } = &plan.steps[6].action else {
+        unreachable!()
+    };
+    assert!(matches!(
+        events.first(),
+        Some(InputEvent::MouseMoveAbsolute { x, y, .. })
+            if *x == plan.dial_click_points[0].screen_x
+                && *y == plan.dial_click_points[0].screen_y
+    ));
+    assert!(events.contains(&InputEvent::MouseButtonDown {
+        button: MouseButton::Left
+    }));
+    assert!(events.contains(&InputEvent::MouseButtonUp {
+        button: MouseButton::Left
+    }));
+
+    let CommonJobStepAction::Input { events } = &plan.steps[9].action else {
+        unreachable!()
+    };
+    assert!(matches!(
+        events.first(),
+        Some(InputEvent::MouseMoveAbsolute { x, y, .. })
+            if *x == plan.dial_drag.from.screen_x && *y == plan.dial_drag.from.screen_y
+    ));
+    assert!(matches!(
+        events.get(4),
+        Some(InputEvent::MouseMoveAbsolute { x, y, .. })
+            if *x == plan.dial_drag.to.screen_x && *y == plan.dial_drag.to.screen_y
+    ));
+
+    assert_eq!(
+        plan.steps[15].condition,
+        CommonJobStepCondition::WhenSkipAnimationRequested
+    );
+    let CommonJobStepAction::Locator { locator } = &plan.steps[24].action else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::WaitFor);
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(SET_TIME_PAGE_CLOSE_WHITE)
+    );
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(1680, 0, 240, 135).unwrap())
+    );
+
+    let normalized = plan_set_time(Size::new(1280, 720), 23, 75, false).unwrap();
+    assert_eq!(normalized.target_hour, 0);
+    assert_eq!(normalized.target_minute, 15);
+    assert_eq!(normalized.steps.len(), 6 + 3 + 6 + 3);
+    assert_eq!(normalized.dial_end_index, 355);
+    assert_eq!(
+        normalized.steps.last().unwrap().condition,
+        CommonJobStepCondition::AfterTimeAdjustment
+    );
+}
+
+#[test]
+fn set_time_executor_runs_dial_flow_and_returns_to_main_ui() {
+    let plan = plan_set_time(Size::new(1920, 1080), 7, 10, false).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true, true, true]);
+
+    let report = execute_set_time_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert!(report.state.page_close_detected);
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+    assert_eq!(runtime.input_batches.len(), 7);
+    assert_eq!(
+        runtime.input_batches[0],
+        vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+    assert!(runtime.input_batches.iter().any(|events| {
+        matches!(
+            events.first(),
+            Some(InputEvent::MouseMoveAbsolute { x, y, .. })
+                if *x == plan.dial_drag.from.screen_x && *y == plan.dial_drag.from.screen_y
+        )
+    }));
+    assert!(runtime.page_commands.iter().any(|command| matches!(
+        command,
+        BvPageCommand::Click1080p {
+            x,
+            y,
+            screen_x,
+            screen_y,
+            ..
+        } if (*x, *y, *screen_x, *screen_y) == (50.0, 700.0, 50.0, 700.0)
+    )));
+    assert!(runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::WaitFor
+            && locator.recognition_object.name.as_deref() == Some(SET_TIME_PAGE_CLOSE_WHITE)
+    }));
+}
+
+#[test]
+fn set_time_executor_skips_final_wait_when_skip_animation_returns_to_main_ui() {
+    let plan = plan_set_time(Size::new(1920, 1080), 19, 0, true).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true, true]);
+
+    let report = execute_set_time_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(
+        report.state.skip_animation_return_main_ui_completed,
+        Some(true)
+    );
+    assert!(report.state.skip_animation_resolved);
+    assert_eq!(report.state.final_return_main_ui_completed, None);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+    assert!(!runtime.locator_calls.iter().any(|locator| {
+        locator.recognition_object.name.as_deref() == Some(SET_TIME_PAGE_CLOSE_WHITE)
+    }));
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == CommonJobStepCondition::WhenSkipAnimationNotResolved
+            && step.reason == CommonJobSkipReason::SkipAnimationAlreadyResolved
+    }));
+}
+
+#[test]
+fn choose_talk_option_plan_preserves_legacy_ocr_retry_flow() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Katheryne", 2, true).unwrap();
+
+    assert_eq!(plan.task_key, CHOOSE_TALK_OPTION_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.option, "Katheryne");
+    assert_eq!(plan.skip_times, 2);
+    assert!(plan.is_orange);
+    assert_eq!(plan.steps.len(), 3 + 11 + 10 + 1);
+
+    assert_eq!(plan.talk_ui_locator.operation, BvLocatorOperation::WaitFor);
+    assert_eq!(
+        plan.talk_ui_locator.recognition_object.name.as_deref(),
+        Some(CHOOSE_TALK_OPTION_DISABLED_UI)
+    );
+    assert_eq!(
+        plan.talk_ui_locator.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 640, 135).unwrap())
+    );
+
+    assert_eq!(
+        plan.option_icon_locator.operation,
+        BvLocatorOperation::FindAll
+    );
+    assert_eq!(
+        plan.option_icon_locator.recognition_object.name.as_deref(),
+        Some(CHOOSE_TALK_OPTION_ICON)
+    );
+    assert_eq!(
+        plan.option_icon_locator
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 90, 640, 980).unwrap())
+    );
+
+    assert_eq!(
+        plan.ocr_rule.option_icon_roi,
+        Rect::new(960, 90, 640, 980).unwrap()
+    );
+    assert_eq!(plan.ocr_rule.ocr_y, 135);
+    assert_eq!(plan.ocr_rule.ocr_width, 535);
+    assert_eq!(plan.ocr_rule.ocr_x_padding, 8);
+    assert_eq!(plan.ocr_rule.ocr_bottom_padding, 30);
+    assert_eq!(plan.ocr_rule.ignored_large_y_gap, 150);
+    assert!(plan.ocr_rule.ignore_short_alphanumeric_text);
+
+    let orange = plan.orange_rule.as_ref().unwrap();
+    assert_eq!(orange.hsv_lower.v0, 10.0);
+    assert_eq!(orange.hsv_lower.v1, 150.0);
+    assert_eq!(orange.hsv_upper.v0, 25.0);
+    assert_eq!(orange.hsv_upper.v2, 255.0);
+    assert_eq!(orange.min_pixel_rate, 0.1);
+
+    let ChooseTalkOptionStepAction::Input { events } = &plan.steps[4].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: CHOOSE_TALK_OPTION_VK_SPACE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: CHOOSE_TALK_OPTION_VK_SPACE,
+                extended: None
+            }
+        ]
+    );
+    assert_eq!(
+        plan.steps[7].condition,
+        ChooseTalkOptionStepCondition::FirstOcrPass
+    );
+    assert!(matches!(
+        plan.steps[9].action,
+        ChooseTalkOptionStepAction::CheckOrange { .. }
+    ));
+    assert!(matches!(
+        plan.steps[10].action,
+        ChooseTalkOptionStepAction::ReturnResult {
+            result: TalkOptionPlanResult::FoundButNotOrange
+        }
+    ));
+    assert!(matches!(
+        plan.steps[13].action,
+        ChooseTalkOptionStepAction::ReturnResult {
+            result: TalkOptionPlanResult::FoundAndClick
+        }
+    ));
+    assert!(matches!(
+        plan.steps.last().unwrap().action,
+        ChooseTalkOptionStepAction::ReturnResult {
+            result: TalkOptionPlanResult::NotFound
+        }
+    ));
+
+    let default_skip = plan_choose_talk_option(Size::new(1280, 720), "OK", 0, false).unwrap();
+    assert_eq!(default_skip.skip_times, 10);
+    assert!(default_skip.orange_rule.is_none());
+    assert_eq!(
+        default_skip.ocr_rule.option_icon_roi,
+        Rect::new(640, 60, 427, 650).unwrap()
+    );
+}
+
+#[derive(Debug, Default)]
+struct FakeChooseTalkOptionRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    options_by_call: VecDeque<Vec<ChooseTalkOptionCandidate>>,
+    orange_outcomes: VecDeque<bool>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    clicks: Vec<ChooseTalkOptionCandidate>,
+    logs: Vec<String>,
+}
+
+impl FakeChooseTalkOptionRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_options(
+        mut self,
+        options_by_call: impl IntoIterator<Item = Vec<ChooseTalkOptionCandidate>>,
+    ) -> Self {
+        self.options_by_call = options_by_call.into_iter().collect();
+        self
+    }
+
+    fn with_orange_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.orange_outcomes = matches.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeChooseTalkOptionRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(false)))
+    }
+}
+
+impl ChooseTalkOptionRuntime for FakeChooseTalkOptionRuntime {
+    fn recognize_talk_options(
+        &mut self,
+        _rule: &ChooseTalkOptionOcrRule,
+    ) -> Result<Vec<ChooseTalkOptionCandidate>> {
+        Ok(self.options_by_call.pop_front().unwrap_or_default())
+    }
+
+    fn is_orange_talk_option(
+        &mut self,
+        _candidate: &ChooseTalkOptionCandidate,
+        _rule: &ChooseTalkOptionOrangeRule,
+    ) -> Result<bool> {
+        Ok(self.orange_outcomes.pop_front().unwrap_or(false))
+    }
+
+    fn click_talk_option(&mut self, candidate: &ChooseTalkOptionCandidate) -> Result<()> {
+        self.clicks.push(candidate.clone());
+        Ok(())
+    }
+}
+
+fn fake_talk_option(text: &str, y: i32) -> ChooseTalkOptionCandidate {
+    ChooseTalkOptionCandidate {
+        text: text.to_string(),
+        rect: Rect::new(1_100, y, 360, 40).unwrap(),
+        orange_pixel_rate: None,
+    }
+}
+
+#[test]
+fn choose_talk_option_ocr_rect_uses_lowest_icon_and_legacy_padding() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Target", 1, false).unwrap();
+    let lowest_icon = Rect::new(1_000, 760, 42, 36).unwrap();
+
+    let rect = choose_talk_option_ocr_rect_from_lowest_icon(
+        lowest_icon,
+        plan.capture_size,
+        &plan.ocr_rule,
+    )
+    .unwrap();
+
+    assert_eq!(rect, Rect::new(1_050, 135, 535, 736).unwrap());
+}
+
+#[test]
+fn choose_talk_option_candidates_filter_and_offset_ocr_regions() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Target", 1, false).unwrap();
+    let source_roi = Rect::new(1_050, 135, 535, 736).unwrap();
+    let regions = vec![
+        OcrResultRegion {
+            text: "A1".to_string(),
+            rect: Rect::new(4, 5, 30, 20).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: " Target option ".to_string(),
+            rect: Rect::new(10, 80, 260, 32).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: "B2".to_string(),
+            rect: Rect::new(10, 180, 30, 20).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: "Isolated".to_string(),
+            rect: Rect::new(10, 500, 260, 32).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: "C3".to_string(),
+            rect: Rect::new(10, 680, 30, 20).unwrap(),
+            score: 1.0,
+        },
+    ];
+
+    let candidates =
+        choose_talk_option_candidates_from_ocr_regions(&regions, source_roi, &plan.ocr_rule)
+            .unwrap();
+
+    assert_eq!(
+        candidates,
+        vec![ChooseTalkOptionCandidate {
+            text: "Target option".to_string(),
+            rect: Rect::new(1_060, 215, 260, 32).unwrap(),
+            orange_pixel_rate: None,
+        }]
+    );
+}
+
+#[test]
+fn choose_talk_option_executor_clicks_matched_option_with_fake_runtime() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Katheryne", 2, false).unwrap();
+    let candidate = fake_talk_option("Ad Astra Abyssosque Katheryne", 620);
+    let mut runtime = FakeChooseTalkOptionRuntime::new()
+        .with_locator_matches([true, true])
+        .with_options([vec![candidate.clone()]]);
+
+    let report = execute_choose_talk_option_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(TalkOptionPlanResult::FoundAndClick)
+    );
+    assert!(report.state.clicked);
+    assert_eq!(runtime.clicks, vec![candidate]);
+    assert!(runtime.input_batches.is_empty());
+    assert!(report
+        .executed_steps
+        .iter()
+        .any(|step| step.action_kind == ChooseTalkOptionRuntimeActionKind::RecognizeOptions));
+    assert!(report
+        .executed_steps
+        .iter()
+        .any(|step| step.action_kind == ChooseTalkOptionRuntimeActionKind::ClickMatchedOption));
+}
+
+#[test]
+fn choose_talk_option_executor_returns_found_but_not_orange_without_click() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Daily", 1, true).unwrap();
+    let mut runtime = FakeChooseTalkOptionRuntime::new()
+        .with_locator_matches([true, true])
+        .with_options([vec![fake_talk_option("Daily reward", 620)]])
+        .with_orange_matches([false]);
+
+    let report = execute_choose_talk_option_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(TalkOptionPlanResult::FoundButNotOrange)
+    );
+    assert_eq!(report.state.orange_accepted, Some(false));
+    assert!(runtime.clicks.is_empty());
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| step.reason == ChooseTalkOptionSkipReason::ResultAlreadySet));
+}
+
+#[test]
+fn choose_talk_option_executor_presses_space_when_icons_are_missing_and_reports_not_found() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Target", 2, false).unwrap();
+    let mut runtime = FakeChooseTalkOptionRuntime::new()
+        .with_locator_matches([true, false, true])
+        .with_options([vec![fake_talk_option("Other", 620)]]);
+
+    let report = execute_choose_talk_option_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(TalkOptionPlanResult::NotFound));
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert_eq!(
+        runtime.input_batches[0],
+        vec![
+            InputEvent::KeyDown {
+                vk: CHOOSE_TALK_OPTION_VK_SPACE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: CHOOSE_TALK_OPTION_VK_SPACE,
+                extended: None
+            }
+        ]
+    );
+    assert!(runtime.clicks.is_empty());
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| step.reason == ChooseTalkOptionSkipReason::OptionIconMissing));
+}
+
+#[test]
+fn choose_talk_option_executor_returns_not_found_when_talk_ui_is_missing() {
+    let plan = plan_choose_talk_option(Size::new(1920, 1080), "Target", 2, false).unwrap();
+    let mut runtime = FakeChooseTalkOptionRuntime::new().with_locator_matches([false]);
+
+    let report = execute_choose_talk_option_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(!report.state.talk_ui_detected);
+    assert_eq!(report.state.result, Some(TalkOptionPlanResult::NotFound));
+    assert!(runtime.input_batches.is_empty());
+    assert!(runtime.clicks.is_empty());
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| step.reason == ChooseTalkOptionSkipReason::ResultAlreadySet));
+}
+
+#[test]
+fn check_rewards_plan_preserves_legacy_handbook_ocr_and_notification_flow() {
+    let plan = plan_check_rewards(CheckRewardsExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, CHECK_REWARDS_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.localized_texts.daily_reward_text, "每日委托奖励");
+    assert_eq!(plan.localized_texts.commissions_text, "委托");
+    assert_eq!(plan.localized_texts.claimed_text, "今日奖励已领取");
+    assert_eq!(plan.open_handbook_rule.max_retries, 4);
+    assert_eq!(plan.open_handbook_rule.interval_ms, 1000);
+    assert_eq!(plan.claim_check_rule.max_retries, 4);
+    assert_eq!(plan.claim_check_rule.interval_ms, 500);
+    assert_eq!(plan.steps.len(), 13);
+
+    assert_eq!(
+        plan.locators
+            .daily_reward_title
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(192, 108, 576, 756).unwrap())
+    );
+    assert_eq!(
+        plan.locators.daily_reward_title.operation,
+        BvLocatorOperation::WaitFor
+    );
+    assert_eq!(
+        plan.locators.daily_reward_title.recognition_object.ocr.text,
+        "每日委托奖励"
+    );
+    assert_eq!(
+        plan.locators.commissions_ocr.operation,
+        BvLocatorOperation::FindAll
+    );
+    assert_eq!(
+        plan.locators
+            .commissions_ocr
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(192, 108, 576, 756).unwrap())
+    );
+    assert_eq!(
+        plan.locators.claimed_text.operation,
+        BvLocatorOperation::WaitFor
+    );
+    assert_eq!(
+        plan.locators.claimed_text.recognition_object.ocr.text,
+        "今日奖励已领取"
+    );
+
+    assert_eq!(
+        plan.notifications.claimed.event,
+        CHECK_REWARDS_NOTIFICATION_EVENT
+    );
+    assert_eq!(
+        plan.notifications.claimed.result,
+        NotificationEventResult::Success
+    );
+    assert_eq!(
+        plan.notifications.claimed.message.as_deref(),
+        Some(CHECK_REWARDS_SUCCESS_MESSAGE)
+    );
+    assert_eq!(
+        plan.notifications.unclaimed.result,
+        NotificationEventResult::Fail
+    );
+    assert_eq!(
+        plan.notifications.unclaimed.message.as_deref(),
+        Some(CHECK_REWARDS_FAILURE_MESSAGE)
+    );
+
+    assert!(matches!(
+        plan.steps[1].action,
+        CheckRewardsStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[2].action,
+        CheckRewardsStepAction::GenshinAction {
+            action: GenshinAction::OpenAdventurerHandbook
+        }
+    ));
+    let CheckRewardsStepAction::Ocr {
+        command: BvPageCommand::Ocr { locator },
+    } = &plan.steps[3].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::FindAll);
+    assert!(matches!(
+        plan.steps[4].action,
+        CheckRewardsStepAction::MatchCommissions {
+            ref text,
+            click_first_match: true,
+        } if text == "委托"
+    ));
+    assert!(matches!(
+        plan.steps[7].action,
+        CheckRewardsStepAction::Notify { .. }
+    ));
+    assert!(matches!(
+        plan.steps[8].action,
+        CheckRewardsStepAction::ReturnResult {
+            result: CheckRewardsStepResult::Claimed
+        }
+    ));
+    assert!(matches!(
+        plan.steps[10].action,
+        CheckRewardsStepAction::ReturnResult {
+            result: CheckRewardsStepResult::UnclaimedManualCheck
+        }
+    ));
+    assert!(matches!(
+        plan.steps[11].action,
+        CheckRewardsStepAction::Page {
+            command: BvPageCommand::Wait { milliseconds: 200 }
+        }
+    ));
+    assert!(matches!(
+        plan.steps[12].action,
+        CheckRewardsStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "dailyRewardText": "Daily Commission Rewards",
+        "commissionsText": "Commissions",
+        "claimedText": "Claimed",
+        "maxOpenRetries": 3,
+        "openRetryIntervalMs": 750,
+        "maxClaimCheckRetries": 2,
+        "claimCheckIntervalMs": 250,
+        "finalDelayMs": 150
+    });
+    let Some(CommonJobExecutionPlan::CheckRewards(configured_common)) =
+        plan_common_job(CHECK_REWARDS_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        configured_common.localized_texts.daily_reward_text,
+        "Daily Commission Rewards"
+    );
+    assert_eq!(
+        configured_common.localized_texts.commissions_text,
+        "Commissions"
+    );
+    assert_eq!(configured_common.localized_texts.claimed_text, "Claimed");
+    assert_eq!(configured_common.open_handbook_rule.max_retries, 3);
+    assert_eq!(configured_common.open_handbook_rule.interval_ms, 750);
+    assert_eq!(configured_common.claim_check_rule.max_retries, 2);
+    assert_eq!(configured_common.claim_check_rule.interval_ms, 250);
+    assert_eq!(
+        configured_common
+            .locators
+            .daily_reward_title
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(128, 72, 384, 504).unwrap())
+    );
+    assert!(matches!(
+        configured_common.steps[11].action,
+        CheckRewardsStepAction::Page {
+            command: BvPageCommand::Wait { milliseconds: 150 }
+        }
+    ));
+}
+
+#[derive(Debug, Default)]
+struct FakeCheckRewardsRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    texts_by_call: VecDeque<Vec<CheckRewardsTextCandidate>>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    ocr_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    clicked_texts: Vec<CheckRewardsTextCandidate>,
+    notifications: Vec<NotificationPayload>,
+    logs: Vec<String>,
+}
+
+impl FakeCheckRewardsRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_ocr_texts(
+        mut self,
+        texts_by_call: impl IntoIterator<Item = Vec<CheckRewardsTextCandidate>>,
+    ) -> Self {
+        self.texts_by_call = texts_by_call.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeCheckRewardsRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(false)))
+    }
+}
+
+impl CheckRewardsRuntime for FakeCheckRewardsRuntime {
+    fn recognize_check_rewards_text(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> Result<Vec<CheckRewardsTextCandidate>> {
+        self.ocr_commands.push(command.clone());
+        Ok(self.texts_by_call.pop_front().unwrap_or_default())
+    }
+
+    fn click_check_rewards_text(&mut self, candidate: &CheckRewardsTextCandidate) -> Result<()> {
+        self.clicked_texts.push(candidate.clone());
+        Ok(())
+    }
+
+    fn notify_check_rewards(
+        &mut self,
+        payload: &NotificationPayload,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.notifications.push(payload.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn fake_check_rewards_text(text: &str, y: i32) -> CheckRewardsTextCandidate {
+    CheckRewardsTextCandidate {
+        text: text.to_string(),
+        rect: Rect::new(260, y, 120, 40).unwrap(),
+    }
+}
+
+#[test]
+fn check_rewards_text_candidates_apply_ocr_roi_offset() {
+    let source_roi = Rect::new(480, 120, 620, 700).unwrap();
+    let regions = vec![
+        OcrResultRegion {
+            text: " 委托 ".to_string(),
+            rect: Rect::new(10, 42, 88, 28).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: String::new(),
+            rect: Rect::new(20, 90, 40, 20).unwrap(),
+            score: 1.0,
+        },
+    ];
+
+    let candidates = check_rewards_text_candidates_from_ocr_regions(&regions, source_roi).unwrap();
+
+    assert_eq!(
+        candidates,
+        vec![CheckRewardsTextCandidate {
+            text: "委托".to_string(),
+            rect: Rect::new(490, 162, 88, 28).unwrap(),
+        }]
+    );
+}
+
+#[test]
+fn check_rewards_executor_notifies_claimed_when_claimed_text_is_visible() {
+    let plan = plan_check_rewards(CheckRewardsExecutionConfig::default()).unwrap();
+    let commissions = fake_check_rewards_text("委托", 320);
+    let mut runtime = FakeCheckRewardsRuntime::new()
+        .with_locator_matches([true, true, true, true])
+        .with_ocr_texts([vec![commissions.clone()]]);
+
+    let report =
+        execute_check_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(CheckRewardsStepResult::Claimed));
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.open_attempts, 1);
+    assert_eq!(report.state.matched_commissions_text, Some(commissions));
+    assert!(report.state.commissions_text_clicked);
+    assert_eq!(report.state.daily_reward_title_detected, Some(true));
+    assert_eq!(report.state.claimed_text_detected, Some(true));
+    assert_eq!(runtime.notifications.len(), 1);
+    assert_eq!(
+        runtime.notifications[0].result,
+        NotificationEventResult::Success
+    );
+    assert_eq!(
+        report.state.notifications_sent[0].result,
+        NotificationEventResult::Success
+    );
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+}
+
+#[test]
+fn check_rewards_executor_notifies_unclaimed_when_claimed_text_is_missing() {
+    let plan = plan_check_rewards(CheckRewardsExecutionConfig::default()).unwrap();
+    let mut runtime = FakeCheckRewardsRuntime::new()
+        .with_locator_matches([true, true, false, false, false, false, true])
+        .with_ocr_texts([vec![fake_check_rewards_text("委托", 320)]]);
+
+    let report =
+        execute_check_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(CheckRewardsStepResult::UnclaimedManualCheck)
+    );
+    assert_eq!(report.state.claimed_text_detected, Some(false));
+    assert_eq!(runtime.notifications.len(), 1);
+    assert_eq!(
+        runtime.notifications[0].result,
+        NotificationEventResult::Fail
+    );
+    assert_eq!(
+        report.state.notifications_sent[0].result,
+        NotificationEventResult::Fail
+    );
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == CheckRewardsStepCondition::WhenClaimedTextDetected
+            && step.reason == CheckRewardsSkipReason::ClaimedTextMissing
+    }));
+}
+
+#[test]
+fn check_rewards_executor_retries_opening_handbook_until_commissions_text_matches() {
+    let mut config = CheckRewardsExecutionConfig::default();
+    config.max_open_retries = 3;
+    let plan = plan_check_rewards(config).unwrap();
+    let commissions = fake_check_rewards_text("委托", 340);
+    let mut runtime = FakeCheckRewardsRuntime::new()
+        .with_locator_matches([true, true, true, true])
+        .with_ocr_texts([
+            vec![fake_check_rewards_text("奖励", 300)],
+            vec![commissions.clone()],
+        ]);
+
+    let report =
+        execute_check_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(CheckRewardsStepResult::Claimed));
+    assert_eq!(report.state.open_attempts, 2);
+    assert_eq!(report.state.matched_commissions_text, Some(commissions));
+    assert_eq!(runtime.ocr_commands.len(), 2);
+    assert_eq!(runtime.input_batches.len(), 2);
+    assert!(runtime
+        .page_commands
+        .iter()
+        .any(|command| matches!(command, BvPageCommand::Wait { milliseconds: 1000 })));
+}
+
+#[test]
+fn blessing_of_the_welkin_moon_plan_preserves_legacy_claim_loop() {
+    let plan = plan_blessing_of_the_welkin_moon(Size::new(1920, 1080), 0, 0).unwrap();
+
+    assert_eq!(plan.task_key, BLESSING_WELKIN_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.server_time_gate.offset_minutes, 5);
+    assert_eq!(plan.server_time_gate.reset_hour, 4);
+    assert_eq!(plan.server_time_gate.grace_minutes, 10);
+    assert_eq!(
+        plan.loop_rule.max_iterations,
+        BLESSING_WELKIN_MAX_ITERATIONS
+    );
+    assert_eq!(
+        plan.loop_rule.stable_clear_count,
+        BLESSING_WELKIN_STABLE_CLEAR_COUNT
+    );
+    assert_eq!(
+        plan.loop_rule.retry_delay_ms,
+        BLESSING_WELKIN_RETRY_DELAY_MS
+    );
+    assert_eq!(plan.steps.len(), 6);
+
+    assert_eq!(
+        plan.detection_locators
+            .girl_moon
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(BLESSING_WELKIN_GIRL_MOON)
+    );
+    assert_eq!(
+        plan.detection_locators
+            .girl_moon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 540, 1920, 540).unwrap())
+    );
+    assert_eq!(
+        plan.detection_locators
+            .welkin_moon
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(BLESSING_WELKIN_WELKIN_MOON)
+    );
+    assert_eq!(
+        plan.detection_locators
+            .primogem
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(BLESSING_WELKIN_PRIMOGEM)
+    );
+
+    assert!(matches!(
+        plan.claim_click_events.first(),
+        Some(InputEvent::MouseMoveAbsolute { x: 100, y: 100, .. })
+    ));
+    assert_eq!(
+        plan.claim_click_events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                InputEvent::MouseButtonDown {
+                    button: MouseButton::Left
+                }
+            ))
+            .count(),
+        2
+    );
+    assert!(plan
+        .claim_click_events
+        .contains(&InputEvent::Delay { milliseconds: 100 }));
+
+    assert!(matches!(
+        plan.steps[1].action,
+        BlessingOfTheWelkinMoonStepAction::ServerTimeGate { .. }
+    ));
+    assert!(matches!(
+        plan.steps[2].action,
+        BlessingOfTheWelkinMoonStepAction::DetectClaimUi { .. }
+    ));
+    assert!(matches!(
+        plan.steps[5].action,
+        BlessingOfTheWelkinMoonStepAction::LoopUntilClear { .. }
+    ));
+
+    let configured = plan_blessing_of_the_welkin_moon(Size::new(1280, 720), 4, 2).unwrap();
+    assert_eq!(configured.loop_rule.max_iterations, 4);
+    assert_eq!(configured.loop_rule.stable_clear_count, 2);
+    assert!(matches!(
+        configured.claim_click_events.first(),
+        Some(InputEvent::MouseMoveAbsolute { x: 67, y: 67, .. })
+    ));
+    assert_eq!(
+        configured
+            .detection_locators
+            .girl_moon
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 360, 1280, 360).unwrap())
+    );
+}
+
+#[test]
+fn blessing_of_the_welkin_moon_executor_clicks_until_popup_is_stably_clear() {
+    let plan = plan_blessing_of_the_welkin_moon(Size::new(1920, 1080), 20, 3).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([
+        true, false, false, true, false, false, false, false, false, false, false, false, false,
+    ]);
+
+    let report = execute_blessing_of_the_welkin_moon_plan_at_server_minutes(
+        &plan,
+        &mut runtime,
+        3 * 60 + 55,
+    )
+    .unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.server_time_checked);
+    assert!(report.state.server_time_inside_claim_window);
+    assert_eq!(report.state.claim_ui_detected, Some(false));
+    assert!(report.state.claim_click_dispatched);
+    assert_eq!(report.state.clear_iterations, 4);
+    assert_eq!(report.state.stable_clear_count, 3);
+    assert!(report.state.cleared);
+    assert_eq!(runtime.input_batches.len(), 3);
+    assert_eq!(runtime.page_commands.len(), 5);
+    assert!(report.executed_steps.iter().any(|step| {
+        step.action_kind == BlessingOfTheWelkinMoonRuntimeActionKind::LoopUntilClear
+            && step.outcome == CommonJobRuntimeOutcome::Matched(true)
+    }));
+}
+
+#[test]
+fn blessing_of_the_welkin_moon_executor_skips_outside_claim_window() {
+    let plan = plan_blessing_of_the_welkin_moon(Size::new(1920, 1080), 20, 3).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::new();
+
+    let report =
+        execute_blessing_of_the_welkin_moon_plan_at_server_minutes(&plan, &mut runtime, 12 * 60)
+            .unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.server_time_checked);
+    assert!(!report.state.server_time_inside_claim_window);
+    assert_eq!(runtime.locator_calls.len(), 0);
+    assert_eq!(runtime.input_batches.len(), 0);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == BlessingOfTheWelkinMoonStepCondition::WhenServerTimeInsideClaimWindow
+            && step.reason == BlessingOfTheWelkinMoonSkipReason::OutsideClaimWindow
+    }));
+}
+
+#[test]
+fn blessing_of_the_welkin_moon_executor_noops_when_popup_is_missing() {
+    let plan = plan_blessing_of_the_welkin_moon(Size::new(1920, 1080), 20, 3).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false, false, false]);
+
+    let report = execute_blessing_of_the_welkin_moon_plan_at_server_minutes(
+        &plan,
+        &mut runtime,
+        3 * 60 + 55,
+    )
+    .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.claim_ui_detected, Some(false));
+    assert_eq!(report.state.girl_moon_detected, Some(false));
+    assert_eq!(report.state.welkin_moon_detected, Some(false));
+    assert_eq!(report.state.primogem_detected, Some(false));
+    assert_eq!(runtime.input_batches.len(), 0);
+    assert_eq!(runtime.locator_calls.len(), 3);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == BlessingOfTheWelkinMoonStepCondition::WhenBlessingOrPrimogemDetected
+            && step.reason == BlessingOfTheWelkinMoonSkipReason::ClaimUiMissing
+    }));
+}
+
+#[test]
+fn blessing_of_the_welkin_moon_live_rejects_unsupported_capture_size_before_io() {
+    let plan = plan_blessing_of_the_welkin_moon(Size::new(1280, 720), 20, 3).unwrap();
+
+    let error = execute_blessing_of_the_welkin_moon_live_at_server_minutes(
+        &plan,
+        3 * 60 + 55,
+        QueueFrameSource::new([blank_frame(Size::new(1280, 720))]),
+        TestCommonJobInputDriver::default(),
+        TestCommonJobClock::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("1920x1080"))
+    );
+}
+
+#[test]
+fn claim_battle_pass_rewards_plan_preserves_legacy_claim_all_flow() {
+    let plan = plan_claim_battle_pass_rewards(Size::new(1920, 1080), [""]).unwrap();
+
+    assert_eq!(plan.task_key, CLAIM_BATTLE_PASS_REWARDS_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(
+        plan.claim_all_rule.claim_text_patterns,
+        vec!["一键".to_string(), "领取".to_string()]
+    );
+    assert_eq!(
+        plan.claim_all_rule.ocr_roi,
+        Rect::new(1344, 864, 576, 216).unwrap()
+    );
+    assert!(plan.claim_all_rule.match_as_regex);
+    assert!(plan.claim_all_rule.click_first_match);
+    assert_eq!(plan.steps.len(), 25);
+
+    assert_eq!(
+        plan.locators.prompt_star.recognition_object.name.as_deref(),
+        Some(CLAIM_BATTLE_PASS_PROMPT_STAR)
+    );
+    assert_eq!(
+        plan.locators
+            .prompt_star
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 540, 960, 540).unwrap())
+    );
+    assert_eq!(
+        plan.locators.primogem.recognition_object.name.as_deref(),
+        Some(CLAIM_BATTLE_PASS_PRIMOGEM)
+    );
+    assert_eq!(
+        plan.locators.primogem.recognition_object.region_of_interest,
+        Some(Rect::new(0, 360, 1920, 360).unwrap())
+    );
+    assert!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert!(
+        plan.locators
+            .white_cancel
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert_eq!(plan.manual_selection_rule.cancel_locators.len(), 2);
+    assert_eq!(plan.manual_selection_rule.confirm_locators.len(), 2);
+    assert!(plan.manual_selection_rule.prompt_star_or_cancel_and_confirm);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        BattlePassRewardStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[3].action,
+        BattlePassRewardStepAction::GenshinAction {
+            action: GenshinAction::OpenBattlePassScreen
+        }
+    ));
+    let BattlePassRewardStepAction::Page {
+        command:
+            BvPageCommand::Click1080p {
+                x,
+                y,
+                screen_x,
+                screen_y,
+                ..
+            },
+    } = &plan.steps[5].action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*x, *y, *screen_x, *screen_y), (960.0, 45.0, 960.0, 45.0));
+
+    let BattlePassRewardStepAction::Ocr {
+        command: BvPageCommand::Ocr { locator },
+    } = &plan.steps[7].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(1344, 864, 576, 216).unwrap())
+    );
+    assert!(matches!(
+        plan.steps[8].action,
+        BattlePassRewardStepAction::MatchClaimAll { .. }
+    ));
+    assert!(matches!(
+        plan.steps[9].action,
+        BattlePassRewardStepAction::ClickMatchedText
+    ));
+    assert!(matches!(
+        plan.steps[11].action,
+        BattlePassRewardStepAction::DetectManualSelectionDialog { .. }
+    ));
+    assert!(matches!(
+        plan.steps[14].action,
+        BattlePassRewardStepAction::DismissPrimogemIfVisible { .. }
+    ));
+
+    let BattlePassRewardStepAction::Page {
+        command:
+            BvPageCommand::Click1080p {
+                x,
+                y,
+                screen_x,
+                screen_y,
+                ..
+            },
+    } = &plan.steps[15].action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*x, *y, *screen_x, *screen_y), (858.0, 45.0, 858.0, 45.0));
+    assert!(matches!(
+        plan.steps[23].action,
+        BattlePassRewardStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[24].action,
+        BattlePassRewardStepAction::ReturnResult {
+            result: BattlePassRewardStepResult::Completed
+        }
+    ));
+
+    let configured = plan_claim_battle_pass_rewards(Size::new(1280, 720), ["Claim"]).unwrap();
+    assert_eq!(
+        configured.claim_all_rule.claim_text_patterns,
+        vec!["Claim".to_string()]
+    );
+    assert_eq!(
+        configured.claim_all_rule.ocr_roi,
+        Rect::new(896, 576, 384, 144).unwrap()
+    );
+    assert_eq!(
+        configured
+            .locators
+            .prompt_star
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 360, 640, 360).unwrap())
+    );
+    assert_eq!(
+        configured
+            .locators
+            .primogem
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 240, 1280, 240).unwrap())
+    );
+    let BattlePassRewardStepAction::Page {
+        command: BvPageCommand::Click1080p {
+            screen_x, screen_y, ..
+        },
+    } = &configured.steps[15].action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*screen_x, *screen_y), (572.0, 30.0));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "claimTextPatterns": ["Claim"]
+    });
+    let Some(CommonJobExecutionPlan::ClaimBattlePassRewards(configured_common)) =
+        plan_common_job(CLAIM_BATTLE_PASS_REWARDS_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        configured_common.claim_all_rule.claim_text_patterns,
+        vec!["Claim".to_string()]
+    );
+}
+
+#[derive(Debug, Default)]
+struct FakeClaimBattlePassRewardsRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    texts_by_call: VecDeque<Vec<BattlePassRewardTextCandidate>>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    ocr_commands: Vec<(BattlePassClaimScope, BvPageCommand)>,
+    locator_calls: Vec<BvLocatorPlan>,
+    clicked_texts: Vec<(BattlePassClaimScope, BattlePassRewardTextCandidate)>,
+    logs: Vec<String>,
+}
+
+impl FakeClaimBattlePassRewardsRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_ocr_texts(
+        mut self,
+        texts_by_call: impl IntoIterator<Item = Vec<BattlePassRewardTextCandidate>>,
+    ) -> Self {
+        self.texts_by_call = texts_by_call.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeClaimBattlePassRewardsRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(false)))
+    }
+}
+
+impl ClaimBattlePassRewardsRuntime for FakeClaimBattlePassRewardsRuntime {
+    fn recognize_battle_pass_reward_text(
+        &mut self,
+        command: &BvPageCommand,
+        _rule: &BattlePassClaimAllRule,
+        scope: BattlePassClaimScope,
+    ) -> Result<Vec<BattlePassRewardTextCandidate>> {
+        self.ocr_commands.push((scope, command.clone()));
+        Ok(self.texts_by_call.pop_front().unwrap_or_default())
+    }
+
+    fn click_battle_pass_reward_text(
+        &mut self,
+        candidate: &BattlePassRewardTextCandidate,
+        scope: BattlePassClaimScope,
+    ) -> Result<()> {
+        self.clicked_texts.push((scope, candidate.clone()));
+        Ok(())
+    }
+}
+
+fn fake_battle_pass_text(text: &str, x: i32) -> BattlePassRewardTextCandidate {
+    BattlePassRewardTextCandidate {
+        text: text.to_string(),
+        rect: Rect::new(x, 930, 120, 40).unwrap(),
+    }
+}
+
+#[test]
+fn battle_pass_reward_text_candidates_apply_ocr_roi_offset() {
+    let source_roi = Rect::new(1_300, 860, 520, 160).unwrap();
+    let regions = vec![
+        OcrResultRegion {
+            text: " 一键领取 ".to_string(),
+            rect: Rect::new(40, 18, 130, 30).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: String::new(),
+            rect: Rect::new(12, 90, 60, 20).unwrap(),
+            score: 1.0,
+        },
+    ];
+
+    let candidates =
+        battle_pass_reward_text_candidates_from_ocr_regions(&regions, source_roi).unwrap();
+
+    assert_eq!(
+        candidates,
+        vec![BattlePassRewardTextCandidate {
+            text: "一键领取".to_string(),
+            rect: Rect::new(1_340, 878, 130, 30).unwrap(),
+        }]
+    );
+}
+
+#[test]
+fn claim_battle_pass_rewards_executor_completes_when_no_claim_all_text_is_visible() {
+    let plan = plan_claim_battle_pass_rewards(Size::new(1920, 1080), ["一键", "领取"]).unwrap();
+    let mut runtime = FakeClaimBattlePassRewardsRuntime::new()
+        .with_locator_matches([true, false, true])
+        .with_ocr_texts([vec![], vec![]]);
+
+    let report =
+        execute_claim_battle_pass_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime)
+            .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(BattlePassRewardStepResult::Completed)
+    );
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert!(report.state.battle_pass_open_dispatched);
+    assert_eq!(report.state.points_claim.matched_claim_all_text, None);
+    assert_eq!(report.state.rewards_claim.matched_claim_all_text, None);
+    assert_eq!(report.state.upgrade_primogem_detected, Some(false));
+    assert!(runtime.clicked_texts.is_empty());
+    assert_eq!(runtime.ocr_commands.len(), 2);
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+}
+
+#[test]
+fn claim_battle_pass_rewards_executor_claims_points_and_rewards_and_dismisses_primogems() {
+    let plan = plan_claim_battle_pass_rewards(Size::new(1920, 1080), ["一键", "领取"]).unwrap();
+    let points_text = fake_battle_pass_text("一键领取", 1_520);
+    let rewards_text = fake_battle_pass_text("领取", 1_600);
+    let mut runtime = FakeClaimBattlePassRewardsRuntime::new()
+        .with_locator_matches([
+            true, false, false, false, true, false, false, false, false, true, true,
+        ])
+        .with_ocr_texts([vec![points_text.clone()], vec![rewards_text.clone()]]);
+
+    let report =
+        execute_claim_battle_pass_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime)
+            .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.points_claim.matched_claim_all_text,
+        Some(points_text.clone())
+    );
+    assert_eq!(
+        report.state.rewards_claim.matched_claim_all_text,
+        Some(rewards_text.clone())
+    );
+    assert!(report.state.points_claim.claim_clicked);
+    assert!(report.state.rewards_claim.claim_clicked);
+    assert_eq!(
+        report.state.points_claim.manual_selection_dialog_detected,
+        Some(false)
+    );
+    assert_eq!(
+        report.state.rewards_claim.manual_selection_dialog_detected,
+        Some(false)
+    );
+    assert_eq!(report.state.points_claim.primogem_detected, Some(true));
+    assert!(report.state.points_claim.primogem_dismissed);
+    assert_eq!(report.state.rewards_claim.primogem_detected, Some(true));
+    assert!(report.state.rewards_claim.primogem_dismissed);
+    assert_eq!(
+        runtime.clicked_texts,
+        vec![
+            (BattlePassClaimScope::Points, points_text),
+            (BattlePassClaimScope::Rewards, rewards_text)
+        ]
+    );
+    assert_eq!(runtime.input_batches.len(), 3);
+}
+
+#[test]
+fn claim_battle_pass_rewards_executor_uses_regex_claim_text_patterns() {
+    let mut plan =
+        plan_claim_battle_pass_rewards(Size::new(1920, 1080), [r"^一键\s*领取$"]).unwrap();
+    plan.claim_all_rule.match_as_regex = true;
+    let points_text = fake_battle_pass_text("一键 领取", 1_520);
+    let mut runtime = FakeClaimBattlePassRewardsRuntime::new()
+        .with_locator_matches([true, false, false, false, false, true])
+        .with_ocr_texts([vec![points_text.clone()], vec![]]);
+
+    let report =
+        execute_claim_battle_pass_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime)
+            .unwrap();
+
+    assert_eq!(
+        report.state.points_claim.matched_claim_all_text,
+        Some(points_text)
+    );
+    assert!(report.state.points_claim.claim_clicked);
+    assert_eq!(report.state.rewards_claim.matched_claim_all_text, None);
+}
+
+#[test]
+fn claim_battle_pass_rewards_executor_reports_invalid_regex_pattern() {
+    let mut plan = plan_claim_battle_pass_rewards(Size::new(1920, 1080), ["("]).unwrap();
+    plan.claim_all_rule.match_as_regex = true;
+    let mut runtime = FakeClaimBattlePassRewardsRuntime::new()
+        .with_locator_matches([true])
+        .with_ocr_texts([vec![fake_battle_pass_text("一键领取", 1_520)]]);
+
+    let error =
+        execute_claim_battle_pass_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime)
+            .unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message)
+            if message.contains("invalid ClaimBattlePassRewards claim-all regex pattern")
+    ));
+}
+
+#[test]
+fn claim_battle_pass_rewards_executor_reports_manual_selection_without_dismissing_popup() {
+    let plan = plan_claim_battle_pass_rewards(Size::new(1920, 1080), ["一键", "领取"]).unwrap();
+    let points_text = fake_battle_pass_text("一键领取", 1_520);
+    let mut runtime = FakeClaimBattlePassRewardsRuntime::new()
+        .with_locator_matches([true, true, false, true])
+        .with_ocr_texts([vec![points_text.clone()], vec![]]);
+
+    let report =
+        execute_claim_battle_pass_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime)
+            .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.points_claim.matched_claim_all_text,
+        Some(points_text)
+    );
+    assert_eq!(
+        report.state.points_claim.manual_selection_dialog_detected,
+        Some(true)
+    );
+    assert_eq!(report.state.points_claim.primogem_detected, None);
+    assert!(!report.state.points_claim.primogem_dismissed);
+    assert_eq!(report.state.upgrade_primogem_detected, Some(false));
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.scope == Some(BattlePassClaimScope::Points)
+            && step.reason == ClaimBattlePassRewardsSkipReason::ManualSelectionDialogDetected
+    }));
+}
+
+#[test]
+fn claim_encounter_points_rewards_plan_preserves_legacy_handbook_flow() {
+    let plan = plan_claim_encounter_points_rewards(Size::new(1920, 1080), "", 0).unwrap();
+
+    assert_eq!(plan.task_key, CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.commissions_text, "委托");
+    assert_eq!(
+        plan.max_open_retries,
+        CLAIM_ENCOUNTER_POINTS_REWARDS_DEFAULT_RETRIES
+    );
+    assert_eq!(
+        plan.ocr_rule.left_panel_roi,
+        Rect::new(0, 0, 380, 1080).unwrap()
+    );
+    assert_eq!(plan.ocr_rule.commissions_text, "委托");
+    assert_eq!(
+        plan.ocr_rule.max_open_retries,
+        CLAIM_ENCOUNTER_POINTS_REWARDS_DEFAULT_RETRIES
+    );
+    assert!(plan.ocr_rule.match_exact_text);
+    assert!(plan.ocr_rule.click_first_match);
+    assert_eq!(
+        plan.claim_button_locator.operation,
+        BvLocatorOperation::Click
+    );
+    assert_eq!(
+        plan.claim_button_locator.recognition_object.name.as_deref(),
+        Some(CLAIM_ENCOUNTER_POINTS_REWARDS_BUTTON)
+    );
+    assert_eq!(
+        plan.claim_button_locator
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(1344, 540, 576, 540).unwrap())
+    );
+    assert_eq!(plan.steps.len(), 17);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        ClaimEncounterPointsRewardsStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[3].action,
+        ClaimEncounterPointsRewardsStepAction::GenshinAction {
+            action: GenshinAction::OpenAdventurerHandbook
+        }
+    ));
+
+    let ClaimEncounterPointsRewardsStepAction::Ocr {
+        command: BvPageCommand::Ocr { locator },
+    } = &plan.steps[5].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::FindAll);
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 380, 1080).unwrap())
+    );
+
+    assert!(matches!(
+        plan.steps[6].action,
+        ClaimEncounterPointsRewardsStepAction::MatchCommissions { .. }
+    ));
+    assert_eq!(
+        plan.steps[7].condition,
+        ClaimEncounterPointsRewardsStepCondition::WhenCommissionsTextMatched
+    );
+    assert!(matches!(
+        plan.steps[7].action,
+        ClaimEncounterPointsRewardsStepAction::Locator { .. }
+    ));
+    assert!(matches!(
+        plan.steps[9].action,
+        ClaimEncounterPointsRewardsStepAction::ReturnResult {
+            result: ClaimEncounterPointsRewardsStepResult::ClaimedFromVisibleButton
+        }
+    ));
+    assert!(matches!(
+        plan.steps[10].action,
+        ClaimEncounterPointsRewardsStepAction::ClickMatchedText
+    ));
+    assert!(matches!(
+        plan.steps[14].action,
+        ClaimEncounterPointsRewardsStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[16].action,
+        ClaimEncounterPointsRewardsStepAction::ReturnResult {
+            result: ClaimEncounterPointsRewardsStepResult::CommissionsTabNotFound
+        }
+    ));
+
+    let configured =
+        plan_claim_encounter_points_rewards(Size::new(1280, 720), "Commissions", 3).unwrap();
+    assert_eq!(configured.commissions_text, "Commissions");
+    assert_eq!(configured.max_open_retries, 3);
+    assert_eq!(
+        configured.ocr_rule.left_panel_roi,
+        Rect::new(0, 0, 253, 720).unwrap()
+    );
+    assert_eq!(
+        configured
+            .claim_button_locator
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(896, 360, 384, 360).unwrap())
+    );
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "commissionsText": "Commissions",
+        "maxOpenRetries": 3
+    });
+    let Some(CommonJobExecutionPlan::ClaimEncounterPointsRewards(configured_common)) =
+        plan_common_job(CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.commissions_text, "Commissions");
+    assert_eq!(configured_common.max_open_retries, 3);
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+}
+
+#[derive(Debug, Default)]
+struct FakeClaimEncounterPointsRewardsRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    texts_by_call: VecDeque<Vec<ClaimEncounterPointsRewardsTextCandidate>>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    ocr_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    clicked_texts: Vec<ClaimEncounterPointsRewardsTextCandidate>,
+    logs: Vec<String>,
+}
+
+impl FakeClaimEncounterPointsRewardsRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_ocr_texts(
+        mut self,
+        texts_by_call: impl IntoIterator<Item = Vec<ClaimEncounterPointsRewardsTextCandidate>>,
+    ) -> Self {
+        self.texts_by_call = texts_by_call.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeClaimEncounterPointsRewardsRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(false)))
+    }
+}
+
+impl ClaimEncounterPointsRewardsRuntime for FakeClaimEncounterPointsRewardsRuntime {
+    fn recognize_encounter_points_text(
+        &mut self,
+        command: &BvPageCommand,
+        _rule: &ClaimEncounterPointsRewardsOcrRule,
+    ) -> Result<Vec<ClaimEncounterPointsRewardsTextCandidate>> {
+        self.ocr_commands.push(command.clone());
+        Ok(self.texts_by_call.pop_front().unwrap_or_default())
+    }
+
+    fn click_encounter_points_text(
+        &mut self,
+        candidate: &ClaimEncounterPointsRewardsTextCandidate,
+    ) -> Result<()> {
+        self.clicked_texts.push(candidate.clone());
+        Ok(())
+    }
+}
+
+fn fake_encounter_points_text(text: &str, y: i32) -> ClaimEncounterPointsRewardsTextCandidate {
+    ClaimEncounterPointsRewardsTextCandidate {
+        text: text.to_string(),
+        rect: Rect::new(20, y, 120, 40).unwrap(),
+    }
+}
+
+#[test]
+fn claim_encounter_points_text_candidates_apply_ocr_roi_offset() {
+    let source_roi = Rect::new(12, 34, 380, 900).unwrap();
+    let regions = vec![
+        OcrResultRegion {
+            text: " 委托 ".to_string(),
+            rect: Rect::new(20, 30, 64, 24).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: " ".to_string(),
+            rect: Rect::new(40, 70, 20, 20).unwrap(),
+            score: 1.0,
+        },
+    ];
+
+    let candidates =
+        claim_encounter_points_text_candidates_from_ocr_regions(&regions, source_roi).unwrap();
+
+    assert_eq!(
+        candidates,
+        vec![ClaimEncounterPointsRewardsTextCandidate {
+            text: "委托".to_string(),
+            rect: Rect::new(32, 64, 64, 24).unwrap(),
+        }]
+    );
+}
+
+#[test]
+fn claim_encounter_points_rewards_executor_claims_visible_button_without_final_return() {
+    let plan = plan_claim_encounter_points_rewards(Size::new(1920, 1080), "", 1).unwrap();
+    let candidate = fake_encounter_points_text("委托", 240);
+    let mut runtime = FakeClaimEncounterPointsRewardsRuntime::new()
+        .with_locator_matches([true, true])
+        .with_ocr_texts([vec![candidate.clone()]]);
+
+    let report = execute_claim_encounter_points_rewards_plan(
+        &plan,
+        &KeyBindingsConfig::default(),
+        &mut runtime,
+    )
+    .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(ClaimEncounterPointsRewardsStepResult::ClaimedFromVisibleButton)
+    );
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.final_return_main_ui_completed, None);
+    assert!(report.state.handbook_open_dispatched);
+    assert_eq!(report.state.ocr_attempts, 1);
+    assert_eq!(report.state.matched_commissions_text, Some(candidate));
+    assert_eq!(report.state.early_claim_button_detected, Some(true));
+    assert_eq!(report.state.claim_button_detected, None);
+    assert!(runtime.clicked_texts.is_empty());
+    assert_eq!(runtime.ocr_commands.len(), 1);
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 1);
+}
+
+#[test]
+fn claim_encounter_points_rewards_executor_opens_commissions_then_claims_and_closes() {
+    let plan = plan_claim_encounter_points_rewards(Size::new(1920, 1080), "", 1).unwrap();
+    let candidate = fake_encounter_points_text("委托", 260);
+    let mut runtime = FakeClaimEncounterPointsRewardsRuntime::new()
+        .with_locator_matches([true, false, true, true])
+        .with_ocr_texts([vec![candidate.clone()]]);
+
+    let report = execute_claim_encounter_points_rewards_plan(
+        &plan,
+        &KeyBindingsConfig::default(),
+        &mut runtime,
+    )
+    .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(ClaimEncounterPointsRewardsStepResult::ClaimedAfterOpeningCommissions)
+    );
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.early_claim_button_detected, Some(false));
+    assert_eq!(report.state.claim_button_detected, Some(true));
+    assert!(report.state.matched_text_clicked);
+    assert_eq!(runtime.clicked_texts, vec![candidate]);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+    assert_eq!(
+        runtime
+            .locator_calls
+            .iter()
+            .filter(|locator| locator.recognition_object.name.as_deref()
+                == Some(CLAIM_ENCOUNTER_POINTS_REWARDS_BUTTON))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn claim_encounter_points_rewards_executor_returns_not_found_after_ocr_retry_limit() {
+    let plan = plan_claim_encounter_points_rewards(Size::new(1920, 1080), "", 3).unwrap();
+    let mut runtime = FakeClaimEncounterPointsRewardsRuntime::new()
+        .with_locator_matches([true])
+        .with_ocr_texts([
+            vec![fake_encounter_points_text("奖励", 220)],
+            vec![],
+            vec![fake_encounter_points_text("每日委托", 260)],
+        ]);
+
+    let report = execute_claim_encounter_points_rewards_plan(
+        &plan,
+        &KeyBindingsConfig::default(),
+        &mut runtime,
+    )
+    .unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(ClaimEncounterPointsRewardsStepResult::CommissionsTabNotFound)
+    );
+    assert_eq!(report.state.ocr_attempts, 3);
+    assert!(report.state.open_retry_limit_reached);
+    assert_eq!(report.state.matched_commissions_text, None);
+    assert_eq!(report.state.early_claim_button_detected, None);
+    assert!(runtime.clicked_texts.is_empty());
+    assert_eq!(runtime.ocr_commands.len(), 3);
+    assert_eq!(
+        runtime
+            .locator_calls
+            .iter()
+            .filter(|locator| locator.recognition_object.name.as_deref()
+                == Some(CLAIM_ENCOUNTER_POINTS_REWARDS_BUTTON))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn claim_mail_rewards_plan_preserves_legacy_menu_claim_flow() {
+    let plan = plan_claim_mail_rewards(Size::new(1920, 1080)).unwrap();
+
+    assert_eq!(plan.task_key, CLAIM_MAIL_REWARDS_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.steps.len(), 16);
+    assert_eq!(
+        plan.locators
+            .mail_reward_detect
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(CLAIM_MAIL_REWARDS_ESC_MAIL_REWARD)
+    );
+    assert_eq!(
+        plan.locators
+            .mail_reward_detect
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 540, 192, 540).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .collect_all_click
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(CLAIM_MAIL_REWARDS_COLLECT)
+    );
+    assert_eq!(
+        plan.locators
+            .collect_all_click
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 720, 480, 360).unwrap())
+    );
+    assert_eq!(
+        plan.locators.mail_reward_detect.operation,
+        BvLocatorOperation::IsExist
+    );
+    assert_eq!(
+        plan.locators.mail_reward_click.operation,
+        BvLocatorOperation::Click
+    );
+    assert_eq!(
+        plan.locators.collect_all_detect.operation,
+        BvLocatorOperation::IsExist
+    );
+    assert_eq!(
+        plan.locators.collect_all_click.operation,
+        BvLocatorOperation::Click
+    );
+
+    assert!(matches!(
+        plan.steps[1].action,
+        ClaimMailRewardsStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[3].action,
+        ClaimMailRewardsStepAction::GenshinAction {
+            action: GenshinAction::OpenPaimonMenu
+        }
+    ));
+    assert_eq!(
+        plan.steps[6].condition,
+        ClaimMailRewardsStepCondition::WhenMailRewardDetected
+    );
+    assert_eq!(
+        plan.steps[9].condition,
+        ClaimMailRewardsStepCondition::WhenCollectAllDetected
+    );
+    assert!(matches!(
+        plan.steps[11].action,
+        ClaimMailRewardsStepAction::Input { .. }
+    ));
+    assert!(matches!(
+        plan.steps[12].action,
+        ClaimMailRewardsStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[13].action,
+        ClaimMailRewardsStepAction::ReturnResult {
+            result: ClaimMailRewardsStepResult::Claimed
+        }
+    ));
+    assert!(matches!(
+        plan.steps[14].action,
+        ClaimMailRewardsStepAction::ReturnResult {
+            result: ClaimMailRewardsStepResult::NoMailRewards
+        }
+    ));
+    assert!(matches!(
+        plan.steps[15].action,
+        ClaimMailRewardsStepAction::ReturnResult {
+            result: ClaimMailRewardsStepResult::MailOpenedWithoutClaimAll
+        }
+    ));
+
+    let config = serde_json::json!({ "captureSize": { "width": 1280, "height": 720 } });
+    let Some(CommonJobExecutionPlan::ClaimMailRewards(configured_common)) =
+        plan_common_job(CLAIM_MAIL_REWARDS_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        configured_common
+            .locators
+            .mail_reward_detect
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 360, 128, 360).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .collect_all_click
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 480, 320, 240).unwrap())
+    );
+}
+
+#[test]
+fn claim_mail_rewards_executor_claims_when_mail_and_collect_all_are_visible() {
+    let plan = plan_claim_mail_rewards(Size::new(1920, 1080)).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime =
+        RecordingCommonJobRuntime::with_locator_matches([true, true, true, true, true, true]);
+
+    let report = execute_claim_mail_rewards_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert!(report.state.paimon_menu_opened);
+    assert_eq!(report.state.mail_reward_detected, Some(true));
+    assert_eq!(report.state.mail_reward_clicked, Some(true));
+    assert_eq!(report.state.collect_all_detected, Some(true));
+    assert_eq!(report.state.collect_all_clicked, Some(true));
+    assert!(report.state.escape_after_claim_dispatched);
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(
+        report.state.result,
+        Some(ClaimMailRewardsStepResult::Claimed)
+    );
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+    assert_eq!(runtime.input_batches.len(), 2);
+    assert_eq!(
+        runtime
+            .locator_calls
+            .iter()
+            .filter(|locator| locator.operation == BvLocatorOperation::Click)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn claim_mail_rewards_executor_returns_no_rewards_when_mail_icon_is_missing() {
+    let plan = plan_claim_mail_rewards(Size::new(1920, 1080)).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true, false, true]);
+
+    let report = execute_claim_mail_rewards_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.mail_reward_detected, Some(false));
+    assert_eq!(report.state.mail_reward_clicked, None);
+    assert_eq!(report.state.collect_all_detected, None);
+    assert_eq!(
+        report.state.result,
+        Some(ClaimMailRewardsStepResult::NoMailRewards)
+    );
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert!(!runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::Click
+            && locator.recognition_object.name.as_deref()
+                == Some(CLAIM_MAIL_REWARDS_ESC_MAIL_REWARD)
+    }));
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == ClaimMailRewardsStepCondition::WhenMailRewardDetected
+            && step.reason == ClaimMailRewardsSkipReason::MailRewardMissing
+    }));
+}
+
+#[test]
+fn claim_mail_rewards_executor_reports_mail_opened_without_collect_all() {
+    let plan = plan_claim_mail_rewards(Size::new(1920, 1080)).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime =
+        RecordingCommonJobRuntime::with_locator_matches([true, true, true, false, true]);
+
+    let report = execute_claim_mail_rewards_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.mail_reward_detected, Some(true));
+    assert_eq!(report.state.mail_reward_clicked, Some(true));
+    assert_eq!(report.state.collect_all_detected, Some(false));
+    assert_eq!(report.state.collect_all_clicked, None);
+    assert!(!report.state.escape_after_claim_dispatched);
+    assert_eq!(
+        report.state.result,
+        Some(ClaimMailRewardsStepResult::MailOpenedWithoutClaimAll)
+    );
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert!(!runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::Click
+            && locator.recognition_object.name.as_deref() == Some(CLAIM_MAIL_REWARDS_COLLECT)
+    }));
+}
+
+#[test]
+fn claim_mail_rewards_template_runtime_uses_task_asset_templates() {
+    let capture_size = Size::new(1920, 1080);
+    let mut plan = plan_claim_mail_rewards(capture_size).unwrap();
+    let return_main_ui = plan_return_main_ui(capture_size, 1).unwrap();
+    let CommonJobStepAction::Locator {
+        locator: paimon_locator,
+    } = &return_main_ui.steps[1].action
+    else {
+        unreachable!()
+    };
+    let mail_template = BgrImage::read(
+        task_asset_root().join(
+            plan.locators
+                .mail_reward_detect
+                .recognition_object
+                .template
+                .template_asset
+                .clone()
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    let collect_template = BgrImage::read(
+        task_asset_root().join(
+            plan.locators
+                .collect_all_detect
+                .recognition_object
+                .template
+                .template_asset
+                .clone()
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    let paimon_template = BgrImage::read(
+        task_asset_root().join(
+            paimon_locator
+                .recognition_object
+                .template
+                .template_asset
+                .clone()
+                .unwrap(),
+        ),
+    )
+    .unwrap();
+    let original_mail_roi = plan
+        .locators
+        .mail_reward_detect
+        .recognition_object
+        .region_of_interest
+        .unwrap();
+    let original_collect_roi = plan
+        .locators
+        .collect_all_detect
+        .recognition_object
+        .region_of_interest
+        .unwrap();
+    let mail_roi = Rect::new(
+        original_mail_roi.x + 2,
+        original_mail_roi.y + 2,
+        mail_template.size.width as i32,
+        mail_template.size.height as i32,
+    )
+    .unwrap();
+    let collect_roi = Rect::new(
+        original_collect_roi.x + 2,
+        original_collect_roi.y + 2,
+        collect_template.size.width as i32,
+        collect_template.size.height as i32,
+    )
+    .unwrap();
+    fn set_claim_mail_rewards_locator_roi(
+        plan: &mut ClaimMailRewardsExecutionPlan,
+        asset: &str,
+        roi: Rect,
+    ) {
+        for locator in [
+            &mut plan.locators.mail_reward_detect,
+            &mut plan.locators.mail_reward_click,
+            &mut plan.locators.collect_all_detect,
+            &mut plan.locators.collect_all_click,
+        ] {
+            if locator.recognition_object.name.as_deref() == Some(asset) {
+                locator.recognition_object.region_of_interest = Some(roi);
+            }
+        }
+        for step in &mut plan.steps {
+            let ClaimMailRewardsStepAction::Locator { locator } = &mut step.action else {
+                continue;
+            };
+            if locator.recognition_object.name.as_deref() == Some(asset) {
+                locator.recognition_object.region_of_interest = Some(roi);
+            }
+        }
+    }
+    set_claim_mail_rewards_locator_roi(&mut plan, CLAIM_MAIL_REWARDS_ESC_MAIL_REWARD, mail_roi);
+    set_claim_mail_rewards_locator_roi(&mut plan, CLAIM_MAIL_REWARDS_COLLECT, collect_roi);
+    let frame_in_roi = |template: &BgrImage, roi: Rect| {
+        let x = roi.x.max(0) as u32;
+        let y = roi.y.max(0) as u32;
+        assert!(x + template.size.width <= capture_size.width);
+        assert!(y + template.size.height <= capture_size.height);
+        frame_with_template(capture_size, template, x, y)
+    };
+    let frames = [
+        frame_with_template(capture_size, &paimon_template, 12, 12),
+        frame_in_roi(&mail_template, mail_roi),
+        frame_in_roi(&mail_template, mail_roi),
+        frame_in_roi(&collect_template, collect_roi),
+        frame_in_roi(&collect_template, collect_roi),
+        frame_with_template(capture_size, &paimon_template, 12, 12),
+    ];
+    let backend = PureRustVisionBackend::new().with_template_root(task_asset_root());
+    let frame_source = QueueFrameSource::new(frames);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+    let mut runtime = TemplateCommonJobRuntime::new(backend, frame_source, input_driver, clock);
+
+    let report =
+        execute_claim_mail_rewards_plan(&plan, &KeyBindingsConfig::default(), &mut runtime)
+            .unwrap();
+    let (_, frame_source, input_driver, _, _) = runtime.into_parts();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(ClaimMailRewardsStepResult::Claimed)
+    );
+    assert_eq!(frame_source.captures, 6);
+    assert_eq!(input_driver.clicks.len(), 2);
+    assert_eq!(input_driver.event_batches.len(), 2);
+}
+
+#[test]
+fn claim_mail_rewards_live_rejects_unsupported_capture_size_before_io() {
+    let plan = plan_claim_mail_rewards(Size::new(1280, 720)).unwrap();
+
+    let error = execute_claim_mail_rewards_live(
+        &plan,
+        &KeyBindingsConfig::default(),
+        QueueFrameSource::new([blank_frame(Size::new(1280, 720))]),
+        TestCommonJobInputDriver::default(),
+        TestCommonJobClock::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("1920x1080"))
+    );
+}
+
+#[test]
+fn go_to_adventurers_guild_plan_preserves_legacy_pathing_dialogue_rewards_and_expedition_flow() {
+    let plan = plan_go_to_adventurers_guild(
+        Size::new(1920, 1080),
+        "枫丹",
+        Some("Friendship.*".to_string()),
+        false,
+        GoToAdventurersGuildLocalizedTexts {
+            daily: "每日".to_string(),
+            catherine: "凯瑟琳".to_string(),
+            expedition: "探索".to_string(),
+        },
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(plan.task_key, GO_TO_ADVENTURERS_GUILD_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(
+        plan.retry_times,
+        GO_TO_ADVENTURERS_GUILD_DEFAULT_RETRY_TIMES
+    );
+    assert_eq!(plan.country, "枫丹");
+    assert_eq!(
+        plan.daily_reward_party_name.as_deref(),
+        Some("Friendship.*")
+    );
+    assert!(!plan.only_do_once);
+    assert_eq!(plan.localized_texts.daily, "每日");
+    assert_eq!(plan.localized_texts.catherine, "凯瑟琳");
+    assert_eq!(plan.localized_texts.expedition, "探索");
+    assert_eq!(
+        plan.pathing_rule.pathing_json,
+        "GameTask/Common/Element/Assets/Json/冒险家协会_枫丹.json"
+    );
+    assert!(plan.pathing_rule.fail_when_task_missing);
+    assert_eq!(plan.pathing_rule.end_action_text, "凯瑟琳");
+    assert_eq!(plan.pathing_rule.after_pathing_delay_ms, 600);
+    assert!(plan.pathing_rule.party_config.enabled);
+    assert!(plan.pathing_rule.party_config.auto_skip_enabled);
+    assert!(plan.pathing_rule.party_config.auto_run_enabled);
+    assert_eq!(
+        plan.interaction_rule.retry_talk_times,
+        GO_TO_ADVENTURERS_GUILD_DEFAULT_TALK_RETRY_TIMES
+    );
+    assert_eq!(plan.interaction_rule.retry_delay_ms, 500);
+    assert_eq!(plan.interaction_rule.interact_vk, 0x46);
+    assert_eq!(plan.interaction_rule.interact_text, "凯瑟琳");
+    assert!(
+        plan.interaction_rule
+            .fail_when_talk_ui_missing_after_retries
+    );
+    assert_eq!(
+        plan.daily_reward_rule.skip_times,
+        GO_TO_ADVENTURERS_GUILD_DEFAULT_DAILY_SKIP_TIMES
+    );
+    assert!(plan.daily_reward_rule.is_orange);
+    assert_eq!(plan.daily_reward_rule.after_click_delay_ms, 800);
+    assert!(plan.daily_reward_rule.black_confirm_optional);
+    assert_eq!(plan.daily_reward_rule.select_last_option_until_end_times, 3);
+    assert!(plan.daily_reward_rule.wait_paimon_menu_after_daily);
+    assert_eq!(plan.daily_reward_rule.after_paimon_menu_delay_ms, 500);
+    assert_eq!(plan.daily_reward_rule.reopen_dialog_delay_ms, 1_200);
+
+    assert_eq!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_ADVENTURERS_GUILD_BLACK_CONFIRM)
+    );
+    assert!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert_eq!(
+        plan.locators.black_confirm.operation,
+        BvLocatorOperation::Click
+    );
+    assert_eq!(
+        plan.locators
+            .paimon_menu
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 480, 270).unwrap())
+    );
+    assert_eq!(
+        plan.locators.paimon_menu.operation,
+        BvLocatorOperation::WaitFor
+    );
+    assert_eq!(plan.locators.paimon_menu.timeout_ms, 10_000);
+    assert_eq!(
+        plan.locators
+            .expedition_collect
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_ADVENTURERS_GUILD_EXPEDITION_COLLECT)
+    );
+    assert_eq!(
+        plan.locators
+            .expedition_collect
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 720, 480, 360).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .expedition_re_dispatch
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_ADVENTURERS_GUILD_EXPEDITION_RE)
+    );
+    assert_eq!(
+        plan.locators
+            .expedition_re_dispatch
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 810, 480, 270).unwrap())
+    );
+    assert_eq!(plan.expedition_rule.collect_attempts, 2);
+    assert_eq!(plan.expedition_rule.wait_before_retry_ms, 1_000);
+    assert_eq!(plan.expedition_rule.after_collect_delay_ms, 1_100);
+    assert_eq!(plan.expedition_rule.re_dispatch_retry_attempts, 3);
+    assert_eq!(plan.expedition_rule.re_dispatch_retry_window_ms, 1_000);
+    assert_eq!(plan.expedition_rule.after_re_dispatch_delay_ms, 500);
+    assert!(plan.expedition_rule.exit_with_escape);
+    assert_eq!(
+        plan.expedition_rule.one_key_plan.collect_locator,
+        plan.expedition_rule.collect_locator
+    );
+    assert_eq!(
+        plan.expedition_rule.one_key_plan.re_dispatch_locator,
+        plan.expedition_rule.re_dispatch_locator
+    );
+    assert_eq!(plan.expedition_rule.one_key_plan.collect_attempts, 2);
+    assert_eq!(
+        plan.expedition_rule.one_key_plan.re_dispatch_retry_attempts,
+        3
+    );
+    assert_eq!(
+        plan.expedition_rule.one_key_plan.after_re_dispatch_delay_ms,
+        500
+    );
+    assert_eq!(plan.steps.len(), 21);
+
+    let GoToAdventurersGuildStepAction::CommonJob { task_key, config } = &plan.steps[1].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(task_key, SWITCH_PARTY_TASK_KEY);
+    let switch_config = config.as_ref().unwrap();
+    assert_eq!(switch_config["partyName"].as_str(), Some("Friendship.*"));
+    assert_eq!(switch_config["captureSize"]["width"].as_u64(), Some(1920));
+
+    assert!(matches!(
+        plan.steps[2].action,
+        GoToAdventurersGuildStepAction::CommonJob { ref task_key, .. }
+            if task_key == CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[3].action,
+        GoToAdventurersGuildStepAction::Pathing { .. }
+    ));
+    let GoToAdventurersGuildStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[4].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 600);
+    assert!(matches!(
+        plan.steps[5].action,
+        GoToAdventurersGuildStepAction::InteractionRetry { .. }
+    ));
+
+    let GoToAdventurersGuildStepAction::CommonJob { task_key, config } = &plan.steps[6].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(task_key, CHOOSE_TALK_OPTION_TASK_KEY);
+    let daily_config = config.as_ref().unwrap();
+    assert_eq!(daily_config["option"].as_str(), Some("每日"));
+    assert_eq!(daily_config["skipTimes"].as_u64(), Some(10));
+    assert_eq!(daily_config["isOrange"].as_bool(), Some(true));
+    let GoToAdventurersGuildStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[7].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 800);
+    assert!(matches!(
+        plan.steps[9].action,
+        GoToAdventurersGuildStepAction::SelectLastTalkOptionUntilEnd {
+            max_times: Some(3),
+            until_paimon_menu: true
+        }
+    ));
+    let GoToAdventurersGuildStepAction::Input { events } = &plan.steps[12].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+    assert!(matches!(
+        plan.steps[13].action,
+        GoToAdventurersGuildStepAction::CommonJob { ref task_key, .. }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    let GoToAdventurersGuildStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[14].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 1_200);
+    assert!(matches!(
+        plan.steps[15].action,
+        GoToAdventurersGuildStepAction::InteractionRetry { .. }
+    ));
+
+    let GoToAdventurersGuildStepAction::CommonJob { task_key, config } = &plan.steps[16].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(task_key, CHOOSE_TALK_OPTION_TASK_KEY);
+    let expedition_config = config.as_ref().unwrap();
+    assert_eq!(expedition_config["option"].as_str(), Some("探索"));
+    assert_eq!(expedition_config["isOrange"].as_bool(), Some(true));
+    assert!(matches!(
+        plan.steps[18].action,
+        GoToAdventurersGuildStepAction::OneKeyExpedition { .. }
+    ));
+    assert!(matches!(
+        plan.steps[19].action,
+        GoToAdventurersGuildStepAction::SelectLastTalkOptionUntilEnd {
+            max_times: None,
+            until_paimon_menu: false
+        }
+    ));
+    assert!(matches!(
+        plan.steps[20].action,
+        GoToAdventurersGuildStepAction::ReturnResult {
+            result: GoToAdventurersGuildStepResult::Completed
+        }
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "country": "蒙德",
+        "dailyRewardPartyName": "",
+        "onlyDoOnce": true,
+        "dailyText": "Daily",
+        "catherineText": "Katheryne",
+        "expeditionText": "Expedition",
+        "interactVk": 0
+    });
+    let Some(CommonJobExecutionPlan::GoToAdventurersGuild(configured_common)) =
+        plan_common_job(GO_TO_ADVENTURERS_GUILD_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(configured_common.country, "蒙德");
+    assert_eq!(configured_common.daily_reward_party_name, None);
+    assert!(configured_common.only_do_once);
+    assert_eq!(configured_common.localized_texts.daily, "Daily");
+    assert_eq!(configured_common.localized_texts.catherine, "Katheryne");
+    assert_eq!(
+        configured_common.pathing_rule.pathing_json,
+        "GameTask/Common/Element/Assets/Json/冒险家协会_蒙德.json"
+    );
+    assert_eq!(configured_common.interaction_rule.interact_vk, 0x46);
+    assert_eq!(
+        configured_common
+            .locators
+            .paimon_menu
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 320, 180).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .expedition_collect
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 480, 320, 240).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .expedition_re_dispatch
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(640, 540, 320, 180).unwrap())
+    );
+}
+
+fn wait_milliseconds(commands: &[BvPageCommand]) -> Vec<u32> {
+    commands
+        .iter()
+        .filter_map(|command| match command {
+            BvPageCommand::Wait { milliseconds } => Some(*milliseconds),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn one_key_expedition_plan_preserves_legacy_collect_redispatch_and_cleanup_flow() {
+    let plan = plan_one_key_expedition(Size::new(1920, 1080)).unwrap();
+
+    assert_eq!(plan.task_key, ONE_KEY_EXPEDITION_TASK_KEY);
+    assert!(plan.executor_ready);
+    assert!(plan.activate_window_before_run);
+    assert!(plan.catches_and_logs_exceptions);
+    assert!(plan.clears_vision_drawings_finally);
+    assert_eq!(plan.collect_attempts, 2);
+    assert_eq!(plan.wait_before_retry_ms, 1_000);
+    assert_eq!(plan.after_collect_delay_ms, 1_100);
+    assert_eq!(plan.re_dispatch_retry_attempts, 3);
+    assert_eq!(plan.re_dispatch_retry_window_ms, 1_000);
+    assert_eq!(plan.re_dispatch_pre_capture_delay_ms, 1);
+    assert_eq!(plan.after_re_dispatch_delay_ms, 500);
+    assert_eq!(
+        plan.collect_locator.recognition_object.region_of_interest,
+        Some(Rect::new(0, 720, 480, 360).unwrap())
+    );
+    assert_eq!(
+        plan.re_dispatch_locator
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 810, 480, 270).unwrap())
+    );
+    assert_eq!(plan.collect_locator.operation, BvLocatorOperation::Click);
+    assert_eq!(
+        plan.re_dispatch_locator.operation,
+        BvLocatorOperation::Click
+    );
+    assert!(plan.exit_events.iter().any(|event| {
+        matches!(
+            event,
+            InputEvent::KeyDown { vk, .. } if *vk == ONE_KEY_EXPEDITION_VK_ESCAPE
+        )
+    }));
+    assert!(plan.exit_events.iter().any(|event| {
+        matches!(
+            event,
+            InputEvent::KeyUp { vk, .. } if *vk == ONE_KEY_EXPEDITION_VK_ESCAPE
+        )
+    }));
+    assert!(matches!(
+        plan.steps.first().map(|step| &step.action),
+        Some(OneKeyExpeditionStepAction::ActivateWindow)
+    ));
+    assert!(plan.steps.iter().any(|step| {
+        step.condition == OneKeyExpeditionStepCondition::WhenCollectMissingAndCanRetry
+            && matches!(&step.action, OneKeyExpeditionStepAction::Log { message } if message == "探索派遣：等待1s后重试")
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        step.condition == OneKeyExpeditionStepCondition::WhenReDispatchMissingAfterRetries
+            && matches!(&step.action, OneKeyExpeditionStepAction::Log { message } if message == "未检测到弹出菜单")
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        matches!(
+            step.action,
+            OneKeyExpeditionStepAction::ReturnResult {
+                result: OneKeyExpeditionStepResult::Completed
+            }
+        )
+    }));
+    assert!(matches!(
+        plan.steps.last().map(|step| &step.action),
+        Some(OneKeyExpeditionStepAction::ClearVisionDrawings)
+    ));
+
+    let Some(CommonJobExecutionPlan::OneKeyExpedition(common_job_plan)) = plan_common_job(
+        ONE_KEY_EXPEDITION_TASK_KEY,
+        Some(&serde_json::json!({"captureSize": {"width": 1280, "height": 720}})),
+    )
+    .unwrap() else {
+        panic!("expected OneKeyExpedition common job plan");
+    };
+    assert_eq!(common_job_plan.capture_size, Size::new(1280, 720));
+    assert!(common_job_plan.executor_ready);
+    let bridge = common_job_executor_bridge_plan(&CommonJobExecutionPlan::OneKeyExpedition(
+        common_job_plan.clone(),
+    ))
+    .unwrap();
+    assert_eq!(
+        bridge.bridge_kind,
+        CommonJobExecutorBridgeKind::OneKeyExpedition
+    );
+    assert!(bridge.live_io_ready);
+
+    let catalog = find_task_catalog_entry(ONE_KEY_EXPEDITION_TASK_KEY).unwrap();
+    assert_eq!(catalog.launch_policy, TaskLaunchPolicy::CommonJob);
+    assert_eq!(catalog.port_state, TaskPortState::RuntimeScaffolded);
+    assert_eq!(
+        catalog.rust_execution_surface(),
+        TaskRustExecutionSurface::ExecutionPlanOnly
+    );
+    assert!(catalog.asset_roots.contains(&"GameTask/AutoSkip/Assets"));
+}
+
+#[test]
+fn one_key_expedition_executor_retries_collect_then_completes() {
+    let plan = plan_one_key_expedition(Size::new(1920, 1080)).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false, true, true]);
+
+    let report = execute_one_key_expedition_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(OneKeyExpeditionStepResult::Completed)
+    );
+    assert_eq!(report.state.collect_attempts, 2);
+    assert_eq!(report.state.re_dispatch_attempts, 1);
+    assert!(report.state.window_activated);
+    assert!(report.state.collect_clicked);
+    assert!(report.state.re_dispatch_clicked);
+    assert!(report.state.exit_dispatched);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.focus_calls, 1);
+    assert_eq!(runtime.clear_vision_drawings_calls, 1);
+    assert_eq!(runtime.locator_calls.len(), 3);
+    assert_eq!(
+        wait_milliseconds(&runtime.page_commands),
+        vec![1_000, 1_100, 1, 500]
+    );
+    assert_eq!(
+        runtime.logs,
+        vec![
+            "探索派遣：未找到领取按钮",
+            "探索派遣：等待1s后重试",
+            "探索派遣：全部领取",
+            "探索派遣：再次派遣",
+            "探索派遣：完成"
+        ]
+    );
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert!(runtime.input_batches[0].iter().any(|event| {
+        matches!(
+            event,
+            InputEvent::KeyDown { vk, .. } if *vk == ONE_KEY_EXPEDITION_VK_ESCAPE
+        )
+    }));
+}
+
+#[test]
+fn one_key_expedition_executor_finishes_without_escape_when_collect_missing() {
+    let plan = plan_one_key_expedition(Size::new(1920, 1080)).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false, false]);
+
+    let report = execute_one_key_expedition_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(OneKeyExpeditionStepResult::CollectAllMissing)
+    );
+    assert_eq!(report.state.collect_attempts, 2);
+    assert_eq!(runtime.locator_calls.len(), 2);
+    assert_eq!(wait_milliseconds(&runtime.page_commands), vec![1_000]);
+    assert!(runtime.input_batches.is_empty());
+    assert_eq!(
+        runtime.logs,
+        vec![
+            "探索派遣：未找到领取按钮",
+            "探索派遣：等待1s后重试",
+            "探索派遣：未找到领取按钮"
+        ]
+    );
+    assert_eq!(runtime.clear_vision_drawings_calls, 1);
+}
+
+#[test]
+fn one_key_expedition_executor_finishes_without_escape_when_redispatch_missing() {
+    let plan = plan_one_key_expedition(Size::new(1920, 1080)).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true, false, false, false]);
+
+    let report = execute_one_key_expedition_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(OneKeyExpeditionStepResult::ReDispatchMissing)
+    );
+    assert_eq!(report.state.collect_attempts, 1);
+    assert_eq!(report.state.re_dispatch_attempts, 3);
+    assert_eq!(runtime.locator_calls.len(), 4);
+    assert_eq!(
+        wait_milliseconds(&runtime.page_commands),
+        vec![1_100, 1, 1_000, 1, 1_000, 1]
+    );
+    assert!(runtime.input_batches.is_empty());
+    assert_eq!(runtime.logs, vec!["探索派遣：全部领取", "未检测到弹出菜单"]);
+    assert_eq!(runtime.clear_vision_drawings_calls, 1);
+}
+
+#[derive(Debug, Default)]
+struct FakeGoToAdventurersGuildRuntime {
+    common_job_outcomes: VecDeque<GoToAdventurersGuildNestedOutcome>,
+    pathing_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    interaction_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    select_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    expedition_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    talk_ui_open_outcomes: VecDeque<bool>,
+    common_job_calls: Vec<(String, Option<serde_json::Value>)>,
+    pathing_calls: Vec<GoToAdventurersGuildPathingRule>,
+    interaction_calls: Vec<GoToAdventurersGuildInteractionRule>,
+    select_calls: Vec<(Option<u8>, bool)>,
+    expedition_calls: Vec<OneKeyExpeditionExecutionPlan>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    logs: Vec<String>,
+}
+
+impl FakeGoToAdventurersGuildRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_common_job_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = GoToAdventurersGuildNestedOutcome>,
+    ) -> Self {
+        self.common_job_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_interaction_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.interaction_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn default_common_job_outcome(task_key: &str) -> GoToAdventurersGuildNestedOutcome {
+        if task_key == CHOOSE_TALK_OPTION_TASK_KEY {
+            GoToAdventurersGuildNestedOutcome::TalkOption(TalkOptionPlanResult::FoundAndClick)
+        } else {
+            GoToAdventurersGuildNestedOutcome::Completed(true)
+        }
+    }
+}
+
+impl CommonJobRuntime for FakeGoToAdventurersGuildRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+impl GoToAdventurersGuildRuntime for FakeGoToAdventurersGuildRuntime {
+    fn execute_adventurers_guild_common_job(
+        &mut self,
+        task_key: &str,
+        config: Option<&serde_json::Value>,
+    ) -> Result<GoToAdventurersGuildNestedOutcome> {
+        self.common_job_calls
+            .push((task_key.to_string(), config.cloned()));
+        Ok(self
+            .common_job_outcomes
+            .pop_front()
+            .unwrap_or_else(|| Self::default_common_job_outcome(task_key)))
+    }
+
+    fn execute_adventurers_guild_pathing(
+        &mut self,
+        rule: &GoToAdventurersGuildPathingRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.pathing_calls.push(rule.clone());
+        Ok(self
+            .pathing_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn retry_adventurers_guild_interaction(
+        &mut self,
+        rule: &GoToAdventurersGuildInteractionRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.interaction_calls.push(rule.clone());
+        Ok(self
+            .interaction_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn select_last_adventurers_guild_talk_option_until_end(
+        &mut self,
+        max_times: Option<u8>,
+        until_paimon_menu: bool,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.select_calls.push((max_times, until_paimon_menu));
+        Ok(self
+            .select_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn run_one_key_adventurers_guild_expedition(
+        &mut self,
+        plan: &OneKeyExpeditionExecutionPlan,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.expedition_calls.push(plan.clone());
+        Ok(self
+            .expedition_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn is_adventurers_guild_talk_ui_open(&mut self) -> Result<bool> {
+        Ok(self.talk_ui_open_outcomes.pop_front().unwrap_or(true))
+    }
+}
+
+#[test]
+fn go_to_adventurers_guild_executor_runs_daily_and_expedition_flow() {
+    let plan = plan_go_to_adventurers_guild(
+        Size::new(1920, 1080),
+        "枫丹",
+        Some("Friendship".to_string()),
+        false,
+        GoToAdventurersGuildLocalizedTexts::default(),
+        0,
+    )
+    .unwrap();
+    let mut runtime = FakeGoToAdventurersGuildRuntime::new();
+
+    let report = execute_go_to_adventurers_guild_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(GoToAdventurersGuildStepResult::Completed)
+    );
+    assert_eq!(report.state.party_switch_completed, Some(true));
+    assert_eq!(report.state.encounter_points_claimed, Some(true));
+    assert_eq!(report.state.pathing_completed, Some(true));
+    assert_eq!(report.state.interaction_retry_succeeded, Some(true));
+    assert_eq!(
+        report.state.daily_reward_option_result,
+        Some(TalkOptionPlanResult::FoundAndClick)
+    );
+    assert_eq!(report.state.daily_reward_dialogue_finished, Some(true));
+    assert_eq!(report.state.paimon_menu_detected_after_daily, Some(true));
+    assert_eq!(
+        report.state.return_main_ui_after_daily_completed,
+        Some(true)
+    );
+    assert_eq!(report.state.catherine_reopened_after_daily, Some(true));
+    assert_eq!(
+        report.state.expedition_option_result,
+        Some(TalkOptionPlanResult::FoundAndClick)
+    );
+    assert_eq!(report.state.expedition_completed, Some(true));
+    assert_eq!(report.state.cleanup_dialogue_closed, Some(true));
+    assert_eq!(report.state.talk_ui_still_open, Some(false));
+    assert_eq!(runtime.pathing_calls.len(), 1);
+    assert_eq!(runtime.interaction_calls.len(), 2);
+    assert_eq!(runtime.select_calls, vec![(Some(3), true), (None, false)]);
+    assert_eq!(runtime.expedition_calls.len(), 1);
+    assert_eq!(
+        runtime.expedition_calls[0],
+        plan.expedition_rule.one_key_plan
+    );
+    assert_eq!(
+        runtime
+            .common_job_calls
+            .iter()
+            .map(|(task_key, _)| task_key.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            SWITCH_PARTY_TASK_KEY,
+            CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY,
+            CHOOSE_TALK_OPTION_TASK_KEY,
+            RETURN_MAIN_UI_TASK_KEY,
+            CHOOSE_TALK_OPTION_TASK_KEY
+        ]
+    );
+}
+
+#[test]
+fn go_to_adventurers_guild_executor_skips_daily_follow_up_when_daily_missing() {
+    let plan = plan_go_to_adventurers_guild(
+        Size::new(1920, 1080),
+        "蒙德",
+        None,
+        true,
+        GoToAdventurersGuildLocalizedTexts::default(),
+        0,
+    )
+    .unwrap();
+    let mut runtime = FakeGoToAdventurersGuildRuntime::new().with_common_job_outcomes([
+        GoToAdventurersGuildNestedOutcome::TalkOption(TalkOptionPlanResult::NotFound),
+        GoToAdventurersGuildNestedOutcome::TalkOption(TalkOptionPlanResult::FoundAndClick),
+    ]);
+
+    let report = execute_go_to_adventurers_guild_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.party_switch_completed, None);
+    assert_eq!(report.state.encounter_points_claimed, None);
+    assert_eq!(report.state.pathing_completed, Some(true));
+    assert_eq!(
+        report.state.daily_reward_option_result,
+        Some(TalkOptionPlanResult::NotFound)
+    );
+    assert_eq!(report.state.daily_reward_dialogue_finished, None);
+    assert_eq!(report.state.return_main_ui_after_daily_completed, None);
+    assert_eq!(report.state.catherine_reopened_after_daily, None);
+    assert_eq!(
+        report.state.expedition_option_result,
+        Some(TalkOptionPlanResult::FoundAndClick)
+    );
+    assert_eq!(report.state.expedition_completed, Some(true));
+    assert_eq!(runtime.interaction_calls.len(), 1);
+    assert_eq!(runtime.select_calls, vec![(None, false)]);
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == GoToAdventurersGuildSkipReason::DailyRewardPartyMissing }));
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| step.reason == GoToAdventurersGuildSkipReason::OnlyDoOnceEnabled));
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == GoToAdventurersGuildSkipReason::DailyRewardOptionMissing }));
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == GoToAdventurersGuildSkipReason::DailyRewardDialogueMissing }));
+}
+
+#[test]
+fn go_to_adventurers_guild_executor_errors_when_interaction_retry_fails() {
+    let plan = plan_go_to_adventurers_guild(
+        Size::new(1920, 1080),
+        "璃月",
+        None,
+        true,
+        GoToAdventurersGuildLocalizedTexts::default(),
+        0,
+    )
+    .unwrap();
+    let mut runtime = FakeGoToAdventurersGuildRuntime::new().with_interaction_matches([false]);
+
+    let error = execute_go_to_adventurers_guild_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("failed to open talk UI"))
+    );
+    assert_eq!(runtime.pathing_calls.len(), 1);
+    assert_eq!(runtime.interaction_calls.len(), 1);
+}
+
+#[test]
+fn go_to_crafting_bench_plan_preserves_legacy_pathing_interaction_and_condensed_resin_flow() {
+    let plan = plan_go_to_crafting_bench(
+        Size::new(1920, 1080),
+        "枫丹",
+        GoToCraftingBenchLocalizedTexts {
+            craft: "合成".to_string(),
+        },
+        120,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(plan.task_key, GO_TO_CRAFTING_BENCH_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.retry_times, GO_TO_CRAFTING_BENCH_DEFAULT_RETRY_TIMES);
+    assert_eq!(plan.retry_failure_delay_ms, 1_000);
+    assert_eq!(plan.country, "枫丹");
+    assert_eq!(plan.localized_texts.craft, "合成");
+    assert_eq!(plan.min_resin_to_keep, 120);
+    assert_eq!(
+        plan.pathing_rule.pathing_json,
+        "GameTask/Common/Element/Assets/Json/合成台_枫丹.json"
+    );
+    assert!(plan.pathing_rule.fail_when_task_missing);
+    assert_eq!(plan.pathing_rule.end_action_text, "合成");
+    assert_eq!(plan.pathing_rule.after_pathing_delay_ms, 700);
+    assert!(plan.pathing_rule.party_config.enabled);
+    assert!(plan.pathing_rule.party_config.auto_skip_enabled);
+    assert!(!plan.pathing_rule.party_config.auto_run_enabled);
+    assert_eq!(plan.interaction_rule.interact_vk, 0x46);
+    assert_eq!(plan.interaction_rule.interact_text, "合成");
+    assert_eq!(plan.interaction_rule.interact_success_delay_ms, 1_000);
+    assert_eq!(plan.interaction_rule.move_backward_hold_ms, 200);
+    assert_eq!(
+        plan.interaction_rule.fail_message,
+        "未进入和合成台交互对话界面"
+    );
+
+    assert_eq!(
+        plan.locators.talk_ui.recognition_object.name.as_deref(),
+        Some(GO_TO_CRAFTING_BENCH_TALK_UI)
+    );
+    assert_eq!(
+        plan.locators.talk_ui.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 640, 135).unwrap())
+    );
+    assert_eq!(plan.locators.talk_ui.operation, BvLocatorOperation::IsExist);
+    assert_eq!(
+        plan.locators
+            .white_confirm
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_CRAFTING_BENCH_WHITE_CONFIRM)
+    );
+    assert!(
+        plan.locators
+            .white_confirm
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert_eq!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_CRAFTING_BENCH_BLACK_CONFIRM)
+    );
+    assert!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert_eq!(
+        plan.locators
+            .condensed_resin
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 0, 960, 720).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .fragile_resin_count
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 810, 640, 180).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .condensed_resin_count
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 0, 480, 72).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .key_reduce
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 540, 960, 540).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .key_increase
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 540, 960, 540).unwrap())
+    );
+    assert_eq!(plan.crafting_page_rule.after_page_delay_ms, 800);
+    assert_eq!(
+        plan.crafting_page_rule
+            .end_locator
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_CRAFTING_BENCH_WHITE_CONFIRM)
+    );
+
+    assert_eq!(
+        plan.resin_recognition_rule.fragile_resin_regex,
+        r"(\d+)\s*[/17]\s*(6|60)"
+    );
+    assert_eq!(plan.resin_recognition_rule.condensed_count_retries, 3);
+    assert_eq!(
+        plan.resin_recognition_rule.condensed_count_retry_delay_ms,
+        200
+    );
+    assert_eq!(plan.resin_recognition_rule.initial_condensed_count, 0);
+    assert_eq!(plan.resin_recognition_rule.valid_condensed_count_min, 0);
+    assert_eq!(plan.resin_recognition_rule.valid_condensed_count_max, 5);
+    assert!(plan.resin_recognition_rule.return_main_ui_on_count_failure);
+    assert_eq!(
+        plan.resin_recognition_rule.fragile_count_ocr_crop,
+        GoToCraftingBenchRelativeCrop {
+            anchor: GoToCraftingBenchCropAnchor::MatchedLocator,
+            x_offset_width_multiplier: 0.0,
+            y_offset_height_multiplier: 1.0,
+            width_multiplier: 1.0,
+            height_multiplier: 1.0,
+        }
+    );
+    assert_eq!(
+        plan.resin_recognition_rule.condensed_count_ocr_crop,
+        GoToCraftingBenchRelativeCrop {
+            anchor: GoToCraftingBenchCropAnchor::MatchedLocator,
+            x_offset_width_multiplier: 1.0,
+            y_offset_height_multiplier: 0.0,
+            width_multiplier: 5.0 / 3.0,
+            height_multiplier: 1.0,
+        }
+    );
+
+    assert_eq!(plan.resin_craft_rule.min_resin_to_keep, 120);
+    assert_eq!(plan.resin_craft_rule.resin_consumed_per_craft, 60);
+    assert_eq!(plan.resin_craft_rule.max_condensed_resin_count, 5);
+    assert_eq!(plan.resin_craft_rule.reduce_clicks_before_add, 5);
+    assert_eq!(plan.resin_craft_rule.reduce_click_delay_ms, 150);
+    assert_eq!(plan.resin_craft_rule.after_reduce_delay_ms, 300);
+    assert_eq!(plan.resin_craft_rule.add_click_delay_ms, 150);
+    assert_eq!(plan.resin_craft_rule.after_add_delay_ms, 200);
+    assert_eq!(plan.resin_craft_rule.after_white_confirm_delay_ms, 300);
+    assert_eq!(plan.resin_craft_rule.after_craft_delay_ms, 1_300);
+    assert!(
+        plan.resin_craft_rule
+            .direct_confirm_when_min_resin_to_keep_disabled
+    );
+    assert!(plan.resin_craft_rule.escape_after_craft);
+    assert!(plan.resin_craft_rule.formula.contains("fragileResinCount"));
+    assert_eq!(plan.steps.len(), 23);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        GoToCraftingBenchStepAction::Pathing { .. }
+    ));
+    let GoToCraftingBenchStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[2].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 700);
+    assert!(matches!(
+        plan.steps[4].action,
+        GoToCraftingBenchStepAction::InteractionRetry { .. }
+    ));
+    assert!(matches!(
+        plan.steps[5].action,
+        GoToCraftingBenchStepAction::GenshinAction {
+            action: GenshinAction::MoveBackward,
+            press: GoToCraftingBenchActionPress::KeyDown
+        }
+    ));
+    let GoToCraftingBenchStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[6].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 200);
+    assert!(matches!(
+        plan.steps[7].action,
+        GoToCraftingBenchStepAction::GenshinAction {
+            action: GenshinAction::MoveBackward,
+            press: GoToCraftingBenchActionPress::KeyUp
+        }
+    ));
+    assert!(matches!(
+        plan.steps[9].action,
+        GoToCraftingBenchStepAction::SelectLastTalkOptionUntilEnd { .. }
+    ));
+    assert!(matches!(
+        plan.steps[13].action,
+        GoToCraftingBenchStepAction::RecognizeResinCounts { .. }
+    ));
+    let GoToCraftingBenchStepAction::Input { events } = &plan.steps[14].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+    assert!(matches!(
+        plan.steps[15].action,
+        GoToCraftingBenchStepAction::CommonJob { ref task_key, .. }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[16].action,
+        GoToCraftingBenchStepAction::ComputeCraftsNeeded { .. }
+    ));
+    assert!(matches!(
+        plan.steps[17].action,
+        GoToCraftingBenchStepAction::CraftCondensedResin { .. }
+    ));
+    assert!(matches!(
+        plan.steps[18].action,
+        GoToCraftingBenchStepAction::CraftCondensedResin { .. }
+    ));
+    let GoToCraftingBenchStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[19].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 1_300);
+    assert!(matches!(
+        plan.steps[21].action,
+        GoToCraftingBenchStepAction::CommonJob { ref task_key, .. }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[22].action,
+        GoToCraftingBenchStepAction::ReturnResult {
+            result: GoToCraftingBenchStepResult::Completed
+        }
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "country": "璃月",
+        "craftText": "Craft",
+        "minResinToKeep": 0,
+        "interactVk": 0
+    });
+    let Some(CommonJobExecutionPlan::GoToCraftingBench(configured_common)) =
+        plan_common_job(GO_TO_CRAFTING_BENCH_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(configured_common.country, "璃月");
+    assert_eq!(configured_common.localized_texts.craft, "Craft");
+    assert_eq!(configured_common.min_resin_to_keep, 0);
+    assert_eq!(configured_common.interaction_rule.interact_vk, 0x46);
+    assert!(configured_common.pathing_rule.party_config.auto_run_enabled);
+    assert_eq!(
+        configured_common.pathing_rule.pathing_json,
+        "GameTask/Common/Element/Assets/Json/合成台_璃月.json"
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .talk_ui
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 426, 90).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .condensed_resin
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(640, 0, 640, 480).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .fragile_resin_count
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(640, 540, 426, 120).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .condensed_resin_count
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(640, 0, 320, 48).unwrap())
+    );
+    assert!(
+        configured_common
+            .resin_craft_rule
+            .direct_confirm_when_min_resin_to_keep_disabled
+    );
+}
+
+#[derive(Debug, Default)]
+struct FakeGoToCraftingBenchRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    pathing_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    interaction_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    select_page_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    resin_count_outcomes: VecDeque<Option<GoToCraftingBenchResinCounts>>,
+    craft_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    pathing_calls: Vec<GoToCraftingBenchPathingRule>,
+    interaction_calls: Vec<GoToCraftingBenchInteractionRule>,
+    select_page_calls: usize,
+    resin_count_calls: usize,
+    craft_calls: Vec<u8>,
+    logs: Vec<String>,
+}
+
+impl FakeGoToCraftingBenchRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_pathing_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.pathing_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_interaction_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.interaction_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_select_page_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.select_page_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_resin_count_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = Option<GoToCraftingBenchResinCounts>>,
+    ) -> Self {
+        self.resin_count_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_craft_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.craft_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeGoToCraftingBenchRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(false)))
+    }
+}
+
+impl GoToCraftingBenchRuntime for FakeGoToCraftingBenchRuntime {
+    fn execute_crafting_bench_pathing(
+        &mut self,
+        rule: &GoToCraftingBenchPathingRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.pathing_calls.push(rule.clone());
+        Ok(self
+            .pathing_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn retry_crafting_bench_interaction(
+        &mut self,
+        rule: &GoToCraftingBenchInteractionRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.interaction_calls.push(rule.clone());
+        Ok(self
+            .interaction_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn select_last_crafting_bench_talk_option_until_end(
+        &mut self,
+        _until_locator: &BvLocatorPlan,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.select_page_calls += 1;
+        Ok(self
+            .select_page_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn recognize_crafting_bench_resin_counts(
+        &mut self,
+        _rule: &GoToCraftingBenchResinRecognitionRule,
+    ) -> Result<Option<GoToCraftingBenchResinCounts>> {
+        self.resin_count_calls += 1;
+        Ok(self.resin_count_outcomes.pop_front().unwrap_or(None))
+    }
+
+    fn craft_condensed_resin(
+        &mut self,
+        _rule: &GoToCraftingBenchResinCraftRule,
+        crafts_needed: u8,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.craft_calls.push(crafts_needed);
+        Ok(self
+            .craft_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+#[test]
+fn go_to_crafting_bench_executor_directly_crafts_when_min_resin_disabled() {
+    let plan = plan_go_to_crafting_bench(
+        Size::new(1920, 1080),
+        "枫丹",
+        GoToCraftingBenchLocalizedTexts::default(),
+        0,
+        0,
+    )
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToCraftingBenchRuntime::new()
+        .with_locator_matches([true, true, true])
+        .with_pathing_matches([true])
+        .with_select_page_matches([true])
+        .with_craft_matches([true]);
+
+    let report = execute_go_to_crafting_bench_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(GoToCraftingBenchStepResult::Completed)
+    );
+    assert_eq!(report.state.pathing_completed, Some(true));
+    assert_eq!(report.state.talk_ui_detected, Some(true));
+    assert_eq!(report.state.crafting_page_opened, Some(true));
+    assert_eq!(report.state.condensed_resin_visible, Some(true));
+    assert_eq!(report.state.crafts_needed, None);
+    assert!(report.state.crafted);
+    assert_eq!(runtime.craft_calls, vec![1]);
+    assert_eq!(runtime.resin_count_calls, 0);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 1);
+}
+
+#[test]
+fn go_to_crafting_bench_executor_recognizes_counts_and_crafts_needed_amount() {
+    let plan = plan_go_to_crafting_bench(
+        Size::new(1920, 1080),
+        "璃月",
+        GoToCraftingBenchLocalizedTexts::default(),
+        120,
+        0,
+    )
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let counts = GoToCraftingBenchResinCounts {
+        fragile_resin_count: 260,
+        condensed_resin_count: 2,
+    };
+    let mut runtime = FakeGoToCraftingBenchRuntime::new()
+        .with_locator_matches([false, true, true])
+        .with_pathing_matches([true])
+        .with_interaction_matches([true])
+        .with_select_page_matches([true])
+        .with_resin_count_outcomes([Some(counts)])
+        .with_craft_matches([true]);
+
+    let report = execute_go_to_crafting_bench_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.talk_ui_detected, Some(true));
+    assert_eq!(report.state.interaction_retry_succeeded, Some(true));
+    assert_eq!(report.state.resin_counts, Some(counts));
+    assert_eq!(report.state.crafts_needed, Some(2));
+    assert!(report.state.crafted);
+    assert_eq!(runtime.interaction_calls.len(), 1);
+    assert_eq!(runtime.resin_count_calls, 1);
+    assert_eq!(runtime.craft_calls, vec![2]);
+}
+
+#[test]
+fn go_to_crafting_bench_executor_skips_crafting_when_condensed_resin_is_missing() {
+    let plan = plan_go_to_crafting_bench(
+        Size::new(1920, 1080),
+        "蒙德",
+        GoToCraftingBenchLocalizedTexts::default(),
+        120,
+        0,
+    )
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToCraftingBenchRuntime::new()
+        .with_locator_matches([true, false, true])
+        .with_pathing_matches([true])
+        .with_select_page_matches([true]);
+
+    let report = execute_go_to_crafting_bench_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.condensed_resin_visible, Some(false));
+    assert_eq!(report.state.crafts_needed, None);
+    assert!(!report.state.crafted);
+    assert!(runtime.craft_calls.is_empty());
+    assert_eq!(runtime.resin_count_calls, 0);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 1);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == GoToCraftingBenchStepCondition::WhenCondensedResinVisible
+            && step.reason == GoToCraftingBenchSkipReason::CondensedResinMissing
+    }));
+}
+
+#[test]
+fn go_to_serenitea_pot_plan_preserves_legacy_entry_reward_shop_and_finish_flow() {
+    let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, GO_TO_SERENITEA_POT_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(
+        plan.selected_config_name,
+        GO_TO_SERENITEA_POT_DEFAULT_CONFIG_NAME
+    );
+    assert_eq!(plan.legacy_tp_type, GO_TO_SERENITEA_POT_MAP_TP_TYPE);
+    assert_eq!(plan.entry_mode, GoToSereniteaPotEntryMode::MapTeleport);
+    assert_eq!(
+        plan.config_rule.one_dragon_config_folder,
+        GO_TO_SERENITEA_POT_ONE_DRAGON_FOLDER
+    );
+    assert_eq!(plan.map_entry_rule.area_name, GO_TO_SERENITEA_POT_AREA_NAME);
+    assert_eq!(
+        plan.map_entry_rule.dong_tian_name_ocr.roi,
+        Rect::new(1651, 972, 140, 43).unwrap()
+    );
+    assert_eq!(plan.map_entry_rule.home_zoom_attempts, 5);
+    assert_eq!(plan.map_entry_rule.zoom_start_level, 2.5);
+    assert_eq!(plan.map_entry_rule.zoom_level_step, -0.2);
+    assert_eq!(plan.map_entry_rule.teleport_attempts, 10);
+    assert_eq!(plan.map_entry_rule.teleport_button_disappear_checks, 10);
+    assert_eq!(plan.map_entry_rule.teleport_button_disappear_wait_ms, 500);
+
+    assert_eq!(plan.bag_entry_rule.wait_after_quick_task_ms, 5_000);
+    assert!(plan.bag_entry_rule.wait_main_ui);
+    assert_eq!(plan.bag_entry_rule.close_map_toggle_attempts, 4);
+    assert_eq!(
+        plan.find_ayuan_rule.search_ocr.roi,
+        Rect::new(384, 72, 1248, 540).unwrap()
+    );
+    assert_eq!(plan.find_ayuan_rule.max_missing_rotations, 180);
+    assert_eq!(
+        plan.find_ayuan_rule.horizontal_tolerance_width_multiplier,
+        1.4
+    );
+    assert_eq!(plan.find_ayuan_rule.missing_rotate_width_ratio, 0.1);
+    assert_eq!(plan.find_ayuan_rule.target_y_max_ratio, 0.25);
+    assert_eq!(plan.find_ayuan_rule.target_y_offset_px, 100);
+    assert_eq!(plan.find_ayuan_rule.drop_interval_ms, 50);
+    assert!(plan
+        .find_ayuan_rule
+        .accepted_texts
+        .contains(&"阿圆".to_string()));
+    assert!(plan
+        .find_ayuan_rule
+        .accepted_texts
+        .contains(&"<壶灵>".to_string()));
+    assert!(plan
+        .find_ayuan_rule
+        .realm_adjustments
+        .iter()
+        .any(|adjustment| adjustment.realm_name == "绘绮庭" && adjustment.actions.len() == 3));
+
+    assert_eq!(
+        plan.reward_rule.companion_available_regex,
+        r"(\d+)\s*[/17]\s*(8)"
+    );
+    assert_eq!(
+        plan.reward_rule.no_companion_exp_ocr.roi,
+        Rect::new(672, 486, 576, 54).unwrap()
+    );
+    assert_eq!(plan.reward_rule.trust_option_text, "信任");
+    assert_eq!(
+        plan.reward_rule.money_locator.operation,
+        BvLocatorOperation::Click
+    );
+
+    assert_eq!(plan.shop_rule.server_day_start_hour, 4);
+    assert_eq!(plan.shop_rule.purchase_retries, 2);
+    assert_eq!(plan.shop_rule.sold_out_text, "已售");
+    assert_eq!(
+        plan.shop_rule.sold_out_ocr.roi,
+        Rect::new(1344, 378, 384, 162).unwrap()
+    );
+    assert!(plan
+        .shop_rule
+        .valid_day_labels
+        .iter()
+        .any(|day| day.label == "星期日" && day.day_of_week == GoToSereniteaPotDayOfWeek::Sunday));
+    let mora = plan
+        .shop_rule
+        .items
+        .iter()
+        .find(|item| item.item == GoToSereniteaPotShopItem::Mora)
+        .unwrap();
+    assert_eq!(mora.asset, "Common/Element:ayuan_mola.png");
+    assert_eq!(
+        mora.locator.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 1344, 1080).unwrap())
+    );
+    assert!(plan.shop_rule.buy_max_rule.escape_after_confirm);
+
+    assert_eq!(
+        plan.finish_rule.final_teleport_x,
+        GO_TO_SERENITEA_POT_FINAL_TP_X
+    );
+    assert_eq!(
+        plan.finish_rule.final_teleport_y,
+        GO_TO_SERENITEA_POT_FINAL_TP_Y
+    );
+    assert_eq!(plan.finish_rule.goodbye_skip_times, 20);
+    assert_eq!(plan.finish_rule.teleport_task_key, TELEPORT_TASK_KEY);
+
+    assert_eq!(
+        plan.locators
+            .serenitea_pot_home
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_SERENITEA_POT_HOME)
+    );
+    assert_eq!(
+        plan.locators
+            .serenitea_pot_home
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 1920, 1080).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .teleport_serenitea_pot_home
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 540, 960, 540).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .teleport_button
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(GO_TO_SERENITEA_POT_TELEPORT_BUTTON)
+    );
+    assert_eq!(
+        plan.locators.love.recognition_object.region_of_interest,
+        Some(Rect::new(1680, 540, 240, 270).unwrap())
+    );
+    assert_eq!(
+        plan.locators.money.recognition_object.region_of_interest,
+        Some(Rect::new(960, 810, 480, 270).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .pot_page_close
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 216, 480, 135).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .page_close_white
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(1680, 0, 240, 135).unwrap())
+    );
+
+    assert_eq!(plan.steps.len(), 13);
+    assert!(matches!(
+        plan.steps[1].action,
+        GoToSereniteaPotStepAction::MapEntry { .. }
+    ));
+    assert!(matches!(
+        plan.steps[2].action,
+        GoToSereniteaPotStepAction::BagEntry { .. }
+    ));
+    assert!(matches!(
+        plan.steps[4].action,
+        GoToSereniteaPotStepAction::FindAYuan { .. }
+    ));
+    assert!(matches!(
+        plan.steps[6].action,
+        GoToSereniteaPotStepAction::Reward { .. }
+    ));
+    assert!(matches!(
+        plan.steps[7].action,
+        GoToSereniteaPotStepAction::ShopPurchase { .. }
+    ));
+    assert!(matches!(
+        plan.steps[9].action,
+        GoToSereniteaPotStepAction::Finish { .. }
+    ));
+    assert!(matches!(
+        plan.steps[10].action,
+        GoToSereniteaPotStepAction::ReleaseAllKeys
+    ));
+    assert!(matches!(
+        plan.steps[11].action,
+        GoToSereniteaPotStepAction::ClearVisionDrawings
+    ));
+    assert!(matches!(
+        plan.steps[12].action,
+        GoToSereniteaPotStepAction::ReturnResult {
+            result: GoToSereniteaPotStepResult::Completed
+        }
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "selectedConfigName": "洞天周购",
+        "sereniteaPotTpType": "尘歌壶道具",
+        "secretTreasureObjects": ["星期一", "摩拉", "祝圣精华"]
+    });
+    let Some(CommonJobExecutionPlan::GoToSereniteaPot(configured_common)) =
+        plan_common_job(GO_TO_SERENITEA_POT_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(configured_common.selected_config_name, "洞天周购");
+    assert_eq!(
+        configured_common.entry_mode,
+        GoToSereniteaPotEntryMode::BagGadget
+    );
+    assert_eq!(
+        configured_common.secret_treasure_objects,
+        vec![
+            "星期一".to_string(),
+            "摩拉".to_string(),
+            "祝圣精华".to_string()
+        ]
+    );
+    assert_eq!(
+        configured_common.map_entry_rule.dong_tian_name_ocr.roi,
+        Rect::new(1101, 648, 93, 29).unwrap()
+    );
+    assert_eq!(
+        configured_common.find_ayuan_rule.search_ocr.roi,
+        Rect::new(256, 48, 832, 360).unwrap()
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .page_close_white
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(1120, 0, 160, 90).unwrap())
+    );
+}
+
+#[derive(Debug, Default)]
+struct FakeGoToSereniteaPotRuntime {
+    map_entry_outcomes: VecDeque<GoToSereniteaPotEntryOutcome>,
+    bag_entry_outcomes: VecDeque<GoToSereniteaPotEntryOutcome>,
+    ayuan_outcomes: VecDeque<bool>,
+    reward_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    shop_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    finish_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    release_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    clear_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    map_entry_calls: Vec<GoToSereniteaPotMapEntryRule>,
+    bag_entry_calls: Vec<GoToSereniteaPotBagEntryRule>,
+    ayuan_calls: Vec<(GoToSereniteaPotFindAYuanRule, Option<String>)>,
+    reward_calls: Vec<GoToSereniteaPotRewardRule>,
+    shop_calls: Vec<(GoToSereniteaPotShopRule, Vec<String>)>,
+    finish_calls: Vec<GoToSereniteaPotFinishRule>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    logs: Vec<String>,
+}
+
+impl FakeGoToSereniteaPotRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_map_entries(
+        mut self,
+        outcomes: impl IntoIterator<Item = GoToSereniteaPotEntryOutcome>,
+    ) -> Self {
+        self.map_entry_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_bag_entries(
+        mut self,
+        outcomes: impl IntoIterator<Item = GoToSereniteaPotEntryOutcome>,
+    ) -> Self {
+        self.bag_entry_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_ayuan_found(mut self, values: impl IntoIterator<Item = bool>) -> Self {
+        self.ayuan_outcomes = values.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeGoToSereniteaPotRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+}
+
+impl GoToSereniteaPotRuntime for FakeGoToSereniteaPotRuntime {
+    fn enter_serenitea_pot_by_map(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> Result<GoToSereniteaPotEntryOutcome> {
+        self.map_entry_calls.push(rule.clone());
+        Ok(self
+            .map_entry_outcomes
+            .pop_front()
+            .unwrap_or_else(|| GoToSereniteaPotEntryOutcome::entered("绘绮庭")))
+    }
+
+    fn enter_serenitea_pot_by_bag(
+        &mut self,
+        rule: &GoToSereniteaPotBagEntryRule,
+    ) -> Result<GoToSereniteaPotEntryOutcome> {
+        self.bag_entry_calls.push(rule.clone());
+        Ok(self
+            .bag_entry_outcomes
+            .pop_front()
+            .unwrap_or_else(|| GoToSereniteaPotEntryOutcome::entered("妙香林")))
+    }
+
+    fn find_and_approach_serenitea_pot_ayuan(
+        &mut self,
+        rule: &GoToSereniteaPotFindAYuanRule,
+        realm_name: Option<&str>,
+    ) -> Result<bool> {
+        self.ayuan_calls
+            .push((rule.clone(), realm_name.map(ToString::to_string)));
+        Ok(self.ayuan_outcomes.pop_front().unwrap_or(true))
+    }
+
+    fn claim_serenitea_pot_rewards(
+        &mut self,
+        rule: &GoToSereniteaPotRewardRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.reward_calls.push(rule.clone());
+        Ok(self
+            .reward_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn purchase_serenitea_pot_shop(
+        &mut self,
+        rule: &GoToSereniteaPotShopRule,
+        configured_objects: &[String],
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.shop_calls
+            .push((rule.clone(), configured_objects.to_vec()));
+        Ok(self
+            .shop_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn finish_serenitea_pot(
+        &mut self,
+        rule: &GoToSereniteaPotFinishRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.finish_calls.push(rule.clone());
+        Ok(self
+            .finish_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn release_serenitea_pot_keys(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        Ok(self
+            .release_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn clear_serenitea_pot_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        Ok(self
+            .clear_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+#[test]
+fn go_to_serenitea_pot_executor_runs_map_entry_reward_shop_and_finish() {
+    let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig {
+        secret_treasure_objects: vec!["每天重复".to_string(), "摩拉".to_string()],
+        ..GoToSereniteaPotExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToSereniteaPotRuntime::new()
+        .with_map_entries([GoToSereniteaPotEntryOutcome::entered("绘绮庭")]);
+
+    let report = execute_go_to_serenitea_pot_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(GoToSereniteaPotStepResult::Completed)
+    );
+    assert_eq!(report.state.entry_succeeded, Some(true));
+    assert_eq!(report.state.entry_realm_name.as_deref(), Some("绘绮庭"));
+    assert_eq!(report.state.ayuan_found, Some(true));
+    assert_eq!(report.state.rewards_claimed, Some(true));
+    assert_eq!(report.state.shop_purchase_completed, Some(true));
+    assert_eq!(report.state.final_finish_completed, Some(true));
+    assert!(report.state.keys_released);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.map_entry_calls.len(), 1);
+    assert!(runtime.bag_entry_calls.is_empty());
+    assert_eq!(runtime.ayuan_calls[0].1.as_deref(), Some("绘绮庭"));
+    assert_eq!(runtime.reward_calls.len(), 1);
+    assert_eq!(runtime.shop_calls.len(), 1);
+    assert_eq!(
+        runtime.shop_calls[0].1,
+        vec!["每天重复".to_string(), "摩拉".to_string()]
+    );
+    assert_eq!(runtime.finish_calls.len(), 1);
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == GoToSereniteaPotSkipReason::BagGadgetNotConfigured }));
+}
+
+#[test]
+fn go_to_serenitea_pot_executor_finishes_when_bag_entry_fails() {
+    let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig {
+        serenitea_pot_tp_type: GO_TO_SERENITEA_POT_BAG_TP_TYPE.to_string(),
+        secret_treasure_objects: vec!["摩拉".to_string()],
+        ..GoToSereniteaPotExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToSereniteaPotRuntime::new()
+        .with_bag_entries([GoToSereniteaPotEntryOutcome::failed()]);
+
+    let report = execute_go_to_serenitea_pot_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.entry_succeeded, Some(false));
+    assert_eq!(report.state.ayuan_found, None);
+    assert_eq!(report.state.rewards_claimed, None);
+    assert_eq!(report.state.shop_purchase_completed, None);
+    assert_eq!(report.state.entry_failure_finish_completed, Some(true));
+    assert_eq!(report.state.final_finish_completed, Some(true));
+    assert!(runtime.map_entry_calls.is_empty());
+    assert_eq!(runtime.bag_entry_calls.len(), 1);
+    assert!(runtime.ayuan_calls.is_empty());
+    assert!(runtime.reward_calls.is_empty());
+    assert!(runtime.shop_calls.is_empty());
+    assert_eq!(runtime.finish_calls.len(), 2);
+}
+
+#[test]
+fn go_to_serenitea_pot_executor_finishes_when_ayuan_is_missing() {
+    let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig {
+        secret_treasure_objects: vec!["摩拉".to_string()],
+        ..GoToSereniteaPotExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToSereniteaPotRuntime::new().with_ayuan_found([false]);
+
+    let report = execute_go_to_serenitea_pot_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.entry_succeeded, Some(true));
+    assert_eq!(report.state.ayuan_found, Some(false));
+    assert_eq!(report.state.rewards_claimed, None);
+    assert_eq!(report.state.shop_purchase_completed, None);
+    assert_eq!(report.state.ayuan_missing_finish_completed, Some(true));
+    assert_eq!(report.state.final_finish_completed, Some(true));
+    assert_eq!(runtime.map_entry_calls.len(), 1);
+    assert_eq!(runtime.ayuan_calls.len(), 1);
+    assert!(runtime.reward_calls.is_empty());
+    assert!(runtime.shop_calls.is_empty());
+    assert_eq!(runtime.finish_calls.len(), 2);
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| step.reason == GoToSereniteaPotSkipReason::AYuanMissing));
+}
+
+#[test]
+fn teleport_plan_preserves_script_host_payloads_with_injectable_executor() {
+    let config = serde_json::json!({
+        "x": 100.5,
+        "y": 200.25,
+        "mapName": null,
+        "force": true
+    });
+    let Some(CommonJobExecutionPlan::Teleport(plan)) =
+        plan_common_job(TELEPORT_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(plan.task_key, TELEPORT_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.kind, TeleportPlanKind::CoordinateTeleport);
+    assert!(plan.force);
+    assert_eq!(plan.force_country, None);
+    let target = plan.target.as_ref().unwrap();
+    assert_eq!((target.x, target.y), (100.5, 200.25));
+    assert_eq!(target.map_name, None);
+    assert!(plan.preflight.open_big_map_ui);
+    assert!(plan.preflight.verify_big_map_ui);
+    assert!(plan.preflight.normalize_underground_map);
+    assert_eq!(plan.retry_rule.max_attempts, 3);
+    assert_eq!(
+        plan.retry_rule.point_not_activated_policy,
+        TeleportFailurePolicy::ContinueAfterPointNotActivated
+    );
+    assert_eq!(
+        plan.map_rule.tp_json_asset,
+        "GameTask/AutoTrackPath/Assets/tp.json"
+    );
+    assert!(plan.map_rule.uses_map_matching);
+    assert!(plan.map_rule.uses_coordinate_conversion);
+    assert_eq!(
+        plan.quick_teleport_rule.asset_root,
+        "GameTask/QuickTeleport/Assets"
+    );
+    assert!(plan.quick_teleport_rule.detects_teleport_button);
+    assert!(plan
+        .pending_native
+        .contains(&TeleportNativeDependency::MapMatching));
+    assert!(plan
+        .pending_native
+        .contains(&TeleportNativeDependency::QuickTeleportPanelRecognition));
+    assert!(plan.steps.len() > 10);
+    assert!(plan
+        .steps
+        .iter()
+        .any(|step| matches!(&step.action, TeleportStepAction::OpenBigMapUi)));
+    assert!(plan.steps.iter().any(|step| {
+        match &step.action {
+            TeleportStepAction::ResolveCoordinateTarget {
+                target,
+                force: true,
+            } => target.x == 100.5 && target.y == 200.25,
+            _ => false,
+        }
+    }));
+    assert!(plan.steps.iter().any(|step| {
+        match &step.action {
+            TeleportStepAction::ResolveNearestTeleportPoint {
+                target,
+                force: true,
+            } => target.x == 100.5 && target.y == 200.25,
+            _ => false,
+        }
+    }));
+    assert!(plan
+        .steps
+        .iter()
+        .any(|step| matches!(&step.action, TeleportStepAction::ClickMapTeleportPoint)));
+    assert!(plan.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::ClickTeleportPanelOrCandidate {
+            allow_candidate_fallback: true
+        }
+    )));
+    assert!(plan.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::WaitForTeleportCompletion {
+            max_attempts: 50,
+            delay_ms: 1_200,
+            failure_policy: TeleportFailurePolicy::WarningOnly
+        }
+    )));
+    assert!(plan.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::SeedNavigationPreviousPositionAfterTeleport { .. }
+    )));
+    assert!(plan.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::ReturnResult {
+            result: TeleportStepResult::Planned
+        }
+    )));
+    assert!(CommonJobExecutionPlan::Teleport(plan.clone()).executor_ready());
+
+    let move_map_config = serde_json::json!({
+        "kind": "moveMapTo",
+        "x": 1.0,
+        "y": 2.0,
+        "mapName": "Teyvat",
+        "forceCountry": "璃月"
+    });
+    let Some(CommonJobExecutionPlan::Teleport(move_map)) =
+        plan_common_job(TELEPORT_TASK_KEY, Some(&move_map_config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(move_map.kind, TeleportPlanKind::MoveMapTo);
+    assert_eq!(move_map.force_country.as_deref(), Some("璃月"));
+    let move_target = move_map.target.as_ref().unwrap();
+    assert_eq!((move_target.x, move_target.y), (1.0, 2.0));
+    assert_eq!(move_target.map_name.as_deref(), Some("Teyvat"));
+    assert!(move_map.steps.iter().any(|step| {
+        match &step.action {
+            TeleportStepAction::MoveMapTo {
+                target,
+                force_country,
+            } => target.x == 1.0 && target.y == 2.0 && force_country.as_deref() == Some("璃月"),
+            _ => false,
+        }
+    }));
+    assert!(!move_map.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::WaitForTeleportCompletion { .. }
+    )));
+
+    let statue_config = serde_json::json!({ "kind": "statueOfTheSeven" });
+    let Some(CommonJobExecutionPlan::Teleport(statue)) =
+        plan_common_job(TELEPORT_TASK_KEY, Some(&statue_config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(statue.kind, TeleportPlanKind::StatueOfTheSeven);
+    assert_eq!(statue.target, None);
+    assert!(statue
+        .steps
+        .iter()
+        .any(|step| matches!(&step.action, TeleportStepAction::SelectStatueOfTheSeven)));
+
+    let missing_x = serde_json::json!({ "y": 2.0 });
+    let error = plan_common_job(TELEPORT_TASK_KEY, Some(&missing_x)).unwrap_err();
+    assert!(matches!(
+        error,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == TELEPORT_TASK_KEY && message.contains("x is required")
+    ));
+    let missing_y = serde_json::json!({ "kind": "moveMapTo", "x": 1.0 });
+    let error = plan_common_job(TELEPORT_TASK_KEY, Some(&missing_y)).unwrap_err();
+    assert!(matches!(
+        error,
+        TaskError::InvalidTaskConfig { key, message }
+            if key == TELEPORT_TASK_KEY && message.contains("y is required")
+    ));
+}
+
+#[derive(Debug, Default)]
+struct FakeTeleportRuntime {
+    outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    actions: Vec<TeleportStepAction>,
+    logs: Vec<String>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+}
+
+impl FakeTeleportRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeTeleportRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+}
+
+impl TeleportRuntime for FakeTeleportRuntime {
+    fn execute_teleport_action(
+        &mut self,
+        action: &TeleportStepAction,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.actions.push(action.clone());
+        Ok(self
+            .outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+#[test]
+fn teleport_executor_runs_coordinate_teleport_state_machine() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({
+            "x": 100.5,
+            "y": 200.25,
+            "force": true
+        })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let mut runtime = FakeTeleportRuntime::new();
+
+    let report = execute_teleport_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(TeleportStepResult::Planned));
+    assert!(report.state.big_map_open_requested);
+    assert!(report.state.big_map_verified);
+    assert!(report.state.coordinate_target_resolved);
+    assert!(report.state.nearest_teleport_point_resolved);
+    assert!(report.state.country_or_map_switched);
+    assert!(report.state.underground_map_normalized);
+    assert!(report.state.zoom_level_read);
+    assert!(report.state.zoom_level_adjusted);
+    assert!(report.state.big_map_center_recognized);
+    assert!(report.state.big_map_rect_recognized);
+    assert!(report.state.big_map_dragged);
+    assert!(report.state.target_point_verified);
+    assert!(report.state.screen_point_converted);
+    assert!(report.state.map_teleport_point_clicked);
+    assert!(report.state.teleport_panel_clicked);
+    assert!(report.state.point_not_activated_handled);
+    assert!(report.state.teleport_completion_waited);
+    assert!(report.state.navigation_previous_position_seeded);
+    assert!(runtime
+        .actions
+        .iter()
+        .any(|action| matches!(action, TeleportStepAction::WaitForTeleportCompletion { .. })));
+    assert_eq!(report.executed_steps.len(), plan.steps.len());
+}
+
+#[test]
+fn teleport_executor_runs_move_map_without_completion_wait() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({
+            "kind": "moveMapTo",
+            "x": 1.0,
+            "y": 2.0,
+            "mapName": "Teyvat",
+            "forceCountry": "璃月"
+        })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let mut runtime = FakeTeleportRuntime::new();
+
+    let report = execute_teleport_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.move_map_completed);
+    assert!(!report.state.teleport_completion_waited);
+    assert!(!report.state.navigation_previous_position_seeded);
+    assert!(runtime
+        .actions
+        .iter()
+        .any(|action| matches!(action, TeleportStepAction::MoveMapTo { .. })));
+    assert!(!runtime
+        .actions
+        .iter()
+        .any(|action| matches!(action, TeleportStepAction::ClickMapTeleportPoint)));
+}
+
+#[test]
+fn teleport_executor_runs_statue_of_the_seven_flow() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({ "kind": "statueOfTheSeven" })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let mut runtime = FakeTeleportRuntime::new().with_matches(std::iter::repeat(true).take(20));
+
+    let report = execute_teleport_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.big_map_open_requested);
+    assert!(report.state.big_map_verified);
+    assert!(report.state.statue_selected);
+    assert!(report.state.teleport_panel_clicked);
+    assert!(report.state.teleport_completion_waited);
+    assert!(!report.state.map_teleport_point_clicked);
+    assert!(!report.state.nearest_teleport_point_resolved);
+}
+
+#[test]
+fn walk_to_f_plan_preserves_legacy_hold_detect_press_and_release_flow() {
+    let plan = plan_walk_to_f(WalkToFExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, WALK_TO_F_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert!(plan.need_press);
+    assert!(!plan.run_to_f);
+    assert_eq!(plan.timeout_ms, WALK_TO_F_DEFAULT_TIMEOUT_MS);
+    assert_eq!(
+        plan.retry_rule,
+        WalkToFRetryRule {
+            max_attempts: 301,
+            interval_ms: WALK_TO_F_RETRY_INTERVAL_MS
+        }
+    );
+    assert_eq!(plan.pick_locator.operation, BvLocatorOperation::WaitFor);
+    assert_eq!(
+        plan.pick_locator.recognition_object.name.as_deref(),
+        Some(WALK_TO_F_PICK_KEY)
+    );
+    assert_eq!(plan.pick_locator.timeout_ms, WALK_TO_F_DEFAULT_TIMEOUT_MS);
+    assert_eq!(plan.steps.len(), 12);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        WalkToFStepAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: WalkToFActionPress::KeyDown
+        }
+    ));
+    assert!(matches!(
+        plan.steps[2].action,
+        WalkToFStepAction::Page {
+            command: BvPageCommand::Wait {
+                milliseconds: WALK_TO_F_MOVE_START_DELAY_MS
+            }
+        }
+    ));
+    assert_eq!(plan.steps[3].condition, WalkToFStepCondition::WhenRunToF);
+    assert!(matches!(
+        plan.steps[3].action,
+        WalkToFStepAction::GenshinAction {
+            action: GenshinAction::SprintKeyboard,
+            press: WalkToFActionPress::KeyDown
+        }
+    ));
+    assert!(matches!(
+        plan.steps[4].action,
+        WalkToFStepAction::Locator { .. }
+    ));
+    let WalkToFStepAction::Input { events } = &plan.steps[5].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: WALK_TO_F_VK_F,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: WALK_TO_F_VK_F,
+                extended: None
+            }
+        ]
+    );
+    assert!(matches!(
+        plan.steps[6].action,
+        WalkToFStepAction::ReturnResult {
+            result: WalkToFStepResult::PickDetectedAndPressed
+        }
+    ));
+    assert!(matches!(
+        plan.steps[8].action,
+        WalkToFStepAction::ReturnResult {
+            result: WalkToFStepResult::Timeout
+        }
+    ));
+    assert!(matches!(
+        plan.steps[9].action,
+        WalkToFStepAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: WalkToFActionPress::KeyUp
+        }
+    ));
+    assert!(matches!(
+        plan.steps[10].action,
+        WalkToFStepAction::Page {
+            command: BvPageCommand::Wait {
+                milliseconds: WALK_TO_F_RELEASE_GAP_MS
+            }
+        }
+    ));
+    assert!(matches!(
+        plan.steps[11].action,
+        WalkToFStepAction::GenshinAction {
+            action: GenshinAction::SprintKeyboard,
+            press: WalkToFActionPress::KeyUp
+        }
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "needPress": false,
+        "runToF": true,
+        "timeoutMs": 2500,
+        "pickVk": 69
+    });
+    let Some(CommonJobExecutionPlan::WalkToF(configured_common)) =
+        plan_common_job(WALK_TO_F_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert!(!configured_common.need_press);
+    assert!(configured_common.run_to_f);
+    assert_eq!(configured_common.timeout_ms, 2_500);
+    assert_eq!(
+        configured_common.retry_rule,
+        WalkToFRetryRule {
+            max_attempts: 26,
+            interval_ms: WALK_TO_F_RETRY_INTERVAL_MS
+        }
+    );
+    let WalkToFStepAction::Input { events } = &configured_common.steps[5].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: 69,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: 69,
+                extended: None
+            }
+        ]
+    );
+}
+
+#[test]
+fn walk_to_f_executor_presses_pick_and_releases_move_forward_when_detected() {
+    let plan = plan_walk_to_f(WalkToFExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true]);
+
+    let report = execute_walk_to_f_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(WalkToFStepResult::PickDetectedAndPressed)
+    );
+    assert!(report.state.pick_detected);
+    assert!(!report.state.move_forward_held);
+    assert!(!report.state.sprint_held);
+    assert_eq!(runtime.locator_calls.len(), 1);
+    assert_eq!(runtime.input_batches.len(), 3);
+    assert_eq!(
+        runtime.input_batches[0],
+        vec![InputEvent::KeyDown {
+            vk: KeyId::W.vk(),
+            extended: None
+        }]
+    );
+    assert_eq!(
+        runtime.input_batches[1],
+        vec![
+            InputEvent::KeyDown {
+                vk: WALK_TO_F_VK_F,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: WALK_TO_F_VK_F,
+                extended: None
+            }
+        ]
+    );
+    assert_eq!(
+        runtime.input_batches[2],
+        vec![InputEvent::KeyUp {
+            vk: KeyId::W.vk(),
+            extended: None
+        }]
+    );
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == WalkToFStepCondition::WhenRunToF
+            && step.reason == WalkToFSkipReason::RunToFDisabled
+    }));
+}
+
+#[test]
+fn walk_to_f_executor_returns_detected_without_press_when_press_is_disabled() {
+    let plan = plan_walk_to_f(WalkToFExecutionConfig {
+        need_press: false,
+        ..WalkToFExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true]);
+
+    let report = execute_walk_to_f_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(WalkToFStepResult::PickDetectedWithoutPress)
+    );
+    assert_eq!(runtime.input_batches.len(), 2);
+    assert!(!runtime.input_batches.iter().any(|events| {
+        events.iter().any(|event| {
+            matches!(
+                event,
+                InputEvent::KeyDown {
+                    vk: WALK_TO_F_VK_F,
+                    ..
+                } | InputEvent::KeyUp {
+                    vk: WALK_TO_F_VK_F,
+                    ..
+                }
+            )
+        })
+    }));
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == WalkToFStepCondition::WhenNeedPressAndPickDetected
+            && step.reason == WalkToFSkipReason::NeedPressDisabled
+    }));
+}
+
+#[test]
+fn walk_to_f_executor_times_out_and_releases_sprint() {
+    let plan = plan_walk_to_f(WalkToFExecutionConfig {
+        run_to_f: true,
+        ..WalkToFExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false]);
+
+    let report = execute_walk_to_f_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(WalkToFStepResult::Timeout));
+    assert!(!report.state.pick_detected);
+    assert!(!report.state.move_forward_held);
+    assert!(!report.state.sprint_held);
+    assert_eq!(runtime.input_batches.len(), 4);
+    assert_eq!(
+        runtime.input_batches[0],
+        vec![InputEvent::KeyDown {
+            vk: KeyId::W.vk(),
+            extended: None
+        }]
+    );
+    assert_eq!(
+        runtime.input_batches[1],
+        vec![InputEvent::KeyDown {
+            vk: KeyId::LEFT_SHIFT.vk(),
+            extended: None
+        }]
+    );
+    assert_eq!(
+        runtime.input_batches[2],
+        vec![InputEvent::KeyUp {
+            vk: KeyId::W.vk(),
+            extended: None
+        }]
+    );
+    assert_eq!(
+        runtime.input_batches[3],
+        vec![InputEvent::KeyUp {
+            vk: KeyId::LEFT_SHIFT.vk(),
+            extended: None
+        }]
+    );
+}
+
+#[test]
+fn lower_head_then_walk_to_plan_preserves_legacy_tracking_and_activation_flow() {
+    let plan = plan_lower_head_then_walk_to(LowerHeadThenWalkToExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, LOWER_HEAD_THEN_WALK_TO_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.target_mat_name, LOWER_HEAD_THEN_WALK_TO_DEFAULT_TARGET);
+    assert_eq!(plan.timeout_ms, LOWER_HEAD_THEN_WALK_TO_DEFAULT_TIMEOUT_MS);
+    assert_eq!(
+        plan.locators.track_point.recognition_object.name.as_deref(),
+        Some("Common/Element:chest_tip.png")
+    );
+    assert_eq!(
+        plan.locators
+            .track_point
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(300, 0, 1320, 1080).unwrap())
+    );
+    assert_eq!(
+        plan.locators.track_point.operation,
+        BvLocatorOperation::IsExist
+    );
+    assert_eq!(plan.locators.track_point.timeout_ms, 1_000);
+    assert_eq!(
+        plan.locators.pick_key.recognition_object.name.as_deref(),
+        Some(LOWER_HEAD_THEN_WALK_TO_PICK_KEY)
+    );
+    assert_eq!(
+        plan.locators.pick_key.operation,
+        BvLocatorOperation::IsExist
+    );
+
+    assert_eq!(plan.movement_rule.center_y_threshold_ratio, 0.5);
+    assert_eq!(plan.movement_rule.target_below_center_mouse_dx, -50);
+    assert!(plan.movement_rule.target_below_center_release_forward);
+    assert_eq!(plan.movement_rule.direction_divisor, 8.0);
+    assert_eq!(plan.movement_rule.small_turn_threshold, 10);
+    assert_eq!(plan.movement_rule.medium_turn_min_abs, 10);
+    assert_eq!(plan.movement_rule.medium_turn_max_abs, 50);
+    assert_eq!(plan.movement_rule.small_turn_boost, 10);
+    assert_eq!(plan.movement_rule.medium_turn_boost, 80);
+    assert!(
+        plan.movement_rule
+            .press_forward_when_move_zero_or_direction_reversed
+    );
+    assert_eq!(plan.movement_rule.look_down_mouse_dx, 0);
+    assert_eq!(plan.movement_rule.look_down_mouse_dy, 800);
+    assert_eq!(
+        plan.movement_rule.loop_delay_ms,
+        LOWER_HEAD_THEN_WALK_TO_LOOP_DELAY_MS
+    );
+
+    assert_eq!(plan.f_key_rule.text_x_offset_1080p, 115);
+    assert_eq!(plan.f_key_rule.text_width_1080p, 285);
+    assert_eq!(plan.f_key_rule.min_white_bounding_width, 5);
+    assert_eq!(plan.f_key_rule.min_white_bounding_height, 5);
+    assert_eq!(
+        plan.f_key_rule.activation_text,
+        LOWER_HEAD_THEN_WALK_TO_ACTIVATION_TEXT
+    );
+    assert_eq!(plan.steps.len(), 8);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        LowerHeadThenWalkToStepAction::Locator { .. }
+    ));
+    let LowerHeadThenWalkToStepAction::TrackingLoop {
+        target_locator,
+        movement_rule,
+        f_key_rule,
+    } = &plan.steps[2].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        target_locator.recognition_object.name.as_deref(),
+        Some("Common/Element:chest_tip.png")
+    );
+    assert_eq!(movement_rule.look_down_mouse_dy, 800);
+    assert_eq!(
+        f_key_rule
+            .pick_key_locator
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(LOWER_HEAD_THEN_WALK_TO_PICK_KEY)
+    );
+    assert!(matches!(
+        plan.steps[3].action,
+        LowerHeadThenWalkToStepAction::ReturnResult {
+            result: LowerHeadThenWalkToStepResult::Activated
+        }
+    ));
+    assert!(matches!(
+        plan.steps[4].action,
+        LowerHeadThenWalkToStepAction::ReturnResult {
+            result: LowerHeadThenWalkToStepResult::InitialTargetMissing
+        }
+    ));
+    assert!(matches!(
+        plan.steps[5].action,
+        LowerHeadThenWalkToStepAction::ReturnResult {
+            result: LowerHeadThenWalkToStepResult::Timeout
+        }
+    ));
+    assert!(matches!(
+        plan.steps[6].action,
+        LowerHeadThenWalkToStepAction::GenshinAction {
+            action: GenshinAction::MoveForward,
+            press: LowerHeadThenWalkToActionPress::KeyUp
+        }
+    ));
+    assert!(matches!(
+        plan.steps[7].action,
+        LowerHeadThenWalkToStepAction::ClearVisionDrawings
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "targetMatName": "yellow_track_point_28x.png",
+        "timeoutMs": 20000,
+        "activationText": "Activate"
+    });
+    let Some(CommonJobExecutionPlan::LowerHeadThenWalkTo(configured_common)) =
+        plan_common_job(LOWER_HEAD_THEN_WALK_TO_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        configured_common.target_mat_name,
+        "yellow_track_point_28x.png"
+    );
+    assert_eq!(configured_common.timeout_ms, 20_000);
+    assert_eq!(configured_common.f_key_rule.activation_text, "Activate");
+    assert_eq!(
+        configured_common
+            .locators
+            .track_point
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(200, 0, 880, 720).unwrap())
+    );
+}
+
+#[test]
+fn lower_head_then_walk_to_executor_returns_initial_target_missing_and_cleans_up() {
+    let plan = plan_lower_head_then_walk_to(LowerHeadThenWalkToExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([false]);
+
+    let report = execute_lower_head_then_walk_to_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(LowerHeadThenWalkToStepResult::InitialTargetMissing)
+    );
+    assert_eq!(report.state.initial_target_detected, Some(false));
+    assert!(!report.state.tracking_loop_completed);
+    assert!(!report.state.move_forward_held);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.locator_calls.len(), 1);
+    assert!(runtime.lower_head_tracking_calls.is_empty());
+    assert_eq!(runtime.clear_vision_drawings_calls, 1);
+    assert_eq!(
+        runtime.input_batches,
+        vec![vec![InputEvent::KeyUp {
+            vk: KeyId::W.vk(),
+            extended: None
+        }]]
+    );
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == LowerHeadThenWalkToStepCondition::WhenInitialTargetFound
+            && step.reason == LowerHeadThenWalkToSkipReason::InitialTargetMissing
+    }));
+}
+
+#[test]
+fn lower_head_then_walk_to_executor_runs_tracking_loop_until_activation() {
+    let plan = plan_lower_head_then_walk_to(LowerHeadThenWalkToExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_lower_head_tracking_results(
+        [CommonJobRuntimeOutcome::Matched(true)],
+        [LowerHeadThenWalkToStepResult::Activated],
+    );
+
+    let report = execute_lower_head_then_walk_to_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(LowerHeadThenWalkToStepResult::Activated)
+    );
+    assert_eq!(report.state.initial_target_detected, Some(true));
+    assert!(report.state.tracking_loop_completed);
+    assert!(report.state.activation_text_detected);
+    assert!(!report.state.timed_out);
+    assert!(!report.state.move_forward_held);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.lower_head_tracking_calls.len(), 1);
+    assert_eq!(
+        runtime.lower_head_tracking_calls[0]
+            .0
+            .recognition_object
+            .name
+            .as_deref(),
+        Some("Common/Element:chest_tip.png")
+    );
+    assert_eq!(runtime.clear_vision_drawings_calls, 1);
+    assert_eq!(
+        runtime.input_batches,
+        vec![vec![InputEvent::KeyUp {
+            vk: KeyId::W.vk(),
+            extended: None
+        }]]
+    );
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == LowerHeadThenWalkToStepCondition::WhenInitialTargetMissing
+            && step.reason == LowerHeadThenWalkToSkipReason::ResultAlreadySet
+    }));
+}
+
+#[test]
+fn lower_head_then_walk_to_executor_reports_tracking_timeout_and_cleanup() {
+    let plan = plan_lower_head_then_walk_to(LowerHeadThenWalkToExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = RecordingCommonJobRuntime::with_lower_head_tracking_results(
+        [CommonJobRuntimeOutcome::Matched(true)],
+        [LowerHeadThenWalkToStepResult::Timeout],
+    );
+
+    let report = execute_lower_head_then_walk_to_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(LowerHeadThenWalkToStepResult::Timeout)
+    );
+    assert_eq!(report.state.initial_target_detected, Some(true));
+    assert!(report.state.tracking_loop_completed);
+    assert!(!report.state.activation_text_detected);
+    assert!(report.state.timed_out);
+    assert!(!report.state.move_forward_held);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.lower_head_tracking_calls.len(), 1);
+    assert_eq!(runtime.clear_vision_drawings_calls, 1);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == LowerHeadThenWalkToStepCondition::WhenActivationTextDetected
+            && step.reason == LowerHeadThenWalkToSkipReason::ActivationTextMissing
+    }));
+}
+
+#[test]
+fn scan_pick_drops_plan_preserves_legacy_detection_search_and_cleanup_flow() {
+    let plan = plan_scan_pick_drops(ScanPickDropsExecutionConfig::default()).unwrap();
+
+    assert_eq!(plan.task_key, SCAN_PICK_DROPS_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.scan_seconds, SCAN_PICK_DROPS_DEFAULT_SCAN_SECONDS);
+    assert_eq!(plan.dpi_scale, 1.0);
+
+    assert_eq!(plan.yolo_rule.model_name, SCAN_PICK_DROPS_WORLD_MODEL_NAME);
+    assert_eq!(
+        plan.yolo_rule.model_relative_path,
+        SCAN_PICK_DROPS_WORLD_MODEL_PATH
+    );
+    assert_eq!(
+        plan.yolo_rule.accepted_labels,
+        vec![
+            SCAN_PICK_DROPS_DROP_LABEL.to_string(),
+            SCAN_PICK_DROPS_ORE_LABEL.to_string()
+        ]
+    );
+    assert_eq!(plan.yolo_rule.confidence_threshold, None);
+    assert_eq!(plan.yolo_rule.source, ScanPickYoloSource::FullCapture);
+
+    assert_eq!(plan.target_ordering_rule.center_x_1080p, 960.0);
+    assert_eq!(plan.target_ordering_rule.reference_bottom_y_1080p, 888.88);
+    assert_eq!(plan.target_ordering_rule.vertical_weight, 14.0);
+
+    assert_eq!(plan.movement_rule.horizontal_bottom_min_1080p, 560.0);
+    assert_eq!(plan.movement_rule.move_left_when_x_below_1080p, 760.0);
+    assert_eq!(plan.movement_rule.move_right_when_x_above_1080p, 1040.0);
+    assert_eq!(
+        plan.movement_rule.move_forward_when_bottom_below_1080p,
+        770.0
+    );
+    assert_eq!(
+        plan.movement_rule.move_backward_when_bottom_above_1080p,
+        900.0
+    );
+    assert_eq!(plan.movement_rule.approach_delay_ms, 200);
+    assert_eq!(plan.movement_rule.left_action, GenshinAction::MoveLeft);
+    assert_eq!(plan.movement_rule.right_action, GenshinAction::MoveRight);
+    assert_eq!(
+        plan.movement_rule.forward_action,
+        GenshinAction::MoveForward
+    );
+    assert_eq!(
+        plan.movement_rule.backward_action,
+        GenshinAction::MoveBackward
+    );
+
+    assert_eq!(plan.search_rule.iterations, 10);
+    assert_eq!(plan.search_rule.mouse_move_dx, 400);
+    assert_eq!(plan.search_rule.mouse_move_dy, 0);
+    assert_eq!(plan.search_rule.walk_forward_after_index, 5);
+    assert_eq!(plan.search_rule.walk_forward_ms, 100);
+    assert_eq!(plan.search_rule.wait_after_drop_ms, 300);
+    assert_eq!(plan.search_rule.walk_action, GenshinAction::MoveForward);
+    assert_eq!(plan.search_rule.drop_action, GenshinAction::Drop);
+
+    assert_eq!(
+        plan.camera_reset_rule.middle_click_events,
+        vec![
+            InputEvent::MouseButtonDown {
+                button: MouseButton::Middle
+            },
+            InputEvent::MouseButtonUp {
+                button: MouseButton::Middle
+            }
+        ]
+    );
+    assert_eq!(plan.camera_reset_rule.wait_after_middle_click_ms, 500);
+    assert_eq!(plan.camera_reset_rule.look_down_mouse_dx, 0);
+    assert_eq!(plan.camera_reset_rule.look_down_mouse_dy, 500);
+    assert_eq!(plan.camera_reset_rule.wait_after_look_down_ms, 100);
+
+    assert_eq!(plan.steps.len(), 13);
+    assert!(matches!(
+        plan.steps[1].action,
+        ScanPickDropsStepAction::CameraReset { .. }
+    ));
+    assert!(matches!(
+        plan.steps[2].action,
+        ScanPickDropsStepAction::GenshinAction {
+            action: GenshinAction::Drop,
+            press: ScanPickDropsActionPress::KeyPress
+        }
+    ));
+    assert!(matches!(
+        plan.steps[3].action,
+        ScanPickDropsStepAction::YoloDetect { .. }
+    ));
+    assert!(matches!(
+        plan.steps[4].action,
+        ScanPickDropsStepAction::SearchSweep { .. }
+    ));
+    assert!(matches!(
+        plan.steps[5].action,
+        ScanPickDropsStepAction::SelectTarget { .. }
+    ));
+    assert!(matches!(
+        plan.steps[6].action,
+        ScanPickDropsStepAction::ApproachTarget { .. }
+    ));
+    assert!(matches!(
+        plan.steps[7].action,
+        ScanPickDropsStepAction::Page {
+            command: BvPageCommand::Wait { milliseconds: 200 }
+        }
+    ));
+    assert!(matches!(
+        plan.steps[8].action,
+        ScanPickDropsStepAction::GenshinAction {
+            action: GenshinAction::Drop,
+            press: ScanPickDropsActionPress::KeyPress
+        }
+    ));
+    assert!(matches!(
+        plan.steps[9].action,
+        ScanPickDropsStepAction::ReleaseAllKeys
+    ));
+    assert!(matches!(
+        plan.steps[10].action,
+        ScanPickDropsStepAction::GenshinAction {
+            action: GenshinAction::Drop,
+            press: ScanPickDropsActionPress::KeyPress
+        }
+    ));
+    assert!(matches!(
+        plan.steps[11].action,
+        ScanPickDropsStepAction::ClearVisionDrawings
+    ));
+    assert!(matches!(
+        plan.steps[12].action,
+        ScanPickDropsStepAction::ReturnResult {
+            result: ScanPickDropsStepResult::ScanComplete
+        }
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "scanSeconds": 0,
+        "dpiScale": 1.5
+    });
+    let Some(CommonJobExecutionPlan::ScanPickDrops(configured_common)) =
+        plan_common_job(SCAN_PICK_DROPS_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(configured_common.scan_seconds, 0);
+    assert_eq!(configured_common.dpi_scale, 1.5);
+    assert_eq!(configured_common.camera_reset_rule.look_down_mouse_dy, 750);
+}
+
+#[derive(Debug, Default)]
+struct FakeScanPickDropsRuntime {
+    detect_outcomes: VecDeque<Vec<Rect>>,
+    detect_calls: Vec<ScanPickYoloRule>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    clear_calls: usize,
+    logs: Vec<String>,
+}
+
+impl FakeScanPickDropsRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_detect_outcomes(mut self, outcomes: impl IntoIterator<Item = Vec<Rect>>) -> Self {
+        self.detect_outcomes = outcomes.into_iter().collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeScanPickDropsRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, _locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::Matched(false))
+    }
+}
+
+impl ScanPickDropsRuntime for FakeScanPickDropsRuntime {
+    fn detect_scan_pick_targets(&mut self, rule: &ScanPickYoloRule) -> Result<Vec<Rect>> {
+        self.detect_calls.push(rule.clone());
+        Ok(self.detect_outcomes.pop_front().unwrap_or_default())
+    }
+
+    fn clear_scan_pick_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        self.clear_calls += 1;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+}
+
+fn scan_pick_rect(x: i32, bottom: i32) -> Rect {
+    Rect::new(x, bottom - 40, 32, 40).unwrap()
+}
+
+#[test]
+fn scan_pick_drops_executor_orders_target_and_approaches_direct_detection() {
+    let plan = plan_scan_pick_drops(ScanPickDropsExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let selected = scan_pick_rect(960, 890);
+    let farther = scan_pick_rect(1180, 880);
+    let mut runtime =
+        FakeScanPickDropsRuntime::new().with_detect_outcomes([vec![farther, selected]]);
+
+    let report = execute_scan_pick_drops_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.camera_reset_completed);
+    assert!(report.state.initial_drop_dispatched);
+    assert!(report.state.detection_attempted);
+    assert_eq!(report.state.selected_target, Some(selected));
+    assert_eq!(
+        report.state.movement_commands,
+        vec![
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveLeft,
+                press: ScanPickDropsActionPress::KeyUp
+            },
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveRight,
+                press: ScanPickDropsActionPress::KeyUp
+            },
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveForward,
+                press: ScanPickDropsActionPress::KeyUp
+            },
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveBackward,
+                press: ScanPickDropsActionPress::KeyUp
+            }
+        ]
+    );
+    assert!(report.state.approach_completed);
+    assert!(report.state.release_all_keys_completed);
+    assert!(report.state.cleanup_drop_dispatched);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.detect_calls.len(), 1);
+    assert_eq!(runtime.clear_calls, 1);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == ScanPickDropsStepCondition::WhenNoItemsDetected
+            && step.reason == ScanPickDropsSkipReason::ItemsDetected
+    }));
+}
+
+#[test]
+fn scan_pick_drops_executor_search_sweep_detects_target_then_moves() {
+    let plan = plan_scan_pick_drops(ScanPickDropsExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let target = scan_pick_rect(700, 740);
+    let mut runtime = FakeScanPickDropsRuntime::new().with_detect_outcomes([
+        Vec::new(),
+        Vec::new(),
+        vec![target],
+    ]);
+
+    let report = execute_scan_pick_drops_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.search_sweep_completed);
+    assert_eq!(report.state.search_iterations_run, 2);
+    assert_eq!(report.state.selected_target, Some(target));
+    assert_eq!(
+        report.state.movement_commands,
+        vec![
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveRight,
+                press: ScanPickDropsActionPress::KeyUp
+            },
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveLeft,
+                press: ScanPickDropsActionPress::KeyDown
+            },
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveBackward,
+                press: ScanPickDropsActionPress::KeyUp
+            },
+            ScanPickDropsMovementCommand {
+                action: GenshinAction::MoveForward,
+                press: ScanPickDropsActionPress::KeyDown
+            }
+        ]
+    );
+    assert_eq!(runtime.detect_calls.len(), 3);
+    assert!(runtime.input_batches.iter().any(|batch| {
+        batch
+            == &vec![InputEvent::MouseMoveRelative {
+                dx: plan.search_rule.mouse_move_dx,
+                dy: plan.search_rule.mouse_move_dy,
+            }]
+    }));
+    assert!(runtime
+        .page_commands
+        .iter()
+        .any(|command| { matches!(command, BvPageCommand::Wait { milliseconds: 300 }) }));
+}
+
+#[test]
+fn scan_pick_drops_executor_exits_after_empty_search_sweep() {
+    let plan = plan_scan_pick_drops(ScanPickDropsExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeScanPickDropsRuntime::new();
+
+    let report = execute_scan_pick_drops_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.search_sweep_completed);
+    assert_eq!(report.state.search_iterations_run, 10);
+    assert!(report.state.detected_targets.is_empty());
+    assert_eq!(report.state.selected_target, None);
+    assert!(!report.state.approach_completed);
+    assert!(report.state.release_all_keys_completed);
+    assert!(report.state.cleanup_drop_dispatched);
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(runtime.detect_calls.len(), 11);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == ScanPickDropsStepCondition::WhenItemsDetected
+            && step.reason == ScanPickDropsSkipReason::NoItemsDetected
+    }));
+}
+
+#[test]
+fn scan_pick_drops_executor_zero_timeout_skips_detection_and_cleans_up() {
+    let plan = plan_scan_pick_drops(ScanPickDropsExecutionConfig {
+        scan_seconds: 0,
+        ..ScanPickDropsExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime =
+        FakeScanPickDropsRuntime::new().with_detect_outcomes([vec![scan_pick_rect(960, 890)]]);
+
+    let report = execute_scan_pick_drops_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(!report.state.detection_attempted);
+    assert!(report.state.detected_targets.is_empty());
+    assert_eq!(runtime.detect_calls.len(), 0);
+    assert!(report.state.release_all_keys_completed);
+    assert!(report.state.cleanup_drop_dispatched);
+    assert!(report.state.vision_drawings_cleared);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == ScanPickDropsStepCondition::WhileBeforeTimeout
+            && step.reason == ScanPickDropsSkipReason::TimeoutReached
+    }));
+}
+
+#[test]
+fn relogin_plan_preserves_legacy_exit_login_and_enter_game_flow() {
+    let plan = plan_relogin(Size::new(1920, 1080)).unwrap();
+
+    assert_eq!(plan.task_key, RELOGIN_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(
+        plan.locators.menu_bag.recognition_object.name.as_deref(),
+        Some(RELOGIN_MENU_BAG)
+    );
+    assert_eq!(
+        plan.locators.menu_bag.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 960, 1080).unwrap())
+    );
+    assert_eq!(
+        plan.locators.menu_bag.operation,
+        BvLocatorOperation::WaitFor
+    );
+    assert_eq!(plan.locators.menu_bag.timeout_ms, 1_200);
+    assert_eq!(
+        plan.locators.confirm.recognition_object.name.as_deref(),
+        Some(RELOGIN_CONFIRM)
+    );
+    assert_eq!(plan.locators.confirm.operation, BvLocatorOperation::WaitFor);
+    assert_eq!(plan.locators.confirm.timeout_ms, 800);
+    assert_eq!(
+        plan.locators.enter_game.recognition_object.name.as_deref(),
+        Some(RELOGIN_ENTER_GAME)
+    );
+    assert_eq!(
+        plan.locators
+            .enter_game
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 540, 1920, 540).unwrap())
+    );
+    assert_eq!(plan.locators.enter_game.timeout_ms, 1_000);
+    assert_eq!(
+        plan.locators
+            .paimon_menu
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 480, 270).unwrap())
+    );
+    assert_eq!(plan.locators.paimon_menu.timeout_ms, 1_000);
+
+    assert!(plan.third_party_rule.refresh_available_before_login);
+    assert!(plan.third_party_rule.bilibili_only);
+    assert_eq!(plan.third_party_rule.pre_login_sleep_ms, 100);
+    assert_eq!(plan.third_party_rule.max_login_probes, 20);
+    assert_eq!(plan.third_party_rule.probe_interval_ms, 500);
+    assert_eq!(plan.third_party_rule.agreement_click.x_1080p, 960.0);
+    assert_eq!(plan.third_party_rule.agreement_click.y_1080p, 540.0);
+    assert_eq!(plan.third_party_rule.agreement_click.x_dpi_offset, 70.0);
+    assert_eq!(plan.third_party_rule.agreement_click.y_dpi_offset, 75.0);
+    assert_eq!(plan.third_party_rule.login_click.x_1080p, 960.0);
+    assert_eq!(plan.third_party_rule.login_click.y_1080p, 540.0);
+    assert_eq!(plan.third_party_rule.login_click.y_dpi_offset, 90.0);
+    assert_eq!(plan.third_party_rule.login_window_sleep_ms, 2_000);
+    assert_eq!(plan.steps.len(), 12);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        ReloginStepAction::FocusGameWindow
+    ));
+    let ReloginStepAction::RetryUntilAppear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[2].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(RELOGIN_MENU_BAG)
+    );
+    assert_eq!(rule.max_attempts, 10);
+    assert_eq!(rule.interval_ms, 1_200);
+    assert_eq!(rule.failure_policy, ReloginFailurePolicy::BestEffort);
+    let ReloginRetryAction::Input { events } = retry_action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+
+    let ReloginStepAction::RetryUntilAppear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[3].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(RELOGIN_CONFIRM)
+    );
+    assert_eq!(rule.max_attempts, 5);
+    assert_eq!(rule.interval_ms, 800);
+    assert_eq!(rule.failure_policy, ReloginFailurePolicy::BestEffort);
+    let ReloginRetryAction::Page {
+        command:
+            BvPageCommand::Click1080p {
+                x,
+                y,
+                screen_x,
+                screen_y,
+                ..
+            },
+    } = retry_action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*x, *y, *screen_x, *screen_y), (50.0, 1030.0, 50.0, 1030.0));
+
+    let ReloginStepAction::RetryUntilDisappear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[4].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::WaitForDisappear);
+    assert_eq!(rule.max_attempts, 5);
+    assert_eq!(rule.interval_ms, 1_000);
+    assert_eq!(rule.failure_policy, ReloginFailurePolicy::BestEffort);
+    let ReloginRetryAction::Locator { locator } = retry_action else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::Click);
+
+    let ReloginStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[5].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 1_000);
+    assert!(matches!(
+        plan.steps[6].action,
+        ReloginStepAction::ThirdPartyLoginProbe { .. }
+    ));
+
+    let ReloginStepAction::RetryUntilAppear { rule, .. } = &plan.steps[7].action else {
+        unreachable!()
+    };
+    assert_eq!(rule.max_attempts, 120);
+    assert_eq!(rule.interval_ms, 1_000);
+    assert_eq!(
+        rule.failure_policy,
+        ReloginFailurePolicy::HardError {
+            message: "未检测进入游戏界面".to_string()
+        }
+    );
+
+    let ReloginStepAction::RetryUntilDisappear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[8].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::WaitForDisappear);
+    assert_eq!(rule.max_attempts, 120);
+    assert_eq!(rule.interval_ms, 1_000);
+    assert_eq!(
+        rule.failure_policy,
+        ReloginFailurePolicy::HardError {
+            message: "未检测到进入游戏按钮消失, 可能未点击成功".to_string()
+        }
+    );
+    let ReloginRetryAction::Page {
+        command:
+            BvPageCommand::Click1080p {
+                x,
+                y,
+                screen_x,
+                screen_y,
+                ..
+            },
+    } = retry_action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*x, *y, *screen_x, *screen_y), (955.0, 666.0, 955.0, 666.0));
+
+    let ReloginStepAction::RetryUntilAppear { rule, .. } = &plan.steps[9].action else {
+        unreachable!()
+    };
+    assert_eq!(rule.max_attempts, 120);
+    assert_eq!(rule.interval_ms, 1_000);
+    assert_eq!(
+        rule.failure_policy,
+        ReloginFailurePolicy::WarningOnly {
+            message: "未检测到主界面，登录可能未完成".to_string()
+        }
+    );
+    let ReloginStepAction::Page {
+        command: BvPageCommand::Wait { milliseconds },
+    } = &plan.steps[10].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(*milliseconds, 500);
+    assert!(matches!(
+        plan.steps[11].action,
+        ReloginStepAction::ReturnResult {
+            result: ReloginStepResult::Completed
+        }
+    ));
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 }
+    });
+    let Some(CommonJobExecutionPlan::Relogin(configured_common)) =
+        plan_common_job(RELOGIN_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(
+        configured_common
+            .locators
+            .menu_bag
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 640, 720).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .enter_game
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 360, 1280, 360).unwrap())
+    );
+    assert_eq!(
+        configured_common
+            .locators
+            .paimon_menu
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 320, 180).unwrap())
+    );
+    let ReloginStepAction::RetryUntilAppear {
+        retry_action:
+            ReloginRetryAction::Page {
+                command:
+                    BvPageCommand::Click1080p {
+                        screen_x, screen_y, ..
+                    },
+            },
+        ..
+    } = &configured_common.steps[3].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        (*screen_x, *screen_y),
+        (33.33333333333333, 686.6666666666666)
+    );
+    let ReloginStepAction::RetryUntilDisappear {
+        retry_action:
+            ReloginRetryAction::Page {
+                command:
+                    BvPageCommand::Click1080p {
+                        screen_x, screen_y, ..
+                    },
+            },
+        ..
+    } = &configured_common.steps[8].action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*screen_x, *screen_y), (636.6666666666666, 444.0));
+}
+
+fn set_relogin_retry_attempts(
+    plan: &mut ReloginExecutionPlan,
+    step_index: usize,
+    max_attempts: u16,
+) {
+    match &mut plan.steps[step_index].action {
+        ReloginStepAction::RetryUntilAppear { rule, .. }
+        | ReloginStepAction::RetryUntilDisappear { rule, .. } => {
+            rule.max_attempts = max_attempts;
+        }
+        action => panic!("step {step_index} is not a relogin retry action: {action:?}"),
+    }
+}
+
+#[test]
+fn relogin_executor_completes_exit_and_enter_flow_with_injected_runtime() {
+    let plan = plan_relogin(Size::new(1920, 1080)).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([
+        false, true, false, true, false, true, true, true, false, true, true,
+    ]);
+
+    let report = execute_relogin_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.task_key, RELOGIN_TASK_KEY);
+    assert!(report.skipped_steps.is_empty());
+    assert!(report.state.focus_requested);
+    assert!(report.state.menu_opened);
+    assert!(report.state.exit_confirm_appeared);
+    assert!(report.state.exit_confirm_disappeared);
+    assert!(report.state.third_party_login_checked);
+    assert!(report.state.third_party_login_completed);
+    assert!(report.state.login_screen_visible);
+    assert!(report.state.enter_game_disappeared);
+    assert!(report.state.main_ui_detected);
+    assert_eq!(report.state.result, Some(ReloginStepResult::Completed));
+    assert_eq!(runtime.focus_calls, 1);
+    assert_eq!(runtime.third_party_login_calls, 1);
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert!(runtime.page_commands.iter().any(|command| matches!(
+        command,
+        BvPageCommand::Click1080p {
+            x,
+            y,
+            screen_x,
+            screen_y,
+            ..
+        } if (*x, *y, *screen_x, *screen_y) == (50.0, 1030.0, 50.0, 1030.0)
+    )));
+    assert!(runtime.page_commands.iter().any(|command| matches!(
+        command,
+        BvPageCommand::Click1080p {
+            x,
+            y,
+            screen_x,
+            screen_y,
+            ..
+        } if (*x, *y, *screen_x, *screen_y) == (955.0, 666.0, 955.0, 666.0)
+    )));
+}
+
+#[test]
+fn relogin_executor_keeps_login_progress_after_best_effort_exit_failures() {
+    let mut plan = plan_relogin(Size::new(1920, 1080)).unwrap();
+    set_relogin_retry_attempts(&mut plan, 2, 1);
+    set_relogin_retry_attempts(&mut plan, 3, 1);
+    set_relogin_retry_attempts(&mut plan, 4, 1);
+    set_relogin_retry_attempts(&mut plan, 9, 1);
+    let mut runtime =
+        RecordingCommonJobRuntime::with_locator_matches([false, false, true, true, true, false]);
+
+    let report = execute_relogin_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.skipped_steps.is_empty());
+    assert!(report.state.menu_open_probe_completed);
+    assert!(!report.state.menu_opened);
+    assert!(report.state.exit_confirm_probe_completed);
+    assert!(!report.state.exit_confirm_appeared);
+    assert!(report.state.exit_confirm_disappeared);
+    assert!(report.state.third_party_login_completed);
+    assert!(report.state.login_screen_visible);
+    assert!(report.state.enter_game_disappeared);
+    assert!(!report.state.main_ui_detected);
+    assert_eq!(report.state.result, Some(ReloginStepResult::Completed));
+}
+
+#[test]
+fn relogin_executor_errors_when_enter_game_screen_missing() {
+    let mut plan = plan_relogin(Size::new(1920, 1080)).unwrap();
+    set_relogin_retry_attempts(&mut plan, 7, 1);
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([true, true, true, false]);
+
+    let error = execute_relogin_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(error.to_string().contains("未检测进入游戏界面"));
+}
+
+#[test]
+fn relogin_live_rejects_unsupported_capture_size_before_io() {
+    let capture_size = Size::new(1280, 720);
+    let plan = plan_relogin(capture_size).unwrap();
+    let frame_source = QueueFrameSource::new([blank_frame(capture_size)]);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+
+    let error = execute_relogin_live(&plan, frame_source, input_driver, clock).unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("1920x1080"))
+    );
+}
+
+#[test]
+fn relogin_template_runtime_uses_platform_driver_hooks() {
+    let capture_size = Size::new(80, 45);
+    let plan = plan_relogin(capture_size).unwrap();
+    let template = varied_template();
+    let mut backend = PureRustVisionBackend::new();
+    for locator in [
+        &plan.locators.menu_bag,
+        &plan.locators.confirm,
+        &plan.locators.enter_game,
+        &plan.locators.paimon_menu,
+    ] {
+        backend = backend.with_template(
+            locator
+                .recognition_object
+                .template
+                .template_asset
+                .clone()
+                .unwrap(),
+            template.clone(),
+        );
+    }
+    let frame_source = QueueFrameSource::new([
+        frame_with_template(capture_size, &template, 4, 4),
+        frame_with_template(capture_size, &template, 30, 20),
+        blank_frame(capture_size),
+        frame_with_template(capture_size, &template, 30, 30),
+        blank_frame(capture_size),
+        frame_with_template(capture_size, &template, 4, 4),
+    ]);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+    let mut runtime = TemplateCommonJobRuntime::new(backend, frame_source, input_driver, clock);
+
+    let report = execute_relogin_plan(&plan, &mut runtime).unwrap();
+    let (_, frame_source, input_driver, _, _) = runtime.into_parts();
+
+    assert!(report.completed);
+    assert_eq!(frame_source.captures, 6);
+    assert_eq!(input_driver.focus_calls, 1);
+    assert_eq!(
+        input_driver.third_party_login_rules,
+        vec![plan.third_party_rule]
+    );
+    assert!(report.state.focus_requested);
+    assert!(report.state.third_party_login_completed);
+    assert!(report.state.menu_opened);
+    assert!(report.state.exit_confirm_appeared);
+    assert!(report.state.enter_game_disappeared);
+    assert!(report.state.main_ui_detected);
+    assert_eq!(report.state.result, Some(ReloginStepResult::Completed));
+}
+
+#[test]
+fn wonderland_cycle_plan_preserves_legacy_enter_and_exit_flow() {
+    let plan = plan_wonderland_cycle(Size::new(1920, 1080)).unwrap();
+
+    assert_eq!(plan.task_key, WONDERLAND_CYCLE_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.steps.len(), 15);
+    assert_eq!(
+        plan.locators
+            .wonderland_close
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(WONDERLAND_CYCLE_CLOSE)
+    );
+    assert_eq!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(WONDERLAND_CYCLE_BLACK_CONFIRM)
+    );
+    assert!(
+        plan.locators
+            .black_confirm
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert_eq!(
+        plan.locators.back_teyvat.recognition_object.name.as_deref(),
+        Some(WONDERLAND_CYCLE_BACK_TEYVAT)
+    );
+    assert_eq!(
+        plan.locators
+            .paimon_menu
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 480, 270).unwrap())
+    );
+
+    let WonderlandCycleStepAction::RetryUntilAppear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[1].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(WONDERLAND_CYCLE_CLOSE)
+    );
+    assert_eq!(rule.max_attempts, 10);
+    assert_eq!(rule.interval_ms, 1_000);
+    let WonderlandCycleRetryAction::Input { events } = retry_action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: 0x75,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: 0x75,
+                extended: None
+            }
+        ]
+    );
+
+    let WonderlandCycleStepAction::RetryUntilAppear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[2].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(WONDERLAND_CYCLE_BLACK_CONFIRM)
+    );
+    assert_eq!(rule.max_attempts, 5);
+    assert_eq!(rule.interval_ms, 800);
+    let WonderlandCycleRetryAction::Page {
+        command:
+            BvPageCommand::Click1080p {
+                x,
+                y,
+                screen_x,
+                screen_y,
+                ..
+            },
+    } = retry_action
+    else {
+        unreachable!()
+    };
+    assert_eq!((*x, *y, *screen_x, *screen_y), (680.0, 310.0, 680.0, 310.0));
+
+    let WonderlandCycleStepAction::RetryUntilDisappear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[3].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::WaitForDisappear);
+    assert_eq!(rule.max_attempts, 5);
+    assert_eq!(rule.interval_ms, 1_000);
+    assert!(matches!(
+        retry_action,
+        WonderlandCycleRetryAction::Locator { .. }
+    ));
+
+    assert!(matches!(
+        plan.steps[6].action,
+        WonderlandCycleStepAction::ReturnResult {
+            result: WonderlandCycleStepResult::EnteredWonderland
+        }
+    ));
+
+    let WonderlandCycleStepAction::RetryUntilAppear {
+        locator,
+        rule,
+        retry_action,
+    } = &plan.steps[8].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(WONDERLAND_CYCLE_BACK_TEYVAT)
+    );
+    assert_eq!(rule.max_attempts, 20);
+    assert_eq!(rule.interval_ms, 800);
+    let WonderlandCycleRetryAction::Input { events } = retry_action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+
+    assert!(matches!(
+        plan.steps[13].action,
+        WonderlandCycleStepAction::ReturnResult {
+            result: WonderlandCycleStepResult::ReturnedToTeyvat
+        }
+    ));
+
+    let configured = plan_wonderland_cycle(Size::new(1280, 720)).unwrap();
+    assert_eq!(
+        configured
+            .locators
+            .paimon_menu
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 0, 320, 180).unwrap())
+    );
+    let WonderlandCycleStepAction::RetryUntilAppear {
+        retry_action:
+            WonderlandCycleRetryAction::Page {
+                command:
+                    BvPageCommand::Click1080p {
+                        screen_x, screen_y, ..
+                    },
+            },
+        ..
+    } = &configured.steps[2].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        (*screen_x, *screen_y),
+        (453.3333333333333, 206.66666666666666)
+    );
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 }
+    });
+    let Some(CommonJobExecutionPlan::WonderlandCycle(configured_common)) =
+        plan_common_job(WONDERLAND_CYCLE_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+}
+
+#[test]
+fn wonderland_cycle_executor_enters_and_returns_to_teyvat() {
+    let plan = plan_wonderland_cycle(Size::new(1920, 1080)).unwrap();
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([
+        false, true, false, true, false, true, true, true, false, true, false, true, true, false,
+        true, true, true,
+    ]);
+
+    let report = execute_wonderland_cycle_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.wonderland_menu_detected);
+    assert!(report.state.enter_confirm_dialog_detected);
+    assert!(report.state.enter_confirm_dialog_disappeared);
+    assert!(report.state.in_wonderland_main_ui);
+    assert!(report.state.entered_wonderland_reported);
+    assert!(report.state.back_teyvat_menu_detected);
+    assert!(report.state.return_confirm_dialog_detected);
+    assert!(report.state.return_confirm_dialog_disappeared);
+    assert!(report.state.returned_to_teyvat_main_ui);
+    assert_eq!(
+        report.state.result,
+        Some(WonderlandCycleStepResult::ReturnedToTeyvat)
+    );
+    assert_eq!(runtime.input_batches.len(), 2);
+    assert!(runtime.page_commands.iter().any(|command| matches!(
+        command,
+        BvPageCommand::Click1080p {
+            screen_x,
+            screen_y,
+            ..
+        } if (*screen_x, *screen_y) == (680.0, 310.0)
+    )));
+    assert!(runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::Click
+            && locator.recognition_object.name.as_deref() == Some(WONDERLAND_CYCLE_BLACK_CONFIRM)
+    }));
+    assert!(runtime.locator_calls.iter().any(|locator| {
+        locator.operation == BvLocatorOperation::Click
+            && locator.recognition_object.name.as_deref() == Some(WONDERLAND_CYCLE_BACK_TEYVAT)
+    }));
+}
+
+#[test]
+fn wonderland_cycle_executor_continues_return_flow_when_main_ui_probes_miss() {
+    let mut plan = plan_wonderland_cycle(Size::new(1920, 1080)).unwrap();
+    for index in [5, 12] {
+        let WonderlandCycleStepAction::RetryUntilAppear { rule, .. } =
+            &mut plan.steps[index].action
+        else {
+            unreachable!()
+        };
+        rule.max_attempts = 1;
+    }
+    let mut runtime = RecordingCommonJobRuntime::with_locator_matches([
+        true, true, false, true, true, false, true, false, true, true, false, true, true, false,
+    ]);
+
+    let report = execute_wonderland_cycle_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.enter_confirm_dialog_disappeared);
+    assert!(!report.state.in_wonderland_main_ui);
+    assert!(report.state.return_confirm_dialog_disappeared);
+    assert!(!report.state.returned_to_teyvat_main_ui);
+    assert_eq!(
+        report.state.result,
+        Some(WonderlandCycleStepResult::ReturnedToTeyvat)
+    );
+    assert!(report
+        .skipped_steps
+        .iter()
+        .all(|step| step.reason != WonderlandCycleSkipReason::WonderlandMainUiMissing));
+    assert!(report
+        .skipped_steps
+        .iter()
+        .all(|step| step.reason != WonderlandCycleSkipReason::ReturnedMainUiMissing));
+}
+
+#[test]
+fn wonderland_cycle_executor_stops_when_wonderland_menu_is_missing() {
+    let plan = plan_wonderland_cycle(Size::new(1920, 1080)).unwrap();
+    let mut runtime =
+        RecordingCommonJobRuntime::with_locator_matches(std::iter::repeat(false).take(20));
+
+    let report = execute_wonderland_cycle_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert!(!report.state.wonderland_menu_detected);
+    assert_eq!(report.state.result, None);
+    assert_eq!(
+        runtime
+            .locator_calls
+            .iter()
+            .filter(|locator| locator.recognition_object.name.as_deref()
+                == Some(WONDERLAND_CYCLE_CLOSE))
+            .count(),
+        10
+    );
+    assert_eq!(runtime.input_batches.len(), 9);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == WonderlandCycleStepCondition::WhenWonderlandMenuDetected
+            && step.reason == WonderlandCycleSkipReason::WonderlandMenuMissing
+    }));
+}
+
+#[test]
+fn wonderland_cycle_live_rejects_unsupported_capture_size_before_io() {
+    let plan = plan_wonderland_cycle(Size::new(1280, 720)).unwrap();
+
+    let error = execute_wonderland_cycle_live(
+        &plan,
+        QueueFrameSource::new([blank_frame(Size::new(1280, 720))]),
+        TestCommonJobInputDriver::default(),
+        TestCommonJobClock::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("1920x1080"))
+    );
+}
+
+#[test]
+fn switch_party_plan_preserves_legacy_party_view_ocr_and_scan_flow() {
+    let plan = plan_switch_party(Size::new(1920, 1080), "Team.*").unwrap();
+
+    assert_eq!(plan.task_key, SWITCH_PARTY_TASK_KEY);
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.capture_size, Size::new(1920, 1080));
+    assert_eq!(plan.party_name, "Team.*");
+    assert_eq!(
+        plan.open_rule.max_attempts,
+        SWITCH_PARTY_DEFAULT_OPEN_ATTEMPTS
+    );
+    assert_eq!(
+        plan.open_rule.checks_per_attempt,
+        SWITCH_PARTY_DEFAULT_OPEN_CHECKS_PER_ATTEMPT
+    );
+    assert_eq!(plan.open_rule.check_interval_ms, 600);
+
+    assert_eq!(
+        plan.locators
+            .party_choose_view
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(SWITCH_PARTY_CHOOSE_VIEW)
+    );
+    assert_eq!(
+        plan.locators
+            .party_choose_view
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 960, 274, 120).unwrap())
+    );
+    assert_eq!(
+        plan.locators.party_choose_view.operation,
+        BvLocatorOperation::WaitFor
+    );
+    assert_eq!(plan.locators.party_choose_view.timeout_ms, 4_200);
+    assert_eq!(
+        plan.locators
+            .party_delete
+            .recognition_object
+            .name
+            .as_deref(),
+        Some(SWITCH_PARTY_DELETE)
+    );
+    assert_eq!(
+        plan.locators
+            .party_delete
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(480, 960, 960, 120).unwrap())
+    );
+    assert_eq!(
+        plan.locators
+            .white_confirm_left
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 270, 480, 810).unwrap())
+    );
+    assert!(
+        plan.locators
+            .white_confirm_left
+            .recognition_object
+            .template
+            .use_3_channels
+    );
+    assert_eq!(
+        plan.locators
+            .white_confirm_right
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(1440, 270, 480, 810).unwrap())
+    );
+
+    assert_eq!(
+        plan.current_party_rule.ocr_roi,
+        Rect::new(274, 960, 350, 120).unwrap()
+    );
+    assert_eq!(plan.current_party_rule.text_width, 350);
+    assert!(plan.current_party_rule.strip_double_quotes);
+    assert!(plan.current_party_rule.remove_crlf);
+    assert!(plan.current_party_rule.truncate_at_first_lf);
+    assert!(plan.current_party_rule.trim);
+    assert!(plan.current_party_rule.match_as_regex);
+    assert_eq!(
+        plan.list_scan_rule.ocr_roi,
+        Rect::new(0, 80, 1440, 880).unwrap()
+    );
+    assert_eq!(
+        plan.list_scan_rule.max_pages,
+        SWITCH_PARTY_DEFAULT_LIST_SCAN_PAGES
+    );
+    assert_eq!(plan.list_scan_rule.lowest_item_x_min, 35);
+    assert_eq!(plan.list_scan_rule.lowest_item_x_max, 100);
+    assert_eq!(plan.list_scan_rule.last_item_threshold_y, 777);
+    assert_eq!(plan.list_scan_rule.first_page_preclick.x_1080p, 600.0);
+    assert_eq!(plan.list_scan_rule.first_page_preclick.y_1080p, 200.0);
+    assert_eq!(plan.list_scan_rule.first_page_preclick.screen_x, 600.0);
+    assert_eq!(plan.list_scan_rule.first_page_preclick.screen_y, 200.0);
+    assert_eq!(plan.list_scan_rule.first_page_preclick_delay_ms, 300);
+    assert_eq!(plan.list_scan_rule.page_scroll_delay_ms, 400);
+    assert_eq!(plan.list_scan_rule.matched_party_click_x_multiplier, 2.0);
+    assert_eq!(
+        plan.list_scan_rule.matched_party_click_y_anchor,
+        PartyTextClickYAnchor::Bottom
+    );
+    assert_eq!(plan.list_scan_rule.after_matched_party_click_delay_ms, 200);
+    assert_eq!(plan.confirm_rule.close_check_attempts, 10);
+    assert_eq!(plan.confirm_rule.after_first_confirm_delay_ms, 200);
+    assert_eq!(plan.confirm_rule.after_second_confirm_delay_ms, 500);
+    assert!(plan.confirm_rule.return_main_ui_when_opened_from_main);
+    assert_eq!(plan.steps.len(), 22);
+
+    assert!(matches!(
+        plan.steps[1].action,
+        SwitchPartyStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+    assert!(matches!(
+        plan.steps[3].action,
+        SwitchPartyStepAction::GenshinAction {
+            action: GenshinAction::OpenPartySetupScreen
+        }
+    ));
+    let SwitchPartyStepAction::Ocr {
+        command: BvPageCommand::Ocr { locator },
+    } = &plan.steps[6].action
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(274, 960, 350, 120).unwrap())
+    );
+    assert!(matches!(
+        plan.steps[8].action,
+        SwitchPartyStepAction::MatchCurrentParty { ref party_name }
+            if party_name == "Team.*"
+    ));
+    let SwitchPartyStepAction::Input { events } = &plan.steps[9].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: RETURN_MAIN_UI_VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+    let SwitchPartyStepAction::OpenPartyChooseMenu { rule, .. } = &plan.steps[13].action else {
+        unreachable!()
+    };
+    assert_eq!(rule.open_attempts, 4);
+    assert_eq!(rule.open_interval_ms, 500);
+    assert_eq!(rule.delete_verify_attempts, 5);
+    let SwitchPartyStepAction::Input { events } = &plan.steps[14].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events.first(),
+        Some(&InputEvent::MouseMoveAbsolute {
+            x: 700,
+            y: 125,
+            virtual_desktop: false
+        })
+    );
+    assert!(events.contains(&InputEvent::MouseButtonDown {
+        button: MouseButton::Left
+    }));
+    assert!(events.contains(&InputEvent::Delay { milliseconds: 450 }));
+    assert!(events.contains(&InputEvent::MouseButtonUp {
+        button: MouseButton::Left
+    }));
+    let SwitchPartyStepAction::ScanPartyList { rule, party_name } = &plan.steps[16].action else {
+        unreachable!()
+    };
+    assert_eq!(party_name, "Team.*");
+    assert_eq!(rule.max_pages, SWITCH_PARTY_DEFAULT_LIST_SCAN_PAGES);
+    let SwitchPartyStepAction::ConfirmParty { rule } = &plan.steps[17].action else {
+        unreachable!()
+    };
+    assert_eq!(rule.close_check_attempts, 10);
+    assert!(matches!(
+        plan.steps[18].action,
+        SwitchPartyStepAction::ClearCombatScenes
+    ));
+    assert!(matches!(
+        plan.steps[20].action,
+        SwitchPartyStepAction::CommonJob { ref task_key }
+            if task_key == RETURN_MAIN_UI_TASK_KEY
+    ));
+
+    let configured = plan_switch_party(Size::new(1280, 720), "Daily").unwrap();
+    assert_eq!(configured.party_name, "Daily");
+    assert_eq!(
+        configured
+            .locators
+            .party_choose_view
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(0, 640, 182, 80).unwrap())
+    );
+    assert_eq!(
+        configured.current_party_rule.ocr_roi,
+        Rect::new(182, 640, 233, 80).unwrap()
+    );
+    assert_eq!(
+        configured.list_scan_rule.ocr_roi,
+        Rect::new(0, 53, 960, 587).unwrap()
+    );
+    assert_eq!(
+        configured.list_scan_rule.first_page_preclick.screen_x,
+        400.0
+    );
+    assert_eq!(
+        configured.list_scan_rule.first_page_preclick.screen_y,
+        133.33333333333331
+    );
+    assert_eq!(
+        configured
+            .locators
+            .white_confirm_right
+            .recognition_object
+            .region_of_interest,
+        Some(Rect::new(960, 180, 320, 540).unwrap())
+    );
+
+    let config = serde_json::json!({
+        "captureSize": { "width": 1280, "height": 720 },
+        "partyName": "Daily"
+    });
+    let Some(CommonJobExecutionPlan::SwitchParty(configured_common)) =
+        plan_common_job(SWITCH_PARTY_TASK_KEY, Some(&config)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(configured_common.capture_size, Size::new(1280, 720));
+    assert_eq!(configured_common.party_name, "Daily");
+}
+
+#[derive(Debug, Default)]
+struct FakeSwitchPartyRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    ocr_texts: VecDeque<Vec<SwitchPartyTextCandidate>>,
+    choose_menu_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    list_scan_outcomes: VecDeque<SwitchPartyListScanOutcome>,
+    confirm_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_calls: Vec<BvLocatorPlan>,
+    ocr_commands: Vec<BvPageCommand>,
+    choose_menu_calls: usize,
+    scan_calls: Vec<(String, Vec<SwitchPartyTextCandidate>)>,
+    confirm_calls: usize,
+    clear_combat_scenes_calls: usize,
+    logs: Vec<String>,
+}
+
+impl FakeSwitchPartyRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_ocr_texts(
+        mut self,
+        texts: impl IntoIterator<Item = Vec<SwitchPartyTextCandidate>>,
+    ) -> Self {
+        self.ocr_texts = texts.into_iter().collect();
+        self
+    }
+
+    fn with_choose_menu_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.choose_menu_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+
+    fn with_list_scan_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = SwitchPartyListScanOutcome>,
+    ) -> Self {
+        self.list_scan_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_confirm_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.confirm_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeSwitchPartyRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_calls.push(locator.clone());
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(false)))
+    }
+}
+
+impl SwitchPartyRuntime for FakeSwitchPartyRuntime {
+    fn recognize_switch_party_text(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> Result<Vec<SwitchPartyTextCandidate>> {
+        self.ocr_commands.push(command.clone());
+        Ok(self.ocr_texts.pop_front().unwrap_or_default())
+    }
+
+    fn open_switch_party_choose_menu(
+        &mut self,
+        _rule: &SwitchPartyChooseMenuRule,
+        _choose_locator: &BvLocatorPlan,
+        _delete_locator: &BvLocatorPlan,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.choose_menu_calls += 1;
+        Ok(self
+            .choose_menu_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn scan_switch_party_list(
+        &mut self,
+        _rule: &SwitchPartyListScanRule,
+        party_name: &str,
+        current_page_texts: &[SwitchPartyTextCandidate],
+    ) -> Result<SwitchPartyListScanOutcome> {
+        self.scan_calls
+            .push((party_name.to_string(), current_page_texts.to_vec()));
+        Ok(self
+            .list_scan_outcomes
+            .pop_front()
+            .unwrap_or(SwitchPartyListScanOutcome {
+                scanned_pages: 1,
+                matched_party: None,
+                reached_end: true,
+            }))
+    }
+
+    fn confirm_switch_party(
+        &mut self,
+        _rule: &SwitchPartyConfirmRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.confirm_calls += 1;
+        Ok(self
+            .confirm_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn clear_switch_party_combat_scenes(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        self.clear_combat_scenes_calls += 1;
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn fake_switch_party_text(text: &str, y: i32) -> SwitchPartyTextCandidate {
+    SwitchPartyTextCandidate {
+        text: text.to_string(),
+        rect: Rect::new(40, y, 180, 32).unwrap(),
+    }
+}
+
+#[test]
+fn switch_party_text_candidates_apply_ocr_roi_offset_and_match_regex() {
+    let source_roi = Rect::new(0, 80, 520, 760).unwrap();
+    let regions = vec![
+        OcrResultRegion {
+            text: " Daily Team ".to_string(),
+            rect: Rect::new(42, 120, 180, 32).unwrap(),
+            score: 1.0,
+        },
+        OcrResultRegion {
+            text: String::new(),
+            rect: Rect::new(42, 180, 180, 32).unwrap(),
+            score: 1.0,
+        },
+    ];
+
+    let candidates = switch_party_text_candidates_from_ocr_regions(&regions, source_roi).unwrap();
+
+    assert_eq!(
+        candidates,
+        vec![SwitchPartyTextCandidate {
+            text: "Daily Team".to_string(),
+            rect: Rect::new(42, 200, 180, 32).unwrap(),
+        }]
+    );
+    assert_eq!(
+        switch_party_find_matching_text_candidate(&candidates, "Daily.*", true).unwrap(),
+        Some(candidates[0].clone())
+    );
+    assert_eq!(
+        switch_party_find_matching_text_candidate(&candidates, "Daily.*", false).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn switch_party_executor_returns_already_selected_after_current_party_match() {
+    let plan = plan_switch_party(Size::new(1920, 1080), "Team.*").unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeSwitchPartyRuntime::new()
+        .with_locator_matches([true, true, true])
+        .with_ocr_texts([vec![fake_switch_party_text("\"Team Alpha\"\nignored", 960)]]);
+
+    let report = execute_switch_party_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(SwitchPartyStepResult::AlreadySelected)
+    );
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.party_view_opened, Some(true));
+    assert_eq!(
+        report.state.current_party_normalized_text.as_deref(),
+        Some("Team Alpha")
+    );
+    assert_eq!(report.state.current_party_matched, Some(true));
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+    assert_eq!(runtime.choose_menu_calls, 0);
+    assert!(runtime.scan_calls.is_empty());
+    assert_eq!(runtime.confirm_calls, 0);
+    assert_eq!(runtime.clear_combat_scenes_calls, 0);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == SwitchPartyStepCondition::WhenCurrentPartyNotMatched
+            && step.reason == SwitchPartySkipReason::ResultAlreadySet
+    }));
+}
+
+#[test]
+fn switch_party_executor_scans_list_confirms_and_clears_combat_scenes() {
+    let plan = plan_switch_party(Size::new(1920, 1080), "Daily.*").unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let matched = fake_switch_party_text("Daily Team", 360);
+    let list_page = vec![fake_switch_party_text("Other", 180), matched.clone()];
+    let mut runtime = FakeSwitchPartyRuntime::new()
+        .with_locator_matches([true, true])
+        .with_ocr_texts([
+            vec![fake_switch_party_text("Old Team", 960)],
+            list_page.clone(),
+        ])
+        .with_choose_menu_matches([true])
+        .with_list_scan_outcomes([SwitchPartyListScanOutcome {
+            scanned_pages: 2,
+            matched_party: Some(matched.clone()),
+            reached_end: false,
+        }])
+        .with_confirm_matches([true]);
+
+    let report = execute_switch_party_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(SwitchPartyStepResult::Switched));
+    assert_eq!(report.state.current_party_matched, Some(false));
+    assert_eq!(report.state.choose_menu_opened, Some(true));
+    assert!(report.state.top_reset_dispatched);
+    assert!(report.state.list_scan_completed);
+    assert_eq!(report.state.scanned_pages, 2);
+    assert_eq!(report.state.matched_party, Some(matched));
+    assert_eq!(report.state.party_confirmed, Some(true));
+    assert!(report.state.combat_scenes_cleared);
+    assert_eq!(report.nested_return_main_ui_reports.len(), 1);
+    assert_eq!(runtime.choose_menu_calls, 1);
+    assert_eq!(runtime.scan_calls, vec![("Daily.*".to_string(), list_page)]);
+    assert_eq!(runtime.confirm_calls, 1);
+    assert_eq!(runtime.clear_combat_scenes_calls, 1);
+}
+
+#[test]
+fn switch_party_executor_returns_not_found_after_exhausted_list_scan() {
+    let plan = plan_switch_party(Size::new(1920, 1080), "Missing.*").unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeSwitchPartyRuntime::new()
+        .with_locator_matches([true, true, true])
+        .with_ocr_texts([
+            vec![fake_switch_party_text("Old Team", 960)],
+            vec![fake_switch_party_text("Other", 180)],
+        ])
+        .with_choose_menu_matches([true])
+        .with_list_scan_outcomes([SwitchPartyListScanOutcome {
+            scanned_pages: SWITCH_PARTY_DEFAULT_LIST_SCAN_PAGES,
+            matched_party: None,
+            reached_end: true,
+        }]);
+
+    let report = execute_switch_party_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.result, Some(SwitchPartyStepResult::NotFound));
+    assert_eq!(report.state.current_party_matched, Some(false));
+    assert!(report.state.party_not_found);
+    assert_eq!(
+        report.state.scanned_pages,
+        SWITCH_PARTY_DEFAULT_LIST_SCAN_PAGES
+    );
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    assert_eq!(report.nested_return_main_ui_reports.len(), 2);
+    assert_eq!(runtime.confirm_calls, 0);
+    assert_eq!(runtime.clear_combat_scenes_calls, 0);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.condition == SwitchPartyStepCondition::WhenPartyMatchedInList
+            && step.reason == SwitchPartySkipReason::PartyMissingInList
+    }));
+}
+
+#[test]
+fn redeem_code_plan_preserves_legacy_navigation_and_code_flow() {
+    let plan = plan_use_redeem_codes(
+        vec![
+            RedeemCodeEntry::new(" GENSHINGIFT1 ", Some("primogems".to_string())).unwrap(),
+            RedeemCodeEntry::new("ABCDEFGHIJKL", None).unwrap(),
+        ],
+        Size::new(1920, 1080),
+    )
+    .unwrap();
+
+    assert_eq!(plan.task_key, "UseRedeemCode");
+    assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(plan.executor_ready);
+    assert_eq!(plan.codes.len(), 2);
+    assert_eq!(plan.steps.len(), 10 + 8 * 2 + 2);
+    assert_eq!(
+        plan.steps[1].label,
+        "return to main UI before opening settings"
+    );
+    assert_eq!(plan.steps[4].label, "click settings button");
+    assert!(matches!(
+        plan.steps[2].action,
+        UseRedeemCodeStepAction::Input { .. }
+    ));
+    let UseRedeemCodeStepAction::Input { events } = &plan.steps[2].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        events,
+        &vec![
+            InputEvent::KeyDown {
+                vk: VK_ESCAPE,
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: VK_ESCAPE,
+                extended: None
+            }
+        ]
+    );
+
+    let account_step = &plan.steps[6];
+    let UseRedeemCodeStepAction::Locator { locator } = &account_step.action else {
+        unreachable!()
+    };
+    assert_eq!(locator.operation, BvLocatorOperation::Click);
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(0, 0, 384, 1080).unwrap())
+    );
+
+    let go_redeem_step = &plan.steps[8];
+    let UseRedeemCodeStepAction::Locator { locator } = &go_redeem_step.action else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.region_of_interest,
+        Some(Rect::new(1344, 0, 576, 1080).unwrap())
+    );
+
+    let per_code_steps: Vec<_> = plan
+        .steps
+        .iter()
+        .filter(|step| step.code.as_deref() == Some("GENSHINGIFT1"))
+        .collect();
+    assert_eq!(per_code_steps.len(), 8);
+    assert!(matches!(
+        per_code_steps[1].action,
+        UseRedeemCodeStepAction::ClipboardSet { .. }
+    ));
+    assert_eq!(
+        per_code_steps[5].condition,
+        UseRedeemCodeStepCondition::WhenSuccessDetected
+    );
+    assert_eq!(
+        per_code_steps[7].condition,
+        UseRedeemCodeStepCondition::WhenSuccessNotDetected
+    );
+
+    let UseRedeemCodeStepAction::Locator { locator } = &per_code_steps[3].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(COMMON_BTN_WHITE_CONFIRM)
+    );
+    assert!(locator.recognition_object.template.use_3_channels);
+
+    let UseRedeemCodeStepAction::Locator { locator } = &per_code_steps[5].action else {
+        unreachable!()
+    };
+    assert_eq!(
+        locator.recognition_object.name.as_deref(),
+        Some(COMMON_BTN_BLACK_CONFIRM)
+    );
+    assert!(locator.recognition_object.template.use_3_channels);
+}
+
+#[derive(Debug, Default)]
+struct FakeUseRedeemCodeRuntime {
+    locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    logs: Vec<String>,
+    input_batches: Vec<Vec<InputEvent>>,
+    page_commands: Vec<BvPageCommand>,
+    locator_labels: Vec<String>,
+    common_job_calls: Vec<String>,
+    clipboard_sets: Vec<String>,
+    clipboard_clear_calls: usize,
+}
+
+impl FakeUseRedeemCodeRuntime {
+    fn with_locator_matches(mut self, matches: impl IntoIterator<Item = bool>) -> Self {
+        self.locator_outcomes = matches
+            .into_iter()
+            .map(CommonJobRuntimeOutcome::Matched)
+            .collect();
+        self
+    }
+}
+
+impl CommonJobRuntime for FakeUseRedeemCodeRuntime {
+    fn log(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.input_batches.push(events.to_vec());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn dispatch_capture_input(&mut self, events: &[InputEvent]) -> Result<CommonJobRuntimeOutcome> {
+        self.dispatch_input(events)
+    }
+
+    fn execute_page_command(&mut self, command: &BvPageCommand) -> Result<CommonJobRuntimeOutcome> {
+        self.page_commands.push(command.clone());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn execute_locator(&mut self, locator: &BvLocatorPlan) -> Result<CommonJobRuntimeOutcome> {
+        self.locator_labels.push(
+            locator
+                .recognition_object
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", locator.operation)),
+        );
+        Ok(self
+            .locator_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+}
+
+impl UseRedeemCodeRuntime for FakeUseRedeemCodeRuntime {
+    fn execute_redeem_common_job(&mut self, task_key: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.common_job_calls.push(task_key.to_string());
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+
+    fn set_redeem_clipboard_text(&mut self, text: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.clipboard_sets.push(text.to_string());
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+
+    fn clear_redeem_clipboard(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        self.clipboard_clear_calls += 1;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+}
+
+#[test]
+fn redeem_code_executor_runs_success_and_failure_branches() {
+    let plan = plan_use_redeem_codes(
+        vec![
+            RedeemCodeEntry::new("GENSHINGIFT1", Some("primogems".to_string())).unwrap(),
+            RedeemCodeEntry::new("ABCDEFGHIJKL", None).unwrap(),
+        ],
+        Size::new(1920, 1080),
+    )
+    .unwrap();
+    let mut runtime = FakeUseRedeemCodeRuntime::default().with_locator_matches([
+        true, true, true, true, true, true, true, true, true, true, false, true,
+    ]);
+
+    let report = execute_use_redeem_code_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.task_key, "UseRedeemCode");
+    assert_eq!(report.state.setup_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.cleanup_return_main_ui_completed, Some(true));
+    assert_eq!(
+        report.state.processed_codes,
+        vec!["GENSHINGIFT1".to_string(), "ABCDEFGHIJKL".to_string()]
+    );
+    assert_eq!(report.state.successful_codes, vec!["GENSHINGIFT1"]);
+    assert_eq!(report.state.failed_codes, vec!["ABCDEFGHIJKL"]);
+    assert_eq!(
+        report.state.success_detections,
+        vec![
+            UseRedeemCodeSuccessDetection {
+                code: "GENSHINGIFT1".to_string(),
+                detected: true,
+            },
+            UseRedeemCodeSuccessDetection {
+                code: "ABCDEFGHIJKL".to_string(),
+                detected: false,
+            },
+        ]
+    );
+    assert!(report.state.clipboard_cleared);
+    assert!(report.state.failed_required_steps.is_empty());
+    assert_eq!(
+        runtime.common_job_calls,
+        vec!["ReturnMainUi".to_string(), "ReturnMainUi".to_string()]
+    );
+    assert_eq!(
+        runtime.clipboard_sets,
+        vec!["GENSHINGIFT1".to_string(), "ABCDEFGHIJKL".to_string()]
+    );
+    assert_eq!(runtime.clipboard_clear_calls, 1);
+    assert!(runtime.logs.iter().any(|log| log.contains("GENSHINGIFT1")));
+    assert_eq!(runtime.input_batches.len(), 1);
+    assert_eq!(runtime.locator_outcomes.len(), 0);
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.code.as_deref() == Some("GENSHINGIFT1")
+            && step.condition == UseRedeemCodeStepCondition::WhenSuccessNotDetected
+            && step.reason == UseRedeemCodeSkipReason::SuccessDetected
+    }));
+    assert!(report.skipped_steps.iter().any(|step| {
+        step.code.as_deref() == Some("ABCDEFGHIJKL")
+            && step.condition == UseRedeemCodeStepCondition::WhenSuccessDetected
+            && step.reason == UseRedeemCodeSkipReason::SuccessMissing
+    }));
+    assert!(report.executed_steps.iter().any(|step| {
+        step.code.as_deref() == Some("GENSHINGIFT1")
+            && step.label == "click success confirm"
+            && step.action_kind == UseRedeemCodeRuntimeActionKind::Locator
+    }));
+    assert!(report.executed_steps.iter().any(|step| {
+        step.code.as_deref() == Some("ABCDEFGHIJKL")
+            && step.label == "click clear after failed redeem"
+            && step.action_kind == UseRedeemCodeRuntimeActionKind::Locator
+    }));
+}
+
+#[test]
+fn redeem_code_catalog_is_runtime_scaffolded_solo_task() {
+    let entry = find_task_catalog_entry("UseRedeemCode").unwrap();
+
+    assert_eq!(entry.launch_policy, TaskLaunchPolicy::SoloTask);
+    assert_eq!(entry.port_state, TaskPortState::RuntimeScaffolded);
+    assert!(entry.asset_roots.contains(&"GameTask/UseRedeemCode/Assets"));
+    assert!(entry
+        .asset_roots
+        .contains(&"GameTask/Common/Element/Assets"));
+}

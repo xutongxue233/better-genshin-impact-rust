@@ -57,6 +57,9 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Data_Xml_Dom",
     "Foundation",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
     "UI_Notifications",
 ] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }

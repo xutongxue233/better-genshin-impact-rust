@@ -44,6 +44,10 @@ mod webview2_link {
             let mut lib_src = manifest_dir.clone();
             lib_src.push(target);
             lib_src.push("WebView2Loader.dll");
+            if !lib_src.is_file() {
+                eprintln!("Skip missing {:?}", lib_src);
+                continue;
+            }
 
             let mut lib_dest = out_dir.clone();
             lib_dest.push(target);

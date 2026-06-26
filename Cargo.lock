@@ -275,6 +275,7 @@ dependencies = [
  "bgi-input",
  "bgi-task",
  "bgi-vision",
+ "chrono",
  "json5",
  "regex",
  "reqwest 0.13.4",
@@ -289,10 +290,12 @@ name = "bgi-script-engine"
 version = "0.1.0"
 dependencies = [
  "bgi-capture",
+ "bgi-core",
  "bgi-script",
  "bgi-task",
  "bgi-vision",
  "boa_engine",
+ "chrono",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -305,6 +308,7 @@ dependencies = [
  "bgi-core",
  "bgi-input",
  "bgi-vision",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

@@ -42,7 +42,7 @@
   "regName": "BetterGI",
   "exeName": "BetterGI.exe",
   "uninstallName": "BetterGI.uninst.exe",
-  "updaterName": "BetterGI.update.exe",
+  "updaterName": "bgi-updater.exe",
   "programFilesPath": "BetterGI",
   "title": "BetterGI",
   "description": "更好的原神，免费且开源",
@@ -58,7 +58,6 @@
   ],
   "uacStrategy": "prefer-admin",
   "runtimes": [
-    "Microsoft.DotNet.DesktopRuntime.8",
     "Microsoft.VCRedist.2015+.x64"
   ]
 }
