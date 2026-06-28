@@ -7,9 +7,9 @@ use serde_json::Value;
 use crate::common_job::{
     GridBgrColor, GridIconClassifierRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
     GridTemplate, InventoryTabAssetPair, GRID_ICON_INPUT_NAME, GRID_ICON_MODEL_NAME,
-    GRID_ICON_MODEL_PATH, GRID_ICON_PROTOTYPE_CSV_PATH,
+    GRID_ICON_MODEL_PATH, GRID_ICON_PROTOTYPE_CSV_PATH, RETURN_MAIN_UI_TASK_KEY,
 };
-use crate::{Result, TaskError, TaskPortState};
+use crate::{CommonJobRuntimeOutcome, Result, TaskError, TaskPortState};
 
 pub const AUTO_ARTIFACT_SALVAGE_TASK_KEY: &str = "AutoArtifactSalvage";
 pub const AUTO_ARTIFACT_SALVAGE_DISPLAY_NAME: &str = "圣遗物分解独立任务";
@@ -79,7 +79,7 @@ impl AutoArtifactSalvageExecutionConfig {
         config.param = AutoArtifactSalvageParam::from_core_config(core_config);
 
         overlay_param(&mut config.param, core_config_value);
-        if core_config_value as *const Value != value as *const Value {
+        if !std::ptr::eq(core_config_value, value) {
             overlay_param(&mut config.param, value);
         }
         if let Some(param_value) = value
@@ -441,6 +441,204 @@ pub enum AutoArtifactSalvageStepAction {
     ClearVisionOverlay,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageOpenInventoryOutcome {
+    pub expired_item_prompt_detected: bool,
+    pub artifact_tab_checked: bool,
+    pub still_on_main_ui: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoArtifactSalvageDialogOutcome {
+    Confirmed,
+    Cancelled,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageSetFilterOutcome {
+    pub matched_filter_items: usize,
+    pub filter_applied: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageFiveStarScanOutcome {
+    pub scanned_count: u64,
+    pub selected_count: u64,
+    pub deselected_count: u64,
+    pub recognition_failure_count: u64,
+    pub stopped_by_max_count: bool,
+    pub manual_review_required: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoArtifactSalvageExecutionStatus {
+    Completed,
+    ManualReviewRequired,
+    Skipped,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoArtifactSalvageSkipReason {
+    OpenSalvageButtonMissing,
+    QuickSelectButtonMissing,
+    QuickSelectionConfirmMissing,
+    NoQuickSalvageItems,
+    QuickSalvageConfirmCancelled,
+    FinalConfirmMissing,
+    FinalConfirmCancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoArtifactSalvageRuntimeActionKind {
+    CommonJob,
+    OpenInventory,
+    ConfirmExpiredItemPrompt,
+    OpenArtifactsInventoryTab,
+    ClickOpenSalvage,
+    ClickQuickSelect,
+    UnselectStarsAboveConfiguredMaximum,
+    ConfirmQuickSelection,
+    ClickQuickSalvageConfirm,
+    ClickQuickSalvageBlackConfirm,
+    ClickBlankAfterQuickSalvage,
+    ApplyArtifactSetFilter,
+    ScanFiveStarArtifacts,
+    PromptManualReview,
+    ClearVisionDrawings,
+    ReturnMainUi,
+    Skip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoArtifactSalvageRuntimeActionOutcome {
+    CommonJob(CommonJobRuntimeOutcome),
+    Matched(bool),
+    OpenInventory(AutoArtifactSalvageOpenInventoryOutcome),
+    Dialog(AutoArtifactSalvageDialogOutcome),
+    ArtifactSetFilter(AutoArtifactSalvageSetFilterOutcome),
+    FiveStarScan(AutoArtifactSalvageFiveStarScanOutcome),
+    Skipped(AutoArtifactSalvageSkipReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageRuntimeActionReport {
+    pub action_kind: AutoArtifactSalvageRuntimeActionKind,
+    pub outcome: AutoArtifactSalvageRuntimeActionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageSkippedStep {
+    pub action_kind: AutoArtifactSalvageRuntimeActionKind,
+    pub reason: AutoArtifactSalvageSkipReason,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageExecutorState {
+    pub initial_return_main_ui_completed: Option<bool>,
+    pub open_inventory_outcome: Option<AutoArtifactSalvageOpenInventoryOutcome>,
+    pub expired_item_prompt_confirmed: Option<bool>,
+    pub artifact_tab_opened: Option<bool>,
+    pub salvage_screen_opened: bool,
+    pub quick_select_clicked: bool,
+    pub unselected_stars: Vec<u8>,
+    pub quick_selection_confirmed: bool,
+    pub quick_salvage_confirm_outcome: Option<AutoArtifactSalvageDialogOutcome>,
+    pub final_confirm_outcome: Option<AutoArtifactSalvageDialogOutcome>,
+    pub quick_salvage_confirmed: bool,
+    pub blank_clicked_after_quick_salvage: bool,
+    pub artifact_set_filter_outcome: Option<AutoArtifactSalvageSetFilterOutcome>,
+    pub five_star_scan_outcome: Option<AutoArtifactSalvageFiveStarScanOutcome>,
+    pub manual_review_logged: bool,
+    pub vision_drawings_cleared: bool,
+    pub final_return_main_ui_completed: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArtifactSalvageExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub status: AutoArtifactSalvageExecutionStatus,
+    pub state: AutoArtifactSalvageExecutorState,
+    pub executed_actions: Vec<AutoArtifactSalvageRuntimeActionReport>,
+    pub skipped_steps: Vec<AutoArtifactSalvageSkippedStep>,
+}
+
+pub trait AutoArtifactSalvageRuntime {
+    fn execute_auto_artifact_salvage_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn open_auto_artifact_salvage_inventory(
+        &mut self,
+        rule: &AutoArtifactSalvageOpenInventoryRule,
+    ) -> Result<AutoArtifactSalvageOpenInventoryOutcome>;
+
+    fn confirm_auto_artifact_salvage_expired_item_prompt(
+        &mut self,
+        confirm_asset: &str,
+        crop_bottom_ratio: f64,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn open_auto_artifact_salvage_inventory_tab(
+        &mut self,
+        rule: &AutoArtifactSalvageOpenInventoryRule,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn click_auto_artifact_salvage_open_button(
+        &mut self,
+        locator: &ArtifactSalvageTemplateLocator,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn click_auto_artifact_salvage_quick_select(
+        &mut self,
+        rule: &ArtifactSalvageOcrButtonRule,
+    ) -> Result<bool>;
+
+    fn unselect_auto_artifact_salvage_stars(
+        &mut self,
+        stars: &[u8],
+        rule: &ArtifactSalvageStarOptionRule,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn confirm_auto_artifact_salvage_quick_selection(
+        &mut self,
+        asset: &str,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn click_auto_artifact_salvage_confirm(
+        &mut self,
+        asset: &str,
+    ) -> Result<AutoArtifactSalvageDialogOutcome>;
+
+    fn handle_auto_artifact_salvage_final_confirm(
+        &mut self,
+        asset: &str,
+        kind: ArtifactSalvageConfirmKind,
+    ) -> Result<AutoArtifactSalvageDialogOutcome>;
+
+    fn click_auto_artifact_salvage_blank_after_quick_salvage(
+        &mut self,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn apply_auto_artifact_salvage_set_filter(
+        &mut self,
+        rule: &ArtifactSetFilterSelectionRule,
+    ) -> Result<AutoArtifactSalvageSetFilterOutcome>;
+
+    fn scan_auto_artifact_salvage_five_star(
+        &mut self,
+        rule: &FiveStarArtifactFilterRule,
+    ) -> Result<AutoArtifactSalvageFiveStarScanOutcome>;
+
+    fn log_auto_artifact_salvage(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome>;
+
+    fn clear_auto_artifact_salvage_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome>;
+}
+
 pub fn plan_auto_artifact_salvage(
     config: AutoArtifactSalvageExecutionConfig,
 ) -> Result<AutoArtifactSalvageExecutionPlan> {
@@ -456,7 +654,7 @@ pub fn plan_auto_artifact_salvage(
         task_key: AUTO_ARTIFACT_SALVAGE_TASK_KEY.to_string(),
         display_name: AUTO_ARTIFACT_SALVAGE_DISPLAY_NAME.to_string(),
         port_state: TaskPortState::RuntimeScaffolded,
-        executor_ready: false,
+        executor_ready: true,
         capture_size: config.capture_size,
         config_rule: config_rule(&config.param),
         open_inventory_rule: open_inventory_rule(),
@@ -465,6 +663,368 @@ pub fn plan_auto_artifact_salvage(
         steps: steps(java_script_present, artifact_set_filter_enabled),
         pending_native: pending_native(java_script_present, artifact_set_filter_enabled),
     })
+}
+
+pub fn execute_auto_artifact_salvage_plan<R>(
+    plan: &AutoArtifactSalvageExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoArtifactSalvageExecutionReport>
+where
+    R: AutoArtifactSalvageRuntime,
+{
+    let mut state = AutoArtifactSalvageExecutorState::default();
+    let mut executed_actions = Vec::new();
+    let mut skipped_steps = Vec::new();
+
+    let execution_result = execute_auto_artifact_salvage_steps(
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+        &mut skipped_steps,
+    );
+    let status = match execution_result {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = execute_auto_artifact_salvage_cleanup(
+                plan,
+                runtime,
+                AutoArtifactSalvageExecutionStatus::Skipped,
+                &mut state,
+                &mut executed_actions,
+            );
+            return Err(error);
+        }
+    };
+
+    execute_auto_artifact_salvage_cleanup(
+        plan,
+        runtime,
+        status,
+        &mut state,
+        &mut executed_actions,
+    )?;
+
+    Ok(auto_artifact_salvage_report(
+        plan,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    ))
+}
+
+fn execute_auto_artifact_salvage_steps<R>(
+    plan: &AutoArtifactSalvageExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoArtifactSalvageExecutorState,
+    executed_actions: &mut Vec<AutoArtifactSalvageRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoArtifactSalvageSkippedStep>,
+) -> Result<AutoArtifactSalvageExecutionStatus>
+where
+    R: AutoArtifactSalvageRuntime,
+{
+    let outcome = runtime.execute_auto_artifact_salvage_common_job(RETURN_MAIN_UI_TASK_KEY)?;
+    state.initial_return_main_ui_completed = Some(auto_artifact_salvage_outcome_succeeded(outcome));
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::CommonJob,
+        AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+    ));
+
+    let open_outcome = runtime.open_auto_artifact_salvage_inventory(&plan.open_inventory_rule)?;
+    state.open_inventory_outcome = Some(open_outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::OpenInventory,
+        AutoArtifactSalvageRuntimeActionOutcome::OpenInventory(open_outcome),
+    ));
+
+    if open_outcome.expired_item_prompt_detected {
+        let outcome = runtime.confirm_auto_artifact_salvage_expired_item_prompt(
+            &plan.open_inventory_rule.expired_item_prompt_confirm_asset,
+            plan.open_inventory_rule
+                .expired_item_prompt_crop_bottom_ratio,
+        )?;
+        state.expired_item_prompt_confirmed =
+            Some(auto_artifact_salvage_outcome_succeeded(outcome));
+        executed_actions.push(auto_artifact_salvage_action_report(
+            AutoArtifactSalvageRuntimeActionKind::ConfirmExpiredItemPrompt,
+            AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+        ));
+    }
+
+    if !open_outcome.artifact_tab_checked {
+        let outcome =
+            runtime.open_auto_artifact_salvage_inventory_tab(&plan.open_inventory_rule)?;
+        state.artifact_tab_opened = Some(auto_artifact_salvage_outcome_succeeded(outcome));
+        executed_actions.push(auto_artifact_salvage_action_report(
+            AutoArtifactSalvageRuntimeActionKind::OpenArtifactsInventoryTab,
+            AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+        ));
+    }
+
+    let outcome = runtime
+        .click_auto_artifact_salvage_open_button(&plan.quick_salvage_rule.opens_salvage_button)?;
+    state.salvage_screen_opened = auto_artifact_salvage_outcome_succeeded(outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ClickOpenSalvage,
+        AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+    ));
+    if !state.salvage_screen_opened {
+        return Ok(auto_artifact_salvage_skip(
+            skipped_steps,
+            executed_actions,
+            AutoArtifactSalvageRuntimeActionKind::ClickOpenSalvage,
+            AutoArtifactSalvageSkipReason::OpenSalvageButtonMissing,
+        ));
+    }
+
+    let quick_select_clicked = runtime
+        .click_auto_artifact_salvage_quick_select(&plan.quick_salvage_rule.quick_select_ocr_rule)?;
+    state.quick_select_clicked = quick_select_clicked;
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ClickQuickSelect,
+        AutoArtifactSalvageRuntimeActionOutcome::Matched(quick_select_clicked),
+    ));
+    if !quick_select_clicked {
+        return Ok(auto_artifact_salvage_skip(
+            skipped_steps,
+            executed_actions,
+            AutoArtifactSalvageRuntimeActionKind::ClickQuickSelect,
+            AutoArtifactSalvageSkipReason::QuickSelectButtonMissing,
+        ));
+    }
+
+    let stars = &plan.config_rule.unselected_after_quick_select_stars;
+    let outcome = runtime.unselect_auto_artifact_salvage_stars(
+        stars,
+        &plan.quick_salvage_rule.star_option_ocr_rule,
+    )?;
+    state.unselected_stars = stars.clone();
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::UnselectStarsAboveConfiguredMaximum,
+        AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+    ));
+
+    let outcome = runtime.confirm_auto_artifact_salvage_quick_selection(
+        &plan.quick_salvage_rule.quick_select_confirm_asset,
+    )?;
+    state.quick_selection_confirmed = auto_artifact_salvage_outcome_succeeded(outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ConfirmQuickSelection,
+        AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+    ));
+    if !state.quick_selection_confirmed {
+        return Ok(auto_artifact_salvage_skip(
+            skipped_steps,
+            executed_actions,
+            AutoArtifactSalvageRuntimeActionKind::ConfirmQuickSelection,
+            AutoArtifactSalvageSkipReason::QuickSelectionConfirmMissing,
+        ));
+    }
+
+    let salvage_confirm_outcome = runtime
+        .click_auto_artifact_salvage_confirm(&plan.quick_salvage_rule.salvage_confirm_asset)?;
+    state.quick_salvage_confirm_outcome = Some(salvage_confirm_outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageConfirm,
+        AutoArtifactSalvageRuntimeActionOutcome::Dialog(salvage_confirm_outcome),
+    ));
+    match salvage_confirm_outcome {
+        AutoArtifactSalvageDialogOutcome::Confirmed => {}
+        AutoArtifactSalvageDialogOutcome::Cancelled => {
+            return Ok(auto_artifact_salvage_cancel(
+                skipped_steps,
+                executed_actions,
+                AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageConfirm,
+                AutoArtifactSalvageSkipReason::QuickSalvageConfirmCancelled,
+            ));
+        }
+        AutoArtifactSalvageDialogOutcome::Missing => {
+            return Ok(auto_artifact_salvage_skip(
+                skipped_steps,
+                executed_actions,
+                AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageConfirm,
+                AutoArtifactSalvageSkipReason::NoQuickSalvageItems,
+            ));
+        }
+    }
+
+    let final_confirm_outcome = runtime.handle_auto_artifact_salvage_final_confirm(
+        &plan.quick_salvage_rule.final_confirm_asset,
+        plan.quick_salvage_rule.final_confirm_kind,
+    )?;
+    state.final_confirm_outcome = Some(final_confirm_outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageBlackConfirm,
+        AutoArtifactSalvageRuntimeActionOutcome::Dialog(final_confirm_outcome),
+    ));
+    match final_confirm_outcome {
+        AutoArtifactSalvageDialogOutcome::Confirmed => {
+            state.quick_salvage_confirmed = true;
+        }
+        AutoArtifactSalvageDialogOutcome::Cancelled => {
+            return Ok(auto_artifact_salvage_cancel(
+                skipped_steps,
+                executed_actions,
+                AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageBlackConfirm,
+                AutoArtifactSalvageSkipReason::FinalConfirmCancelled,
+            ));
+        }
+        AutoArtifactSalvageDialogOutcome::Missing => {
+            return Ok(auto_artifact_salvage_skip(
+                skipped_steps,
+                executed_actions,
+                AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageBlackConfirm,
+                AutoArtifactSalvageSkipReason::FinalConfirmMissing,
+            ));
+        }
+    }
+
+    let Some(five_star_rule) = plan.five_star_rule.as_ref() else {
+        return Ok(AutoArtifactSalvageExecutionStatus::Completed);
+    };
+
+    if plan
+        .quick_salvage_rule
+        .post_quick_salvage_click_when_js_present
+    {
+        let outcome = runtime.click_auto_artifact_salvage_blank_after_quick_salvage()?;
+        state.blank_clicked_after_quick_salvage = auto_artifact_salvage_outcome_succeeded(outcome);
+        executed_actions.push(auto_artifact_salvage_action_report(
+            AutoArtifactSalvageRuntimeActionKind::ClickBlankAfterQuickSalvage,
+            AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+        ));
+    }
+
+    if let Some(filter_rule) = five_star_rule.artifact_set_filter_rule.as_ref() {
+        let outcome = runtime.apply_auto_artifact_salvage_set_filter(filter_rule)?;
+        state.artifact_set_filter_outcome = Some(outcome);
+        executed_actions.push(auto_artifact_salvage_action_report(
+            AutoArtifactSalvageRuntimeActionKind::ApplyArtifactSetFilter,
+            AutoArtifactSalvageRuntimeActionOutcome::ArtifactSetFilter(outcome),
+        ));
+    }
+
+    let scan_outcome = runtime.scan_auto_artifact_salvage_five_star(five_star_rule)?;
+    state.five_star_scan_outcome = Some(scan_outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ScanFiveStarArtifacts,
+        AutoArtifactSalvageRuntimeActionOutcome::FiveStarScan(scan_outcome),
+    ));
+
+    if scan_outcome.manual_review_required {
+        if five_star_rule.finish_rule.logs_manual_review_required {
+            let outcome = runtime
+                .log_auto_artifact_salvage(&five_star_rule.finish_rule.manual_review_message)?;
+            state.manual_review_logged = auto_artifact_salvage_outcome_succeeded(outcome);
+            executed_actions.push(auto_artifact_salvage_action_report(
+                AutoArtifactSalvageRuntimeActionKind::PromptManualReview,
+                AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+            ));
+        }
+        return Ok(AutoArtifactSalvageExecutionStatus::ManualReviewRequired);
+    }
+
+    Ok(AutoArtifactSalvageExecutionStatus::Completed)
+}
+
+fn execute_auto_artifact_salvage_cleanup<R>(
+    _plan: &AutoArtifactSalvageExecutionPlan,
+    runtime: &mut R,
+    status: AutoArtifactSalvageExecutionStatus,
+    state: &mut AutoArtifactSalvageExecutorState,
+    executed_actions: &mut Vec<AutoArtifactSalvageRuntimeActionReport>,
+) -> Result<()>
+where
+    R: AutoArtifactSalvageRuntime,
+{
+    let outcome = runtime.clear_auto_artifact_salvage_vision_drawings()?;
+    state.vision_drawings_cleared = auto_artifact_salvage_outcome_succeeded(outcome);
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::ClearVisionDrawings,
+        AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+    ));
+
+    if status != AutoArtifactSalvageExecutionStatus::ManualReviewRequired {
+        let outcome = runtime.execute_auto_artifact_salvage_common_job(RETURN_MAIN_UI_TASK_KEY)?;
+        state.final_return_main_ui_completed =
+            Some(auto_artifact_salvage_outcome_succeeded(outcome));
+        executed_actions.push(auto_artifact_salvage_action_report(
+            AutoArtifactSalvageRuntimeActionKind::ReturnMainUi,
+            AutoArtifactSalvageRuntimeActionOutcome::CommonJob(outcome),
+        ));
+    }
+
+    Ok(())
+}
+
+fn auto_artifact_salvage_skip(
+    skipped_steps: &mut Vec<AutoArtifactSalvageSkippedStep>,
+    executed_actions: &mut Vec<AutoArtifactSalvageRuntimeActionReport>,
+    action_kind: AutoArtifactSalvageRuntimeActionKind,
+    reason: AutoArtifactSalvageSkipReason,
+) -> AutoArtifactSalvageExecutionStatus {
+    skipped_steps.push(AutoArtifactSalvageSkippedStep {
+        action_kind,
+        reason,
+    });
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::Skip,
+        AutoArtifactSalvageRuntimeActionOutcome::Skipped(reason),
+    ));
+    AutoArtifactSalvageExecutionStatus::Skipped
+}
+
+fn auto_artifact_salvage_cancel(
+    skipped_steps: &mut Vec<AutoArtifactSalvageSkippedStep>,
+    executed_actions: &mut Vec<AutoArtifactSalvageRuntimeActionReport>,
+    action_kind: AutoArtifactSalvageRuntimeActionKind,
+    reason: AutoArtifactSalvageSkipReason,
+) -> AutoArtifactSalvageExecutionStatus {
+    skipped_steps.push(AutoArtifactSalvageSkippedStep {
+        action_kind,
+        reason,
+    });
+    executed_actions.push(auto_artifact_salvage_action_report(
+        AutoArtifactSalvageRuntimeActionKind::Skip,
+        AutoArtifactSalvageRuntimeActionOutcome::Skipped(reason),
+    ));
+    AutoArtifactSalvageExecutionStatus::Cancelled
+}
+
+fn auto_artifact_salvage_report(
+    plan: &AutoArtifactSalvageExecutionPlan,
+    status: AutoArtifactSalvageExecutionStatus,
+    state: AutoArtifactSalvageExecutorState,
+    executed_actions: Vec<AutoArtifactSalvageRuntimeActionReport>,
+    skipped_steps: Vec<AutoArtifactSalvageSkippedStep>,
+) -> AutoArtifactSalvageExecutionReport {
+    AutoArtifactSalvageExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: status == AutoArtifactSalvageExecutionStatus::Completed
+            || status == AutoArtifactSalvageExecutionStatus::ManualReviewRequired,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    }
+}
+
+fn auto_artifact_salvage_action_report(
+    action_kind: AutoArtifactSalvageRuntimeActionKind,
+    outcome: AutoArtifactSalvageRuntimeActionOutcome,
+) -> AutoArtifactSalvageRuntimeActionReport {
+    AutoArtifactSalvageRuntimeActionReport {
+        action_kind,
+        outcome,
+    }
+}
+
+fn auto_artifact_salvage_outcome_succeeded(outcome: CommonJobRuntimeOutcome) -> bool {
+    match outcome {
+        CommonJobRuntimeOutcome::Matched(value) => value,
+        CommonJobRuntimeOutcome::None => true,
+    }
 }
 
 fn validate_param(param: &AutoArtifactSalvageParam) -> Result<()> {
@@ -789,26 +1349,26 @@ fn step(
 
 fn pending_native(java_script_present: bool, artifact_set_filter_enabled: bool) -> Vec<String> {
     let mut pending = vec![
-        "ReturnMainUiTask, SendInput OpenInventory/Escape, and mouse click dispatch".to_string(),
-        "live capture, template matching, prompt dialog detection, and BV confirm button clicks"
+        "executor-ready Rust orchestration is available behind AutoArtifactSalvageRuntime; desktop live adapters are not wired yet"
             .to_string(),
-        "destructive 1-4 star quick salvage confirmation remains intentionally executor-disabled"
+        "desktop live adapter for ReturnMainUiTask, SendInput OpenInventory/Escape, mouse click dispatch, capture, and template matching remains pending"
             .to_string(),
-        "localized OCR for quick-select and star option buttons".to_string(),
+        "desktop live adapter for localized OCR quick-select/star-option detection and confirm dialog handling remains pending"
+            .to_string(),
     ];
     if artifact_set_filter_enabled {
         pending.push(
-            "ArtifactSetFilter grid enumeration, overlay drawing, ONNX gridIcon inference, and filter confirmation"
+            "desktop live adapter for ArtifactSetFilter grid enumeration, overlay drawing, ONNX gridIcon inference, and filter confirmation remains pending"
                 .to_string(),
         );
     }
     if java_script_present {
         pending.extend([
-            "ArtifactSalvage grid enumeration and locked/selected color-state OpenCV recognition"
+            "desktop live adapter for ArtifactSalvage grid enumeration and locked/selected color-state OpenCV recognition remains pending"
                 .to_string(),
-            "Paddle OCR artifact detail parsing, localized affix mapping, and unactivated affix histogram detection"
+            "desktop live adapter for Paddle OCR artifact detail parsing, localized affix mapping, and unactivated affix histogram detection remains pending"
                 .to_string(),
-            "ClearScript V8 JavaScript evaluation with timeout, Output validation, and recognition failure policy"
+            "desktop live adapter for ClearScript V8 JavaScript evaluation with timeout, Output validation, and recognition failure policy remains pending"
                 .to_string(),
             "five-star result is selection-only and requires manual review before actual salvage".to_string(),
         ]);
@@ -1143,4 +1703,445 @@ fn u64_member<const N: usize>(value: &Value, keys: [&str; N]) -> Option<u64> {
 
 fn member<'a, const N: usize>(value: &'a Value, keys: [&str; N]) -> Option<&'a Value> {
     keys.into_iter().find_map(|key| value.get(key))
+}
+
+#[cfg(test)]
+mod auto_artifact_salvage_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[derive(Debug)]
+    struct FakeAutoArtifactSalvageRuntime {
+        calls: Vec<AutoArtifactSalvageRuntimeActionKind>,
+        common_jobs: Vec<String>,
+        log_messages: Vec<String>,
+        clear_count: usize,
+        open_inventory_outcome: AutoArtifactSalvageOpenInventoryOutcome,
+        open_button_outcome: CommonJobRuntimeOutcome,
+        quick_select_clicked: bool,
+        quick_selection_outcome: CommonJobRuntimeOutcome,
+        salvage_confirm_outcomes: VecDeque<AutoArtifactSalvageDialogOutcome>,
+        final_confirm_outcomes: VecDeque<AutoArtifactSalvageDialogOutcome>,
+        set_filter_outcome: AutoArtifactSalvageSetFilterOutcome,
+        five_star_scan_outcome: AutoArtifactSalvageFiveStarScanOutcome,
+        unselected_stars: Vec<u8>,
+        fail_quick_select: bool,
+    }
+
+    impl Default for FakeAutoArtifactSalvageRuntime {
+        fn default() -> Self {
+            Self {
+                calls: Vec::new(),
+                common_jobs: Vec::new(),
+                log_messages: Vec::new(),
+                clear_count: 0,
+                open_inventory_outcome: AutoArtifactSalvageOpenInventoryOutcome {
+                    expired_item_prompt_detected: false,
+                    artifact_tab_checked: true,
+                    still_on_main_ui: false,
+                },
+                open_button_outcome: CommonJobRuntimeOutcome::Matched(true),
+                quick_select_clicked: true,
+                quick_selection_outcome: CommonJobRuntimeOutcome::Matched(true),
+                salvage_confirm_outcomes: VecDeque::from([
+                    AutoArtifactSalvageDialogOutcome::Confirmed,
+                ]),
+                final_confirm_outcomes: VecDeque::from([
+                    AutoArtifactSalvageDialogOutcome::Confirmed,
+                ]),
+                set_filter_outcome: AutoArtifactSalvageSetFilterOutcome {
+                    matched_filter_items: 1,
+                    filter_applied: true,
+                },
+                five_star_scan_outcome: AutoArtifactSalvageFiveStarScanOutcome {
+                    scanned_count: 1,
+                    selected_count: 1,
+                    deselected_count: 0,
+                    recognition_failure_count: 0,
+                    stopped_by_max_count: false,
+                    manual_review_required: true,
+                },
+                unselected_stars: Vec::new(),
+                fail_quick_select: false,
+            }
+        }
+    }
+
+    impl FakeAutoArtifactSalvageRuntime {
+        fn with_open_button_matched(mut self, matched: bool) -> Self {
+            self.open_button_outcome = CommonJobRuntimeOutcome::Matched(matched);
+            self
+        }
+
+        fn with_salvage_confirm(mut self, outcome: AutoArtifactSalvageDialogOutcome) -> Self {
+            self.salvage_confirm_outcomes = VecDeque::from([outcome]);
+            self
+        }
+
+        fn with_final_confirm(mut self, outcome: AutoArtifactSalvageDialogOutcome) -> Self {
+            self.final_confirm_outcomes = VecDeque::from([outcome]);
+            self
+        }
+
+        fn with_quick_select_error(mut self) -> Self {
+            self.fail_quick_select = true;
+            self
+        }
+    }
+
+    impl AutoArtifactSalvageRuntime for FakeAutoArtifactSalvageRuntime {
+        fn execute_auto_artifact_salvage_common_job(
+            &mut self,
+            task_key: &str,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::CommonJob);
+            self.common_jobs.push(task_key.to_string());
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+
+        fn open_auto_artifact_salvage_inventory(
+            &mut self,
+            _rule: &AutoArtifactSalvageOpenInventoryRule,
+        ) -> Result<AutoArtifactSalvageOpenInventoryOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::OpenInventory);
+            Ok(self.open_inventory_outcome)
+        }
+
+        fn confirm_auto_artifact_salvage_expired_item_prompt(
+            &mut self,
+            _confirm_asset: &str,
+            _crop_bottom_ratio: f64,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ConfirmExpiredItemPrompt);
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+
+        fn open_auto_artifact_salvage_inventory_tab(
+            &mut self,
+            _rule: &AutoArtifactSalvageOpenInventoryRule,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::OpenArtifactsInventoryTab);
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+
+        fn click_auto_artifact_salvage_open_button(
+            &mut self,
+            _locator: &ArtifactSalvageTemplateLocator,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ClickOpenSalvage);
+            Ok(self.open_button_outcome)
+        }
+
+        fn click_auto_artifact_salvage_quick_select(
+            &mut self,
+            _rule: &ArtifactSalvageOcrButtonRule,
+        ) -> Result<bool> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ClickQuickSelect);
+            if self.fail_quick_select {
+                return Err(TaskError::CommonJobExecution(
+                    "quick select OCR failed".to_string(),
+                ));
+            }
+            Ok(self.quick_select_clicked)
+        }
+
+        fn unselect_auto_artifact_salvage_stars(
+            &mut self,
+            stars: &[u8],
+            _rule: &ArtifactSalvageStarOptionRule,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::UnselectStarsAboveConfiguredMaximum);
+            self.unselected_stars = stars.to_vec();
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+
+        fn confirm_auto_artifact_salvage_quick_selection(
+            &mut self,
+            _asset: &str,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ConfirmQuickSelection);
+            Ok(self.quick_selection_outcome)
+        }
+
+        fn click_auto_artifact_salvage_confirm(
+            &mut self,
+            _asset: &str,
+        ) -> Result<AutoArtifactSalvageDialogOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageConfirm);
+            Ok(self
+                .salvage_confirm_outcomes
+                .pop_front()
+                .unwrap_or(AutoArtifactSalvageDialogOutcome::Confirmed))
+        }
+
+        fn handle_auto_artifact_salvage_final_confirm(
+            &mut self,
+            _asset: &str,
+            _kind: ArtifactSalvageConfirmKind,
+        ) -> Result<AutoArtifactSalvageDialogOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageBlackConfirm);
+            Ok(self
+                .final_confirm_outcomes
+                .pop_front()
+                .unwrap_or(AutoArtifactSalvageDialogOutcome::Confirmed))
+        }
+
+        fn click_auto_artifact_salvage_blank_after_quick_salvage(
+            &mut self,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ClickBlankAfterQuickSalvage);
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+
+        fn apply_auto_artifact_salvage_set_filter(
+            &mut self,
+            _rule: &ArtifactSetFilterSelectionRule,
+        ) -> Result<AutoArtifactSalvageSetFilterOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ApplyArtifactSetFilter);
+            Ok(self.set_filter_outcome)
+        }
+
+        fn scan_auto_artifact_salvage_five_star(
+            &mut self,
+            _rule: &FiveStarArtifactFilterRule,
+        ) -> Result<AutoArtifactSalvageFiveStarScanOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ScanFiveStarArtifacts);
+            Ok(self.five_star_scan_outcome)
+        }
+
+        fn log_auto_artifact_salvage(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::PromptManualReview);
+            self.log_messages.push(message.to_string());
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+
+        fn clear_auto_artifact_salvage_vision_drawings(
+            &mut self,
+        ) -> Result<CommonJobRuntimeOutcome> {
+            self.calls
+                .push(AutoArtifactSalvageRuntimeActionKind::ClearVisionDrawings);
+            self.clear_count += 1;
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        }
+    }
+
+    fn quick_only_plan(star: u8) -> AutoArtifactSalvageExecutionPlan {
+        plan_auto_artifact_salvage(AutoArtifactSalvageExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "star": star,
+                "javaScript": null,
+                "artifactSetFilter": null,
+                "maxNumToCheck": null,
+                "recognitionFailurePolicy": null
+            }),
+        )))
+        .unwrap()
+    }
+
+    #[test]
+    fn auto_artifact_salvage_executor_confirms_normal_quick_salvage() {
+        let plan = quick_only_plan(3);
+        let mut runtime = FakeAutoArtifactSalvageRuntime::default();
+
+        let report = execute_auto_artifact_salvage_plan(&plan, &mut runtime).unwrap();
+
+        assert!(plan.executor_ready);
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("desktop live adapters are not wired yet")));
+        assert_eq!(report.status, AutoArtifactSalvageExecutionStatus::Completed);
+        assert!(report.completed);
+        assert_eq!(report.state.unselected_stars, vec![4]);
+        assert_eq!(runtime.unselected_stars, vec![4]);
+        assert_eq!(
+            report.state.quick_salvage_confirm_outcome,
+            Some(AutoArtifactSalvageDialogOutcome::Confirmed)
+        );
+        assert_eq!(
+            report.state.final_confirm_outcome,
+            Some(AutoArtifactSalvageDialogOutcome::Confirmed)
+        );
+        assert!(report.state.quick_salvage_confirmed);
+        assert_eq!(runtime.clear_count, 1);
+        assert_eq!(
+            runtime.common_jobs,
+            vec![
+                RETURN_MAIN_UI_TASK_KEY.to_string(),
+                RETURN_MAIN_UI_TASK_KEY.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_artifact_salvage_executor_skips_when_no_quick_items_exist() {
+        let plan = quick_only_plan(4);
+        let mut runtime = FakeAutoArtifactSalvageRuntime::default()
+            .with_salvage_confirm(AutoArtifactSalvageDialogOutcome::Missing);
+
+        let report = execute_auto_artifact_salvage_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoArtifactSalvageExecutionStatus::Skipped);
+        assert!(!report.completed);
+        assert_eq!(
+            report.skipped_steps,
+            vec![AutoArtifactSalvageSkippedStep {
+                action_kind: AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageConfirm,
+                reason: AutoArtifactSalvageSkipReason::NoQuickSalvageItems,
+            }]
+        );
+        assert!(report.state.final_confirm_outcome.is_none());
+        assert_eq!(runtime.clear_count, 1);
+        assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+        assert!(!runtime
+            .calls
+            .contains(&AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageBlackConfirm));
+    }
+
+    #[test]
+    fn auto_artifact_salvage_executor_reports_final_popup_cancel_path() {
+        let plan = quick_only_plan(4);
+        let mut runtime = FakeAutoArtifactSalvageRuntime::default()
+            .with_final_confirm(AutoArtifactSalvageDialogOutcome::Cancelled);
+
+        let report = execute_auto_artifact_salvage_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoArtifactSalvageExecutionStatus::Cancelled);
+        assert!(!report.completed);
+        assert_eq!(
+            report.state.quick_salvage_confirm_outcome,
+            Some(AutoArtifactSalvageDialogOutcome::Confirmed)
+        );
+        assert_eq!(
+            report.state.final_confirm_outcome,
+            Some(AutoArtifactSalvageDialogOutcome::Cancelled)
+        );
+        assert_eq!(
+            report.skipped_steps,
+            vec![AutoArtifactSalvageSkippedStep {
+                action_kind: AutoArtifactSalvageRuntimeActionKind::ClickQuickSalvageBlackConfirm,
+                reason: AutoArtifactSalvageSkipReason::FinalConfirmCancelled,
+            }]
+        );
+        assert_eq!(runtime.clear_count, 1);
+        assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    }
+
+    #[test]
+    fn auto_artifact_salvage_executor_cleanup_runs_after_early_skip() {
+        let plan = quick_only_plan(4);
+        let mut runtime = FakeAutoArtifactSalvageRuntime::default().with_open_button_matched(false);
+
+        let report = execute_auto_artifact_salvage_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoArtifactSalvageExecutionStatus::Skipped);
+        assert_eq!(
+            report.skipped_steps,
+            vec![AutoArtifactSalvageSkippedStep {
+                action_kind: AutoArtifactSalvageRuntimeActionKind::ClickOpenSalvage,
+                reason: AutoArtifactSalvageSkipReason::OpenSalvageButtonMissing,
+            }]
+        );
+        assert_eq!(runtime.clear_count, 1);
+        assert!(report.state.vision_drawings_cleared);
+        assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+        assert!(!runtime
+            .calls
+            .contains(&AutoArtifactSalvageRuntimeActionKind::ClickQuickSelect));
+    }
+
+    #[test]
+    fn auto_artifact_salvage_executor_cleanup_runs_after_runtime_error() {
+        let plan = quick_only_plan(4);
+        let mut runtime = FakeAutoArtifactSalvageRuntime::default().with_quick_select_error();
+
+        let error = execute_auto_artifact_salvage_plan(&plan, &mut runtime).unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message) if message.contains("quick select OCR failed")
+        ));
+        assert_eq!(runtime.clear_count, 1);
+        assert_eq!(
+            runtime.common_jobs,
+            vec![
+                RETURN_MAIN_UI_TASK_KEY.to_string(),
+                RETURN_MAIN_UI_TASK_KEY.to_string()
+            ]
+        );
+        assert!(runtime
+            .calls
+            .contains(&AutoArtifactSalvageRuntimeActionKind::ClearVisionDrawings));
+    }
+
+    #[test]
+    fn auto_artifact_salvage_executor_runs_filter_and_five_star_scan_boundary() {
+        let plan = plan_auto_artifact_salvage(AutoArtifactSalvageExecutionConfig::from_value(
+            Some(&serde_json::json!({
+                "star": 2,
+                "javaScript": "Output = true;",
+                "artifactSetFilter": "如雷的盛怒",
+                "maxNumToCheck": 1,
+                "recognitionFailurePolicy": "Skip"
+            })),
+        ))
+        .unwrap();
+        let mut runtime = FakeAutoArtifactSalvageRuntime::default();
+
+        let report = execute_auto_artifact_salvage_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.status,
+            AutoArtifactSalvageExecutionStatus::ManualReviewRequired
+        );
+        assert!(report.completed);
+        assert_eq!(report.state.unselected_stars, vec![3, 4]);
+        assert_eq!(
+            report.state.artifact_set_filter_outcome,
+            Some(AutoArtifactSalvageSetFilterOutcome {
+                matched_filter_items: 1,
+                filter_applied: true,
+            })
+        );
+        assert_eq!(
+            report.state.five_star_scan_outcome,
+            Some(AutoArtifactSalvageFiveStarScanOutcome {
+                scanned_count: 1,
+                selected_count: 1,
+                deselected_count: 0,
+                recognition_failure_count: 0,
+                stopped_by_max_count: false,
+                manual_review_required: true,
+            })
+        );
+        assert_eq!(
+            runtime.log_messages,
+            vec!["筛选完毕，请复查并手动分解".to_string()]
+        );
+        assert_eq!(runtime.clear_count, 1);
+        assert!(report.state.final_return_main_ui_completed.is_none());
+        assert!(runtime
+            .calls
+            .contains(&AutoArtifactSalvageRuntimeActionKind::ClickBlankAfterQuickSalvage));
+        assert!(runtime
+            .calls
+            .contains(&AutoArtifactSalvageRuntimeActionKind::ApplyArtifactSetFilter));
+        assert!(runtime
+            .calls
+            .contains(&AutoArtifactSalvageRuntimeActionKind::ScanFiveStarArtifacts));
+    }
 }

@@ -86,7 +86,7 @@ impl ScriptHostRuntime {
             key_mouse_dispatch_mode: config.key_mouse_dispatch_mode,
             cancellation: config.cancellation,
             file: LimitedFileHost::new(config.script_root.clone()),
-            vision: VisionHost::default(),
+            vision: VisionHost,
             log: ScriptLogHost::default(),
             http: HttpHost::new(config.http_policy),
             http_dispatch_mode: config.http_dispatch_mode,

@@ -499,10 +499,11 @@ pub fn plan_auto_music_game(config: AutoMusicGameExecutionConfig) -> AutoMusicGa
         },
         locators: auto_music_locators(),
         steps: auto_music_steps(),
-        executor_ready: false,
+        executor_ready: true,
         pending_native: vec![
-            "desktop manual performance live command now covers 16:9 resolution check, game-window handle/metrics, 1080p-to-capture coordinate conversion, Win32 User32.GetDC/Gdi32.GetPixel lane sampling, concurrent cancellation, Simulation keyboard KeyDown/KeyUp dispatch, and ReleaseAllKeys cleanup".to_string(),
-            "injectable AutoAlbumTask executor plus desktop album live command now preserve album page validation, all-songs OCR rejection, completion skipping, difficulty selection, white-confirm/template/click IO, BtnList performance stop handoff, next-song navigation, cancellation, timing, and AlbumStart/AlbumEnd/AlbumError notification dispatch; generic independent task routing selects performance by default or album with mode/executionMode=album".to_string(),
+            "desktop manual performance live command and generic independent-task live route now cover 16:9 resolution check, game-window handle/metrics, 1080p-to-capture coordinate conversion, Win32 User32.GetDC/Gdi32.GetPixel lane sampling, concurrent cancellation, Simulation keyboard KeyDown/KeyUp dispatch, and ReleaseAllKeys cleanup".to_string(),
+            "injectable AutoAlbumTask executor plus desktop album live command now preserve album page validation, all-songs OCR rejection, completion skipping, difficulty selection, white-confirm/template/click IO, BtnList performance stop handoff, next-song navigation, cancellation, timing, and AlbumStart/AlbumEnd/AlbumError notification dispatch; generic independent task live route selects performance by default or album with mode/executionMode=album".to_string(),
+            "full legacy task-runner hotkey retirement, real-game regression notes, and non-Windows GetPixel fallback remain pending".to_string(),
         ],
     }
 }

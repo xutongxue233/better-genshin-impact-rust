@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use super::*;
 use bgi_capture::CaptureFrame;
 use bgi_script::{
@@ -153,6 +155,7 @@ fn classic_javascript_receives_injected_capture_game_region_execution() {
     let outcome = execute_prepared_javascript_with_host(
         &prepared,
         TaskInvocationExecutionMode::PlanOnly,
+        &bgi_task::TaskInvocationPlanningContext::default(),
         None,
         None,
         host,
@@ -2580,6 +2583,85 @@ fn script_group_javascript_exposes_legacy_scheduler_type_constructors() {
     );
     assert_eq!(javascript.task_invocations.dispatcher.len(), 3);
     assert!(javascript.task_invocations.errors.is_empty());
+}
+
+#[test]
+fn script_group_execute_ready_uses_roots_for_independent_task_invocation_plan() {
+    let app_root = test_root("group-js-task-invocation-context");
+    let scripts_root = app_root.join("User").join("JsScript");
+    fs::create_dir_all(app_root.join("User").join("AutoPathing").join("routes")).unwrap();
+    fs::write(
+        app_root
+            .join("User")
+            .join("AutoPathing")
+            .join("routes")
+            .join("route.json"),
+        r#"{
+          "info": { "name": "group context route", "type": "collect", "map_name": "Teyvat" },
+          "positions": [
+            { "x": 1.0, "y": 2.0, "type": "path" },
+            { "x": 3.0, "y": 4.0, "type": "target", "action": "fight" }
+          ]
+        }"#,
+    )
+    .unwrap();
+    write_js_project(
+        &scripts_root,
+        "task-context",
+        "TaskContext",
+        r#"
+            dispatcher.RunTask(SoloTask("AutoPathing", { route: "routes/route.json" }));
+            dispatcher.Commands().length;
+        "#,
+    );
+    let group = ScriptGroup {
+        name: "daily".to_string(),
+        projects: vec![ScriptGroupProject {
+            index: 1,
+            name: "TaskContext".to_string(),
+            folder_name: "task-context".to_string(),
+            project_type: ScriptProjectType::Javascript,
+            ..ScriptGroupProject::default()
+        }],
+        ..ScriptGroup::default()
+    };
+    let mut roots = ScriptGroupExecutionRoots::from_app_root(&app_root);
+    roots.task_invocation_mode = TaskInvocationExecutionMode::ExecuteReady;
+    let mut dispatcher = DispatcherRuntime::default();
+
+    let outcome = execute_script_group_with_task_dispatcher_hooks(
+        &roots,
+        &group,
+        Some(&mut dispatcher),
+        |_| {},
+        |_| {},
+    );
+
+    assert_eq!(outcome.completed_steps, 1);
+    let javascript = outcome.steps[0].javascript.as_ref().unwrap();
+    assert_eq!(javascript.result, Some(json!(1)));
+    assert_eq!(javascript.task_execution.dispatcher.len(), 1);
+    let result = &javascript.task_execution.dispatcher[0];
+    assert_eq!(
+        result.status,
+        bgi_task::TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(independent_plan) = result.independent_task_execution_plan.as_deref() else {
+        panic!("expected AutoPathing independent execution plan");
+    };
+    let bgi_task::IndependentTaskExecutionPlan::AutoPathingPlan(auto_pathing_plan) =
+        independent_plan
+    else {
+        panic!("expected AutoPathing plan");
+    };
+    assert_eq!(auto_pathing_plan.summary.name, "group context route");
+    assert_eq!(
+        auto_pathing_plan.normalized_path,
+        PathBuf::from("routes").join("route.json")
+    );
+    assert_eq!(auto_pathing_plan.execution_plan.waypoint_count, 2);
+
+    fs::remove_dir_all(app_root).unwrap();
 }
 
 #[test]

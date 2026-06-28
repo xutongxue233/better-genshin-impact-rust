@@ -45,18 +45,10 @@ pub use vision::*;
 
 use self::script::normalize_user_auto_fight_strategy_path;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoFightExecutionConfig {
     pub param: AutoFightParam,
-}
-
-impl Default for AutoFightExecutionConfig {
-    fn default() -> Self {
-        Self {
-            param: AutoFightParam::default(),
-        }
-    }
 }
 
 impl AutoFightExecutionConfig {

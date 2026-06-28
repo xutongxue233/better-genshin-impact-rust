@@ -24,13 +24,13 @@ pub(super) fn arg_value<'a>(
         .ok_or_else(|| invalid_arg(call, index, expected))
 }
 
-pub(super) fn arg_str<'a>(call: &'a ScriptHostCall, index: usize) -> Result<&'a str> {
+pub(super) fn arg_str(call: &ScriptHostCall, index: usize) -> Result<&str> {
     arg_value(call, index, "string")?
         .as_str()
         .ok_or_else(|| invalid_arg(call, index, "string"))
 }
 
-pub(super) fn optional_str<'a>(call: &'a ScriptHostCall, index: usize) -> Result<Option<&'a str>> {
+pub(super) fn optional_str(call: &ScriptHostCall, index: usize) -> Result<Option<&str>> {
     match call.args.get(index) {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value

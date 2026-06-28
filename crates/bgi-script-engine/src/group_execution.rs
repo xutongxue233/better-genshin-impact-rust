@@ -62,14 +62,14 @@ pub fn execute_script_group_with_host_hooks(
 pub fn execute_script_group_with_task_dispatcher_hooks(
     roots: &ScriptGroupExecutionRoots,
     group: &ScriptGroup,
-    mut dispatcher: Option<&mut DispatcherRuntime>,
+    dispatcher: Option<&mut DispatcherRuntime>,
     mut configure_host: impl FnMut(&mut ScriptHostRuntimeConfig),
     mut after_javascript: impl FnMut(&mut JavaScriptExecutionOutcome),
 ) -> ScriptGroupExecutionOutcome {
     execute_script_group_with_task_dispatcher_hooks_and_cancellation(
         roots,
         group,
-        dispatcher.as_deref_mut(),
+        dispatcher,
         None,
         &mut configure_host,
         &mut after_javascript,

@@ -10,18 +10,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AutoPathingExecutionConfig {
     pub route: String,
-}
-
-impl Default for AutoPathingExecutionConfig {
-    fn default() -> Self {
-        Self {
-            route: String::new(),
-        }
-    }
 }
 
 impl AutoPathingExecutionConfig {

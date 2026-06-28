@@ -65,20 +65,15 @@ pub fn recognition_type_infos() -> Vec<RecognitionTypeInfo> {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TemplateMatchMode {
     SqDiff,
     SqDiffNormed,
     CCorr,
     CCorrNormed,
     CCoeff,
+    #[default]
     CCoeffNormed,
-}
-
-impl Default for TemplateMatchMode {
-    fn default() -> Self {
-        Self::CCoeffNormed
-    }
 }
 
 impl TemplateMatchMode {
@@ -99,18 +94,13 @@ impl TemplateMatchMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ColorConversion {
+    #[default]
     BgrToRgb,
     BgrToHsv,
     BgrToGray,
     BgraToBgr,
-}
-
-impl Default for ColorConversion {
-    fn default() -> Self {
-        Self::BgrToRgb
-    }
 }
 
 impl ColorConversion {
@@ -223,8 +213,9 @@ impl ColorMatchConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum OcrEngineType {
+    #[default]
     Paddle,
     YasModel,
     YapModel,
@@ -234,13 +225,7 @@ impl OcrEngineType {
     pub const ALL: [Self; 3] = [Self::Paddle, Self::YasModel, Self::YapModel];
 }
 
-impl Default for OcrEngineType {
-    fn default() -> Self {
-        Self::Paddle
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OcrMatchConfig {
     pub engine: OcrEngineType,
     pub replace_dictionary: BTreeMap<String, Vec<String>>,
@@ -248,19 +233,6 @@ pub struct OcrMatchConfig {
     pub one_contain_match_text: Vec<String>,
     pub regex_match_text: Vec<String>,
     pub text: String,
-}
-
-impl Default for OcrMatchConfig {
-    fn default() -> Self {
-        Self {
-            engine: OcrEngineType::default(),
-            replace_dictionary: BTreeMap::new(),
-            all_contain_match_text: Vec::new(),
-            one_contain_match_text: Vec::new(),
-            regex_match_text: Vec::new(),
-            text: String::new(),
-        }
-    }
 }
 
 impl OcrMatchConfig {
@@ -362,8 +334,10 @@ impl RecognitionObject {
         region: Rect,
         match_texts: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        let mut ocr = OcrMatchConfig::default();
-        ocr.one_contain_match_text = match_texts.into_iter().map(Into::into).collect();
+        let ocr = OcrMatchConfig {
+            one_contain_match_text: match_texts.into_iter().map(Into::into).collect(),
+            ..OcrMatchConfig::default()
+        };
         Self {
             recognition_type: RecognitionType::OcrMatch,
             region_of_interest: Some(region),

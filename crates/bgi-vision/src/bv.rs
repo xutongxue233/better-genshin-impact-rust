@@ -178,7 +178,7 @@ pub enum BvPageCommand {
         screen_y: f64,
     },
     Ocr {
-        locator: BvLocatorPlan,
+        locator: Box<BvLocatorPlan>,
     },
 }
 
@@ -237,7 +237,9 @@ impl BvPage {
     pub fn ocr(&self, rect: Option<Rect>) -> BvPageCommand {
         let locator = self.locator_for_text("", rect);
         BvPageCommand::Ocr {
-            locator: locator.plan(BvLocatorOperation::FindAll, Some(self.default_timeout_ms)),
+            locator: Box::new(
+                locator.plan(BvLocatorOperation::FindAll, Some(self.default_timeout_ms)),
+            ),
         }
     }
 

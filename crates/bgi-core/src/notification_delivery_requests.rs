@@ -343,7 +343,7 @@ pub(crate) fn work_weixin_image_request(
     endpoint: &str,
     image: &NotificationImage,
 ) -> std::result::Result<NotificationHttpRequest, NotificationDispatchError> {
-    Ok(json_request(
+    json_request(
         NotificationProviderKind::WorkWeixin,
         endpoint,
         json!({
@@ -353,5 +353,5 @@ pub(crate) fn work_weixin_image_request(
                 "md5": hex_lower(Md5::digest(&image.bytes).as_slice())
             }
         }),
-    )?)
+    )
 }

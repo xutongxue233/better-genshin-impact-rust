@@ -226,7 +226,7 @@ impl AutoBossParam {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct TaskParameterModels {
     pub auto_skip: AutoSkipConfigParam,
     pub auto_domain: AutoDomainParam,
@@ -234,19 +234,6 @@ pub struct TaskParameterModels {
     pub auto_fight: AutoFightParam,
     pub auto_ley_line_outcrop: AutoLeyLineOutcropParam,
     pub auto_stygian_onslaught: AutoStygianOnslaughtParam,
-}
-
-impl Default for TaskParameterModels {
-    fn default() -> Self {
-        Self {
-            auto_skip: AutoSkipConfigParam::default(),
-            auto_domain: AutoDomainParam::default(),
-            auto_boss: AutoBossParam::default(),
-            auto_fight: AutoFightParam::default(),
-            auto_ley_line_outcrop: AutoLeyLineOutcropParam::default(),
-            auto_stygian_onslaught: AutoStygianOnslaughtParam::default(),
-        }
-    }
 }
 
 pub fn task_parameter_models() -> TaskParameterModels {

@@ -330,7 +330,7 @@ pub struct AutoDomainExitDomainRule {
     pub clicks_black_confirm_button: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoDomainStopReason {
     OriginalResinExhaustedPrompt,
     DefaultResinInsufficient,
@@ -352,7 +352,7 @@ pub struct AutoDomainResinRule {
     pub fragile_resin_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoDomainResinUseRecord {
     pub name: String,
     pub remain_count: i32,
@@ -373,7 +373,7 @@ pub struct AutoDomainTaskStep {
     pub action: AutoDomainTaskAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoDomainTaskPhase {
     Startup,
     Retry,
@@ -386,7 +386,7 @@ pub enum AutoDomainTaskPhase {
     Finish,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoDomainTaskAction {
     InitializeAssetsAndConfig,
     NotifyDomainStart,
@@ -406,6 +406,406 @@ pub enum AutoDomainTaskAction {
     ContinueOrExitDomain,
     WaitMainUiAndArtifactSalvage,
     NotifyDomainEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoDomainExecutionStatus {
+    Completed,
+    StartupFailed,
+    EntryFailed,
+    CombatFailed,
+    RewardSkipped,
+    RewardFailed,
+    ContinueFailed,
+    RetryLimitReached,
+    Cancelled,
+    CleanupFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoDomainRuntimeActionStatus {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoDomainRuntimeActionKind {
+    Startup,
+    NotifyStart,
+    TeleportToDomain,
+    EnterDomain,
+    CloseDomainTip,
+    InitializeTeam,
+    SelectCombatScript,
+    WalkToFightKey,
+    RunAutoFight,
+    WaitAfterFight,
+    MoveToPetrifiedTree,
+    UseResin,
+    RecognizeReward,
+    ContinueOrExit,
+    WaitMainUi,
+    ArtifactSalvage,
+    NotifyEnd,
+    Cleanup,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoDomainRewardDecision {
+    Claim,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoDomainSkipReason {
+    ClaimDisabled,
+    OriginalResinInsufficient,
+    SpecifiedResinUnavailable,
+    RewardPromptMissing,
+    RuntimeRequestedStop,
+    RoundLimitReached,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainRuntimeRoundContext {
+    pub round_index: u32,
+    pub total_rounds: u32,
+    pub is_first_round: bool,
+    pub is_last_round: bool,
+    pub claimed_rewards: u32,
+    pub selected_resin: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainStartupOutcome {
+    pub completed: bool,
+    pub assets_initialized: bool,
+    pub combat_strategy_parsed: bool,
+    pub auto_eat_trigger_registered: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainNotificationOutcome {
+    pub sent: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainTeleportOutcome {
+    pub attempted: bool,
+    pub completed: bool,
+    pub domain_name: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainEntryOutcome {
+    pub completed: bool,
+    pub matched: bool,
+    pub team_selected: bool,
+    pub started: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainBasicOutcome {
+    pub completed: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainCombatOutcome {
+    pub completed: bool,
+    pub challenge_completed: bool,
+    pub auto_leaving_detected: bool,
+    pub duration_ms: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainTreeOutcome {
+    pub completed: bool,
+    pub tree_detected: bool,
+    pub prompt_found: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainResinSelection {
+    pub decision: AutoDomainRewardDecision,
+    pub resin_name: Option<String>,
+    pub available_count: Option<i32>,
+    pub skip_reason: Option<AutoDomainSkipReason>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainRewardOutcome {
+    pub claimed: bool,
+    pub resin_name: Option<String>,
+    pub stop_after_claim: bool,
+    pub skip_reason: Option<AutoDomainSkipReason>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainRewardRecognitionOutcome {
+    pub attempted: bool,
+    pub recognized: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainContinuationOutcome {
+    pub completed: bool,
+    pub continue_next_round: bool,
+    pub exited_domain: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainArtifactSalvageOutcome {
+    pub attempted: bool,
+    pub completed: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainCleanupOutcome {
+    pub completed: bool,
+    pub inputs_released: bool,
+    pub overlays_cleared: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoDomainRuntimeActionOutcome {
+    Startup(AutoDomainStartupOutcome),
+    Notification(AutoDomainNotificationOutcome),
+    Teleport(AutoDomainTeleportOutcome),
+    Entry(AutoDomainEntryOutcome),
+    Basic(AutoDomainBasicOutcome),
+    Combat(AutoDomainCombatOutcome),
+    Tree(AutoDomainTreeOutcome),
+    ResinSelection(AutoDomainResinSelection),
+    Reward(AutoDomainRewardOutcome),
+    RewardRecognition(AutoDomainRewardRecognitionOutcome),
+    Continuation(AutoDomainContinuationOutcome),
+    ArtifactSalvage(AutoDomainArtifactSalvageOutcome),
+    Cleanup(AutoDomainCleanupOutcome),
+    Skipped(AutoDomainSkipReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainRuntimeActionReport {
+    pub phase: AutoDomainTaskPhase,
+    pub action_kind: AutoDomainRuntimeActionKind,
+    pub status: AutoDomainRuntimeActionStatus,
+    pub round_index: Option<u32>,
+    pub detail: String,
+    pub outcome: AutoDomainRuntimeActionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainSkippedStep {
+    pub action_kind: AutoDomainRuntimeActionKind,
+    pub round_index: Option<u32>,
+    pub reason: AutoDomainSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainExecutorState {
+    pub startup_completed: bool,
+    pub current_round: u32,
+    pub target_rounds: u32,
+    pub entered_domain: bool,
+    pub team_initialized: bool,
+    pub combat_script_selected: bool,
+    pub fights_attempted: u32,
+    pub fights_succeeded: u32,
+    pub rewards_claimed: u32,
+    pub rewards_skipped: u32,
+    pub reward_recognition_attempts: u32,
+    pub resin_records: Vec<AutoDomainResinUseRecord>,
+    pub selected_resin: Option<String>,
+    pub retries_used: u32,
+    pub cancelled: bool,
+    pub cleanup_completed: bool,
+    pub last_skip_reason: Option<AutoDomainSkipReason>,
+}
+
+impl AutoDomainExecutorState {
+    fn new(plan: &AutoDomainExecutionPlan) -> Self {
+        Self {
+            startup_completed: false,
+            current_round: 0,
+            target_rounds: auto_domain_target_rounds(plan),
+            entered_domain: false,
+            team_initialized: false,
+            combat_script_selected: false,
+            fights_attempted: 0,
+            fights_succeeded: 0,
+            rewards_claimed: 0,
+            rewards_skipped: 0,
+            reward_recognition_attempts: 0,
+            resin_records: plan.resin_rule.specified_records.clone(),
+            selected_resin: None,
+            retries_used: 0,
+            cancelled: false,
+            cleanup_completed: false,
+            last_skip_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoDomainExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub status: AutoDomainExecutionStatus,
+    pub state: AutoDomainExecutorState,
+    pub executed_actions: Vec<AutoDomainRuntimeActionReport>,
+    pub skipped_steps: Vec<AutoDomainSkippedStep>,
+}
+
+pub trait AutoDomainRuntime {
+    fn start_auto_domain(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+    ) -> Result<AutoDomainStartupOutcome>;
+
+    fn notify_auto_domain_start(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+    ) -> Result<AutoDomainNotificationOutcome>;
+
+    fn teleport_auto_domain_to_domain(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+    ) -> Result<AutoDomainTeleportOutcome>;
+
+    fn enter_auto_domain_challenge(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainEntryOutcome>;
+
+    fn close_auto_domain_tip(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainBasicOutcome>;
+
+    fn initialize_auto_domain_team(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainBasicOutcome>;
+
+    fn select_auto_domain_combat_script(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainBasicOutcome>;
+
+    fn walk_auto_domain_to_fight_key(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainBasicOutcome>;
+
+    fn run_auto_domain_fight(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainCombatOutcome>;
+
+    fn wait_auto_domain_after_fight(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainBasicOutcome>;
+
+    fn move_auto_domain_to_petrified_tree(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainTreeOutcome>;
+
+    fn select_auto_domain_resin(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+        records: &[AutoDomainResinUseRecord],
+    ) -> Result<AutoDomainResinSelection>;
+
+    fn claim_auto_domain_reward(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+        selection: &AutoDomainResinSelection,
+    ) -> Result<AutoDomainRewardOutcome>;
+
+    fn recognize_auto_domain_reward(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+    ) -> Result<AutoDomainRewardRecognitionOutcome>;
+
+    fn continue_or_exit_auto_domain(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        context: &AutoDomainRuntimeRoundContext,
+        should_continue: bool,
+    ) -> Result<AutoDomainContinuationOutcome>;
+
+    fn wait_auto_domain_main_ui(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+    ) -> Result<AutoDomainBasicOutcome>;
+
+    fn run_auto_domain_artifact_salvage(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+    ) -> Result<AutoDomainArtifactSalvageOutcome>;
+
+    fn notify_auto_domain_end(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+        status: AutoDomainExecutionStatus,
+    ) -> Result<AutoDomainNotificationOutcome>;
+
+    fn cleanup_auto_domain(
+        &mut self,
+        plan: &AutoDomainExecutionPlan,
+    ) -> Result<AutoDomainCleanupOutcome>;
+
+    fn is_auto_domain_cancelled(&mut self) -> bool {
+        false
+    }
 }
 
 pub fn plan_auto_domain(config: AutoDomainExecutionConfig) -> Result<AutoDomainExecutionPlan> {
@@ -620,23 +1020,692 @@ pub fn plan_auto_domain(config: AutoDomainExecutionConfig) -> Result<AutoDomainE
             starts_auto_artifact_salvage_task: param.auto_artifact_salvage,
         },
         steps: auto_domain_steps(),
-        executor_ready: false,
+        executor_ready: true,
         pending_native: vec![
-            "TaskRunner solo-task lock, main-UI wait, cancellation-aware delay, and notifications"
-                .to_string(),
-            "domain-name to map-position lookup, teleport execution, and game-window input dispatch"
-                .to_string(),
-            "live capture, template matching, OCR, Bv page/click helpers, and localized resource lookup"
-                .to_string(),
-            "CombatScenes visual team recognition, combat script execution loop, and domain-end OCR thread"
-                .to_string(),
-            "BgiTree YOLO predictor, camera-orientation computation, mouse movement, and overlay cleanup"
-                .to_string(),
-            "resin status OCR, original-resin 20/40 switch clicks, reward recognition, and artifact salvage execution"
-                .to_string(),
+            "Rust AutoDomain executor boundary is ready and testable through AutoDomainRuntime injection; desktop live adapters for TaskRunner lock, cancellation-aware delay, notifications, and game-window input are not wired yet".to_string(),
+            "domain teleport/entry, live BV/template/OCR helpers, resin prompt OCR/clicks, BgiTree YOLO movement, reward recognition, and artifact salvage are represented as injectable runtime calls; desktop live adapters remain native-pending".to_string(),
+            "full AutoFight/CombatScenes live adapters for team recognition, combat script execution, and domain-end OCR are still not connected to this Rust boundary".to_string(),
         ],
         param,
     })
+}
+
+pub fn execute_auto_domain_plan<R>(
+    plan: &AutoDomainExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoDomainExecutionReport>
+where
+    R: AutoDomainRuntime,
+{
+    let mut state = AutoDomainExecutorState::new(plan);
+    let mut executed_actions = Vec::new();
+    let mut skipped_steps = Vec::new();
+
+    let execution_result = execute_auto_domain_plan_inner(
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+        &mut skipped_steps,
+    );
+    let status = match execution_result {
+        Ok(status) => status,
+        Err(error) => {
+            let cleanup_error = execute_auto_domain_cleanup(
+                plan,
+                runtime,
+                AutoDomainExecutionStatus::CleanupFailed,
+                &mut state,
+                &mut executed_actions,
+            )
+            .err();
+            return Err(cleanup_error.unwrap_or(error));
+        }
+    };
+
+    let cleanup_status =
+        execute_auto_domain_cleanup(plan, runtime, status, &mut state, &mut executed_actions)?;
+    let status = if cleanup_status == AutoDomainExecutionStatus::CleanupFailed {
+        AutoDomainExecutionStatus::CleanupFailed
+    } else {
+        status
+    };
+
+    Ok(auto_domain_report(
+        plan,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    ))
+}
+
+fn execute_auto_domain_plan_inner<R>(
+    plan: &AutoDomainExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoDomainExecutorState,
+    executed_actions: &mut Vec<AutoDomainRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoDomainSkippedStep>,
+) -> Result<AutoDomainExecutionStatus>
+where
+    R: AutoDomainRuntime,
+{
+    let startup = runtime.start_auto_domain(plan)?;
+    state.startup_completed = startup.completed;
+    executed_actions.push(auto_domain_action_report(
+        AutoDomainTaskPhase::Startup,
+        AutoDomainRuntimeActionKind::Startup,
+        if startup.completed {
+            AutoDomainRuntimeActionStatus::Succeeded
+        } else {
+            AutoDomainRuntimeActionStatus::Failed
+        },
+        None,
+        startup
+            .message
+            .clone()
+            .unwrap_or_else(|| "auto domain startup boundary completed".to_string()),
+        AutoDomainRuntimeActionOutcome::Startup(startup.clone()),
+    ));
+    if !startup.completed {
+        return Ok(AutoDomainExecutionStatus::StartupFailed);
+    }
+
+    let start_notification = runtime.notify_auto_domain_start(plan)?;
+    executed_actions.push(auto_domain_action_report(
+        AutoDomainTaskPhase::Startup,
+        AutoDomainRuntimeActionKind::NotifyStart,
+        if start_notification.sent {
+            AutoDomainRuntimeActionStatus::Succeeded
+        } else {
+            AutoDomainRuntimeActionStatus::Skipped
+        },
+        None,
+        start_notification
+            .message
+            .clone()
+            .unwrap_or_else(|| "start notification boundary completed".to_string()),
+        AutoDomainRuntimeActionOutcome::Notification(start_notification),
+    ));
+
+    if runtime.is_auto_domain_cancelled() {
+        state.cancelled = true;
+        return Ok(auto_domain_skip(
+            state,
+            executed_actions,
+            skipped_steps,
+            AutoDomainTaskPhase::Startup,
+            AutoDomainRuntimeActionKind::Skip,
+            None,
+            AutoDomainSkipReason::Cancelled,
+            AutoDomainExecutionStatus::Cancelled,
+        ));
+    }
+
+    if plan.domain_entry_rule.teleports_when_domain_name_configured {
+        let teleport = runtime.teleport_auto_domain_to_domain(plan)?;
+        let completed = teleport.completed;
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Teleport,
+            AutoDomainRuntimeActionKind::TeleportToDomain,
+            if completed {
+                AutoDomainRuntimeActionStatus::Succeeded
+            } else {
+                AutoDomainRuntimeActionStatus::Failed
+            },
+            None,
+            teleport
+                .message
+                .clone()
+                .unwrap_or_else(|| "domain teleport boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::Teleport(teleport),
+        ));
+        if !completed {
+            return Ok(AutoDomainExecutionStatus::EntryFailed);
+        }
+    } else {
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Teleport,
+            AutoDomainRuntimeActionKind::TeleportToDomain,
+            AutoDomainRuntimeActionStatus::Skipped,
+            None,
+            "domain name is not configured; teleport skipped".to_string(),
+            AutoDomainRuntimeActionOutcome::Skipped(AutoDomainSkipReason::RuntimeRequestedStop),
+        ));
+    }
+
+    loop {
+        if state.current_round >= state.target_rounds {
+            return Ok(AutoDomainExecutionStatus::Completed);
+        }
+        if runtime.is_auto_domain_cancelled() {
+            state.cancelled = true;
+            return Ok(auto_domain_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoDomainTaskPhase::RoundLoop,
+                AutoDomainRuntimeActionKind::Skip,
+                None,
+                AutoDomainSkipReason::Cancelled,
+                AutoDomainExecutionStatus::Cancelled,
+            ));
+        }
+
+        state.current_round += 1;
+        let round_index = state.current_round;
+        let mut context = auto_domain_round_context(plan, state, None);
+
+        if !state.entered_domain {
+            let entry = runtime.enter_auto_domain_challenge(plan, &context)?;
+            let completed = entry.completed && entry.matched && entry.started;
+            state.entered_domain = completed;
+            executed_actions.push(auto_domain_action_report(
+                AutoDomainTaskPhase::EnterDomain,
+                AutoDomainRuntimeActionKind::EnterDomain,
+                if completed {
+                    AutoDomainRuntimeActionStatus::Succeeded
+                } else {
+                    AutoDomainRuntimeActionStatus::Failed
+                },
+                Some(round_index),
+                entry
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "domain entry boundary completed".to_string()),
+                AutoDomainRuntimeActionOutcome::Entry(entry),
+            ));
+            if !completed {
+                if auto_domain_retry_available(plan, state) {
+                    state.retries_used += 1;
+                    state.current_round = state.current_round.saturating_sub(1);
+                    continue;
+                }
+                return Ok(AutoDomainExecutionStatus::EntryFailed);
+            }
+        }
+
+        let close_tip = runtime.close_auto_domain_tip(plan, &context)?;
+        executed_actions.push(auto_domain_basic_report(
+            AutoDomainTaskPhase::RoundLoop,
+            AutoDomainRuntimeActionKind::CloseDomainTip,
+            Some(round_index),
+            "close domain tip boundary completed",
+            close_tip,
+        ));
+
+        if plan.combat_rule.initializes_team_on_first_round && !state.team_initialized {
+            let team = runtime.initialize_auto_domain_team(plan, &context)?;
+            state.team_initialized = team.completed;
+            let completed = team.completed;
+            executed_actions.push(auto_domain_basic_report(
+                AutoDomainTaskPhase::RoundLoop,
+                AutoDomainRuntimeActionKind::InitializeTeam,
+                Some(round_index),
+                "team initialization boundary completed",
+                team,
+            ));
+            if !completed {
+                if auto_domain_retry_available(plan, state) {
+                    state.retries_used += 1;
+                    state.current_round = state.current_round.saturating_sub(1);
+                    state.entered_domain = false;
+                    continue;
+                }
+                return Ok(AutoDomainExecutionStatus::EntryFailed);
+            }
+        }
+
+        if !state.combat_script_selected {
+            let script = runtime.select_auto_domain_combat_script(plan, &context)?;
+            state.combat_script_selected = script.completed;
+            let completed = script.completed;
+            executed_actions.push(auto_domain_basic_report(
+                AutoDomainTaskPhase::RoundLoop,
+                AutoDomainRuntimeActionKind::SelectCombatScript,
+                Some(round_index),
+                "combat script selection boundary completed",
+                script,
+            ));
+            if !completed {
+                return Ok(AutoDomainExecutionStatus::EntryFailed);
+            }
+        }
+
+        let walk = runtime.walk_auto_domain_to_fight_key(plan, &context)?;
+        let walk_completed = walk.completed;
+        executed_actions.push(auto_domain_basic_report(
+            AutoDomainTaskPhase::Fight,
+            AutoDomainRuntimeActionKind::WalkToFightKey,
+            Some(round_index),
+            "walk to fight key boundary completed",
+            walk,
+        ));
+        if !walk_completed {
+            return Ok(AutoDomainExecutionStatus::EntryFailed);
+        }
+
+        state.fights_attempted += 1;
+        let combat = runtime.run_auto_domain_fight(plan, &context)?;
+        let combat_completed = combat.completed && combat.challenge_completed;
+        if combat_completed {
+            state.fights_succeeded += 1;
+        }
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Fight,
+            AutoDomainRuntimeActionKind::RunAutoFight,
+            if combat_completed {
+                AutoDomainRuntimeActionStatus::Succeeded
+            } else {
+                AutoDomainRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            combat
+                .message
+                .clone()
+                .unwrap_or_else(|| "auto fight boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::Combat(combat),
+        ));
+        if !combat_completed {
+            return Ok(AutoDomainExecutionStatus::CombatFailed);
+        }
+
+        let wait = runtime.wait_auto_domain_after_fight(plan, &context)?;
+        executed_actions.push(auto_domain_basic_report(
+            AutoDomainTaskPhase::Fight,
+            AutoDomainRuntimeActionKind::WaitAfterFight,
+            Some(round_index),
+            "post-fight wait boundary completed",
+            wait,
+        ));
+
+        let tree = runtime.move_auto_domain_to_petrified_tree(plan, &context)?;
+        let tree_completed = tree.completed && tree.prompt_found;
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::PetrifiedTree,
+            AutoDomainRuntimeActionKind::MoveToPetrifiedTree,
+            if tree_completed {
+                AutoDomainRuntimeActionStatus::Succeeded
+            } else {
+                AutoDomainRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            tree.message
+                .clone()
+                .unwrap_or_else(|| "petrified tree boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::Tree(tree),
+        ));
+        if !tree_completed {
+            return Ok(auto_domain_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoDomainTaskPhase::Reward,
+                AutoDomainRuntimeActionKind::Skip,
+                Some(round_index),
+                AutoDomainSkipReason::RewardPromptMissing,
+                AutoDomainExecutionStatus::RewardSkipped,
+            ));
+        }
+
+        let selection = runtime.select_auto_domain_resin(plan, &context, &state.resin_records)?;
+        context.selected_resin = selection.resin_name.clone();
+        state.selected_resin = selection.resin_name.clone();
+        let selection_status = match selection.decision {
+            AutoDomainRewardDecision::Claim => AutoDomainRuntimeActionStatus::Succeeded,
+            AutoDomainRewardDecision::Skip => AutoDomainRuntimeActionStatus::Skipped,
+        };
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Reward,
+            AutoDomainRuntimeActionKind::UseResin,
+            selection_status,
+            Some(round_index),
+            selection
+                .message
+                .clone()
+                .unwrap_or_else(|| "resin selection boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::ResinSelection(selection.clone()),
+        ));
+        if selection.decision == AutoDomainRewardDecision::Skip {
+            let reason = selection
+                .skip_reason
+                .unwrap_or(AutoDomainSkipReason::RuntimeRequestedStop);
+            return Ok(auto_domain_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoDomainTaskPhase::Reward,
+                AutoDomainRuntimeActionKind::UseResin,
+                Some(round_index),
+                reason,
+                AutoDomainExecutionStatus::RewardSkipped,
+            ));
+        }
+
+        let reward = runtime.claim_auto_domain_reward(plan, &context, &selection)?;
+        if reward.claimed {
+            state.rewards_claimed += 1;
+            auto_domain_consume_resin_record(
+                &mut state.resin_records,
+                reward.resin_name.as_deref(),
+            );
+        } else {
+            state.rewards_skipped += 1;
+            state.last_skip_reason = reward.skip_reason;
+        }
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Reward,
+            AutoDomainRuntimeActionKind::UseResin,
+            if reward.claimed {
+                AutoDomainRuntimeActionStatus::Succeeded
+            } else {
+                AutoDomainRuntimeActionStatus::Skipped
+            },
+            Some(round_index),
+            reward
+                .message
+                .clone()
+                .unwrap_or_else(|| "reward claim boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::Reward(reward.clone()),
+        ));
+        if !reward.claimed {
+            let reason = reward
+                .skip_reason
+                .unwrap_or(AutoDomainSkipReason::RuntimeRequestedStop);
+            return Ok(auto_domain_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoDomainTaskPhase::Reward,
+                AutoDomainRuntimeActionKind::UseResin,
+                Some(round_index),
+                reason,
+                AutoDomainExecutionStatus::RewardSkipped,
+            ));
+        }
+
+        if plan.reward_rule.reward_recognition_enabled {
+            let recognition = runtime.recognize_auto_domain_reward(plan, &context)?;
+            state.reward_recognition_attempts += u32::from(recognition.attempted);
+            executed_actions.push(auto_domain_action_report(
+                AutoDomainTaskPhase::Reward,
+                AutoDomainRuntimeActionKind::RecognizeReward,
+                if !recognition.attempted {
+                    AutoDomainRuntimeActionStatus::Skipped
+                } else if recognition.recognized {
+                    AutoDomainRuntimeActionStatus::Succeeded
+                } else {
+                    AutoDomainRuntimeActionStatus::Failed
+                },
+                Some(round_index),
+                recognition
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "reward recognition boundary completed".to_string()),
+                AutoDomainRuntimeActionOutcome::RewardRecognition(recognition),
+            ));
+        }
+
+        let should_continue = !reward.stop_after_claim && state.current_round < state.target_rounds;
+        let continuation = runtime.continue_or_exit_auto_domain(plan, &context, should_continue)?;
+        let continuation_completed = continuation.completed
+            && continuation.continue_next_round == should_continue
+            && (should_continue || continuation.exited_domain);
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Reward,
+            AutoDomainRuntimeActionKind::ContinueOrExit,
+            if continuation_completed {
+                AutoDomainRuntimeActionStatus::Succeeded
+            } else {
+                AutoDomainRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            continuation
+                .message
+                .clone()
+                .unwrap_or_else(|| "continue or exit boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::Continuation(continuation.clone()),
+        ));
+        if !continuation_completed {
+            return Ok(AutoDomainExecutionStatus::ContinueFailed);
+        }
+
+        if continuation.exited_domain {
+            state.entered_domain = false;
+        }
+        if !should_continue {
+            return Ok(AutoDomainExecutionStatus::Completed);
+        }
+    }
+}
+
+fn execute_auto_domain_cleanup<R>(
+    plan: &AutoDomainExecutionPlan,
+    runtime: &mut R,
+    execution_status: AutoDomainExecutionStatus,
+    state: &mut AutoDomainExecutorState,
+    executed_actions: &mut Vec<AutoDomainRuntimeActionReport>,
+) -> Result<AutoDomainExecutionStatus>
+where
+    R: AutoDomainRuntime,
+{
+    let cleanup = runtime.cleanup_auto_domain(plan)?;
+    state.cleanup_completed = cleanup.completed;
+    let cleanup_completed = cleanup.completed;
+    executed_actions.push(auto_domain_action_report(
+        AutoDomainTaskPhase::Finish,
+        AutoDomainRuntimeActionKind::Cleanup,
+        if cleanup_completed {
+            AutoDomainRuntimeActionStatus::Succeeded
+        } else {
+            AutoDomainRuntimeActionStatus::Failed
+        },
+        None,
+        cleanup
+            .message
+            .clone()
+            .unwrap_or_else(|| "auto domain cleanup boundary completed".to_string()),
+        AutoDomainRuntimeActionOutcome::Cleanup(cleanup),
+    ));
+
+    let wait = runtime.wait_auto_domain_main_ui(plan)?;
+    executed_actions.push(auto_domain_basic_report(
+        AutoDomainTaskPhase::Finish,
+        AutoDomainRuntimeActionKind::WaitMainUi,
+        None,
+        "wait main UI boundary completed",
+        wait,
+    ));
+
+    if plan.artifact_salvage_rule.enabled {
+        let salvage = runtime.run_auto_domain_artifact_salvage(plan)?;
+        executed_actions.push(auto_domain_action_report(
+            AutoDomainTaskPhase::Finish,
+            AutoDomainRuntimeActionKind::ArtifactSalvage,
+            if salvage.completed {
+                AutoDomainRuntimeActionStatus::Succeeded
+            } else if salvage.attempted {
+                AutoDomainRuntimeActionStatus::Failed
+            } else {
+                AutoDomainRuntimeActionStatus::Skipped
+            },
+            None,
+            salvage
+                .message
+                .clone()
+                .unwrap_or_else(|| "artifact salvage boundary completed".to_string()),
+            AutoDomainRuntimeActionOutcome::ArtifactSalvage(salvage),
+        ));
+    }
+
+    let notification_status = if cleanup_completed {
+        execution_status
+    } else {
+        AutoDomainExecutionStatus::CleanupFailed
+    };
+    let end_notification = runtime.notify_auto_domain_end(plan, notification_status)?;
+    executed_actions.push(auto_domain_action_report(
+        AutoDomainTaskPhase::Finish,
+        AutoDomainRuntimeActionKind::NotifyEnd,
+        if end_notification.sent {
+            AutoDomainRuntimeActionStatus::Succeeded
+        } else {
+            AutoDomainRuntimeActionStatus::Skipped
+        },
+        None,
+        end_notification
+            .message
+            .clone()
+            .unwrap_or_else(|| "end notification boundary completed".to_string()),
+        AutoDomainRuntimeActionOutcome::Notification(end_notification),
+    ));
+
+    if cleanup_completed {
+        Ok(AutoDomainExecutionStatus::Completed)
+    } else {
+        Ok(AutoDomainExecutionStatus::CleanupFailed)
+    }
+}
+
+fn auto_domain_target_rounds(plan: &AutoDomainExecutionPlan) -> u32 {
+    plan.param
+        .domain_round_num
+        .max(1)
+        .try_into()
+        .unwrap_or(AUTO_DOMAIN_UNLIMITED_ROUNDS as u32)
+}
+
+fn auto_domain_retry_available(
+    plan: &AutoDomainExecutionPlan,
+    state: &AutoDomainExecutorState,
+) -> bool {
+    !plan.param.domain_name.trim().is_empty()
+        && state.retries_used < plan.retry_rule.revive_retry_count as u32
+}
+
+fn auto_domain_round_context(
+    plan: &AutoDomainExecutionPlan,
+    state: &AutoDomainExecutorState,
+    selected_resin: Option<String>,
+) -> AutoDomainRuntimeRoundContext {
+    AutoDomainRuntimeRoundContext {
+        round_index: state.current_round,
+        total_rounds: state.target_rounds,
+        is_first_round: state.current_round <= 1,
+        is_last_round: state.current_round >= auto_domain_target_rounds(plan),
+        claimed_rewards: state.rewards_claimed,
+        selected_resin,
+    }
+}
+
+fn auto_domain_consume_resin_record(
+    records: &mut [AutoDomainResinUseRecord],
+    resin_name: Option<&str>,
+) {
+    let Some(resin_name) = resin_name else {
+        return;
+    };
+    if let Some(record) = records
+        .iter_mut()
+        .find(|record| record.name == resin_name && record.remain_count > 0)
+    {
+        record.remain_count -= 1;
+    }
+}
+
+fn auto_domain_skip(
+    state: &mut AutoDomainExecutorState,
+    executed_actions: &mut Vec<AutoDomainRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoDomainSkippedStep>,
+    phase: AutoDomainTaskPhase,
+    action_kind: AutoDomainRuntimeActionKind,
+    round_index: Option<u32>,
+    reason: AutoDomainSkipReason,
+    status: AutoDomainExecutionStatus,
+) -> AutoDomainExecutionStatus {
+    state.rewards_skipped += u32::from(matches!(
+        reason,
+        AutoDomainSkipReason::ClaimDisabled
+            | AutoDomainSkipReason::OriginalResinInsufficient
+            | AutoDomainSkipReason::SpecifiedResinUnavailable
+            | AutoDomainSkipReason::RewardPromptMissing
+            | AutoDomainSkipReason::RuntimeRequestedStop
+    ));
+    state.last_skip_reason = Some(reason);
+    skipped_steps.push(AutoDomainSkippedStep {
+        action_kind,
+        round_index,
+        reason,
+    });
+    executed_actions.push(auto_domain_action_report(
+        phase,
+        action_kind,
+        AutoDomainRuntimeActionStatus::Skipped,
+        round_index,
+        format!("skipped AutoDomain step: {:?}", reason),
+        AutoDomainRuntimeActionOutcome::Skipped(reason),
+    ));
+    status
+}
+
+fn auto_domain_report(
+    plan: &AutoDomainExecutionPlan,
+    status: AutoDomainExecutionStatus,
+    state: AutoDomainExecutorState,
+    executed_actions: Vec<AutoDomainRuntimeActionReport>,
+    skipped_steps: Vec<AutoDomainSkippedStep>,
+) -> AutoDomainExecutionReport {
+    AutoDomainExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: status == AutoDomainExecutionStatus::Completed,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    }
+}
+
+fn auto_domain_basic_report(
+    phase: AutoDomainTaskPhase,
+    action_kind: AutoDomainRuntimeActionKind,
+    round_index: Option<u32>,
+    default_detail: &str,
+    outcome: AutoDomainBasicOutcome,
+) -> AutoDomainRuntimeActionReport {
+    let status = if outcome.completed {
+        AutoDomainRuntimeActionStatus::Succeeded
+    } else {
+        AutoDomainRuntimeActionStatus::Failed
+    };
+    auto_domain_action_report(
+        phase,
+        action_kind,
+        status,
+        round_index,
+        outcome
+            .message
+            .clone()
+            .unwrap_or_else(|| default_detail.to_string()),
+        AutoDomainRuntimeActionOutcome::Basic(outcome),
+    )
+}
+
+fn auto_domain_action_report(
+    phase: AutoDomainTaskPhase,
+    action_kind: AutoDomainRuntimeActionKind,
+    status: AutoDomainRuntimeActionStatus,
+    round_index: Option<u32>,
+    detail: impl Into<String>,
+    outcome: AutoDomainRuntimeActionOutcome,
+) -> AutoDomainRuntimeActionReport {
+    AutoDomainRuntimeActionReport {
+        phase,
+        action_kind,
+        status,
+        round_index,
+        detail: detail.into(),
+        outcome,
+    }
 }
 
 pub fn normalize_domain_round_num(value: i32) -> i32 {
@@ -1134,4 +2203,450 @@ fn string_vec_member<const N: usize>(value: &Value, names: [&str; N]) -> Option<
 
 fn member_value<'a>(value: &'a Value, names: &[&str]) -> Option<&'a Value> {
     names.iter().find_map(|name| value.get(*name))
+}
+
+#[cfg(test)]
+mod auto_domain_executor_tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct MockAutoDomainRuntime {
+        calls: Vec<AutoDomainRuntimeActionKind>,
+        startup: AutoDomainStartupOutcome,
+        fight: AutoDomainCombatOutcome,
+        selection: AutoDomainResinSelection,
+        reward: AutoDomainRewardOutcome,
+        cleanup: AutoDomainCleanupOutcome,
+        entry_failures_remaining: u32,
+        entry_calls: u32,
+        claim_calls: u32,
+        cleanup_calls: u32,
+    }
+
+    impl Default for MockAutoDomainRuntime {
+        fn default() -> Self {
+            Self {
+                calls: Vec::new(),
+                startup: AutoDomainStartupOutcome {
+                    completed: true,
+                    assets_initialized: true,
+                    combat_strategy_parsed: true,
+                    auto_eat_trigger_registered: false,
+                    message: None,
+                },
+                fight: AutoDomainCombatOutcome {
+                    completed: true,
+                    challenge_completed: true,
+                    auto_leaving_detected: false,
+                    duration_ms: Some(12_000),
+                    message: None,
+                },
+                selection: AutoDomainResinSelection {
+                    decision: AutoDomainRewardDecision::Claim,
+                    resin_name: Some("浓缩树脂".to_string()),
+                    available_count: Some(1),
+                    skip_reason: None,
+                    message: None,
+                },
+                reward: AutoDomainRewardOutcome {
+                    claimed: true,
+                    resin_name: Some("浓缩树脂".to_string()),
+                    stop_after_claim: false,
+                    skip_reason: None,
+                    message: None,
+                },
+                cleanup: AutoDomainCleanupOutcome {
+                    completed: true,
+                    inputs_released: true,
+                    overlays_cleared: true,
+                    message: None,
+                },
+                entry_failures_remaining: 0,
+                entry_calls: 0,
+                claim_calls: 0,
+                cleanup_calls: 0,
+            }
+        }
+    }
+
+    impl AutoDomainRuntime for MockAutoDomainRuntime {
+        fn start_auto_domain(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+        ) -> Result<AutoDomainStartupOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::Startup);
+            Ok(self.startup.clone())
+        }
+
+        fn notify_auto_domain_start(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+        ) -> Result<AutoDomainNotificationOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::NotifyStart);
+            Ok(notification_outcome())
+        }
+
+        fn teleport_auto_domain_to_domain(
+            &mut self,
+            plan: &AutoDomainExecutionPlan,
+        ) -> Result<AutoDomainTeleportOutcome> {
+            self.calls
+                .push(AutoDomainRuntimeActionKind::TeleportToDomain);
+            Ok(AutoDomainTeleportOutcome {
+                attempted: true,
+                completed: true,
+                domain_name: plan.param.domain_name.clone(),
+                message: None,
+            })
+        }
+
+        fn enter_auto_domain_challenge(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainEntryOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::EnterDomain);
+            self.entry_calls += 1;
+            if self.entry_failures_remaining > 0 {
+                self.entry_failures_remaining -= 1;
+                return Ok(AutoDomainEntryOutcome {
+                    completed: false,
+                    matched: false,
+                    team_selected: false,
+                    started: false,
+                    message: Some("entry failed in test".to_string()),
+                });
+            }
+            Ok(AutoDomainEntryOutcome {
+                completed: true,
+                matched: true,
+                team_selected: true,
+                started: true,
+                message: None,
+            })
+        }
+
+        fn close_auto_domain_tip(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainBasicOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::CloseDomainTip);
+            Ok(basic_outcome())
+        }
+
+        fn initialize_auto_domain_team(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainBasicOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::InitializeTeam);
+            Ok(basic_outcome())
+        }
+
+        fn select_auto_domain_combat_script(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainBasicOutcome> {
+            self.calls
+                .push(AutoDomainRuntimeActionKind::SelectCombatScript);
+            Ok(basic_outcome())
+        }
+
+        fn walk_auto_domain_to_fight_key(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainBasicOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::WalkToFightKey);
+            Ok(basic_outcome())
+        }
+
+        fn run_auto_domain_fight(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainCombatOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::RunAutoFight);
+            Ok(self.fight.clone())
+        }
+
+        fn wait_auto_domain_after_fight(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainBasicOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::WaitAfterFight);
+            Ok(basic_outcome())
+        }
+
+        fn move_auto_domain_to_petrified_tree(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainTreeOutcome> {
+            self.calls
+                .push(AutoDomainRuntimeActionKind::MoveToPetrifiedTree);
+            Ok(AutoDomainTreeOutcome {
+                completed: true,
+                tree_detected: true,
+                prompt_found: true,
+                message: None,
+            })
+        }
+
+        fn select_auto_domain_resin(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+            _records: &[AutoDomainResinUseRecord],
+        ) -> Result<AutoDomainResinSelection> {
+            self.calls.push(AutoDomainRuntimeActionKind::UseResin);
+            Ok(self.selection.clone())
+        }
+
+        fn claim_auto_domain_reward(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+            _selection: &AutoDomainResinSelection,
+        ) -> Result<AutoDomainRewardOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::UseResin);
+            self.claim_calls += 1;
+            Ok(self.reward.clone())
+        }
+
+        fn recognize_auto_domain_reward(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+        ) -> Result<AutoDomainRewardRecognitionOutcome> {
+            self.calls
+                .push(AutoDomainRuntimeActionKind::RecognizeReward);
+            Ok(AutoDomainRewardRecognitionOutcome {
+                attempted: true,
+                recognized: true,
+                message: None,
+            })
+        }
+
+        fn continue_or_exit_auto_domain(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _context: &AutoDomainRuntimeRoundContext,
+            should_continue: bool,
+        ) -> Result<AutoDomainContinuationOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::ContinueOrExit);
+            Ok(AutoDomainContinuationOutcome {
+                completed: true,
+                continue_next_round: should_continue,
+                exited_domain: !should_continue,
+                message: None,
+            })
+        }
+
+        fn wait_auto_domain_main_ui(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+        ) -> Result<AutoDomainBasicOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::WaitMainUi);
+            Ok(basic_outcome())
+        }
+
+        fn run_auto_domain_artifact_salvage(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+        ) -> Result<AutoDomainArtifactSalvageOutcome> {
+            self.calls
+                .push(AutoDomainRuntimeActionKind::ArtifactSalvage);
+            Ok(AutoDomainArtifactSalvageOutcome {
+                attempted: false,
+                completed: true,
+                message: None,
+            })
+        }
+
+        fn notify_auto_domain_end(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+            _status: AutoDomainExecutionStatus,
+        ) -> Result<AutoDomainNotificationOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::NotifyEnd);
+            Ok(notification_outcome())
+        }
+
+        fn cleanup_auto_domain(
+            &mut self,
+            _plan: &AutoDomainExecutionPlan,
+        ) -> Result<AutoDomainCleanupOutcome> {
+            self.calls.push(AutoDomainRuntimeActionKind::Cleanup);
+            self.cleanup_calls += 1;
+            Ok(self.cleanup.clone())
+        }
+    }
+
+    #[test]
+    fn execute_auto_domain_plan_single_round_success() {
+        let plan = test_plan_with_specified_resin(1);
+        let mut runtime = MockAutoDomainRuntime::default();
+
+        let report = execute_auto_domain_plan(&plan, &mut runtime).unwrap();
+
+        assert!(plan.executor_ready);
+        assert!(report.completed);
+        assert_eq!(report.status, AutoDomainExecutionStatus::Completed);
+        assert_eq!(report.state.current_round, 1);
+        assert_eq!(report.state.fights_attempted, 1);
+        assert_eq!(report.state.fights_succeeded, 1);
+        assert_eq!(report.state.rewards_claimed, 1);
+        assert_eq!(report.state.resin_records[0].remain_count, 0);
+        assert!(report.state.cleanup_completed);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::EnterDomain));
+        assert!(runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::RunAutoFight));
+        assert!(runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::ContinueOrExit));
+    }
+
+    #[test]
+    fn execute_auto_domain_plan_skips_when_resin_unavailable() {
+        let plan = test_plan(1);
+        let mut runtime = MockAutoDomainRuntime {
+            selection: AutoDomainResinSelection {
+                decision: AutoDomainRewardDecision::Skip,
+                resin_name: None,
+                available_count: Some(0),
+                skip_reason: Some(AutoDomainSkipReason::OriginalResinInsufficient),
+                message: Some("resin unavailable".to_string()),
+            },
+            ..MockAutoDomainRuntime::default()
+        };
+
+        let report = execute_auto_domain_plan(&plan, &mut runtime).unwrap();
+
+        assert!(!report.completed);
+        assert_eq!(report.status, AutoDomainExecutionStatus::RewardSkipped);
+        assert_eq!(report.state.rewards_claimed, 0);
+        assert_eq!(report.state.rewards_skipped, 1);
+        assert_eq!(
+            report.state.last_skip_reason,
+            Some(AutoDomainSkipReason::OriginalResinInsufficient)
+        );
+        assert_eq!(runtime.claim_calls, 0);
+        assert_eq!(runtime.cleanup_calls, 1);
+    }
+
+    #[test]
+    fn execute_auto_domain_plan_stops_on_fight_failure() {
+        let plan = test_plan(1);
+        let mut runtime = MockAutoDomainRuntime {
+            fight: AutoDomainCombatOutcome {
+                completed: false,
+                challenge_completed: false,
+                auto_leaving_detected: false,
+                duration_ms: Some(3_000),
+                message: Some("fight failed".to_string()),
+            },
+            ..MockAutoDomainRuntime::default()
+        };
+
+        let report = execute_auto_domain_plan(&plan, &mut runtime).unwrap();
+
+        assert!(!report.completed);
+        assert_eq!(report.status, AutoDomainExecutionStatus::CombatFailed);
+        assert_eq!(report.state.fights_attempted, 1);
+        assert_eq!(report.state.fights_succeeded, 0);
+        assert_eq!(report.state.rewards_claimed, 0);
+        assert!(!runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::MoveToPetrifiedTree));
+        assert_eq!(runtime.cleanup_calls, 1);
+    }
+
+    #[test]
+    fn execute_auto_domain_plan_cleanup_runs_after_startup_failure() {
+        let plan = test_plan(1);
+        let mut runtime = MockAutoDomainRuntime {
+            startup: AutoDomainStartupOutcome {
+                completed: false,
+                assets_initialized: false,
+                combat_strategy_parsed: false,
+                auto_eat_trigger_registered: false,
+                message: Some("startup failed".to_string()),
+            },
+            ..MockAutoDomainRuntime::default()
+        };
+
+        let report = execute_auto_domain_plan(&plan, &mut runtime).unwrap();
+
+        assert!(!report.completed);
+        assert_eq!(report.status, AutoDomainExecutionStatus::StartupFailed);
+        assert!(!report.state.startup_completed);
+        assert!(report.state.cleanup_completed);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::Cleanup));
+        assert!(runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::WaitMainUi));
+        assert!(runtime
+            .calls
+            .contains(&AutoDomainRuntimeActionKind::NotifyEnd));
+    }
+
+    #[test]
+    fn execute_auto_domain_plan_retries_entry_before_success() {
+        let plan = test_plan(1);
+        let mut runtime = MockAutoDomainRuntime {
+            entry_failures_remaining: 1,
+            ..MockAutoDomainRuntime::default()
+        };
+
+        let report = execute_auto_domain_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(report.status, AutoDomainExecutionStatus::Completed);
+        assert_eq!(report.state.retries_used, 1);
+        assert_eq!(runtime.entry_calls, 2);
+        assert_eq!(runtime.cleanup_calls, 1);
+    }
+
+    fn test_plan(rounds: i32) -> AutoDomainExecutionPlan {
+        let mut config = AutoDomainExecutionConfig::default();
+        config.param.domain_round_num = rounds;
+        config.param.domain_name = "太山府".to_string();
+        config.auto_domain_config.revive_retry_count = 1;
+        plan_auto_domain(config).unwrap()
+    }
+
+    fn test_plan_with_specified_resin(rounds: i32) -> AutoDomainExecutionPlan {
+        let mut config = AutoDomainExecutionConfig::default();
+        config.param.domain_round_num = rounds;
+        config.param.domain_name = "太山府".to_string();
+        config.param.specify_resin_use = true;
+        config.param.condensed_resin_use_count = 1;
+        config.auto_domain_config.revive_retry_count = 1;
+        plan_auto_domain(config).unwrap()
+    }
+
+    fn basic_outcome() -> AutoDomainBasicOutcome {
+        AutoDomainBasicOutcome {
+            completed: true,
+            message: None,
+        }
+    }
+
+    fn notification_outcome() -> AutoDomainNotificationOutcome {
+        AutoDomainNotificationOutcome {
+            sent: true,
+            message: None,
+        }
+    }
 }

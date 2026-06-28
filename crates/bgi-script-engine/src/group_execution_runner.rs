@@ -60,7 +60,7 @@ pub(super) fn execute_group_with_execution_records_and_cancellation(
     group: &ScriptGroup,
     storage: &ExecutionRecordStorage,
     clock: &ExecutionRecordClock,
-    mut dispatcher: Option<&mut DispatcherRuntime>,
+    dispatcher: Option<&mut DispatcherRuntime>,
     cancellation: Option<&InputCancellationToken>,
     mut configure_host: impl FnMut(&mut ScriptHostRuntimeConfig),
     mut after_javascript: impl FnMut(&mut JavaScriptExecutionOutcome),
@@ -74,7 +74,7 @@ pub(super) fn execute_group_with_execution_records_and_cancellation(
         clock,
         None,
         true,
-        dispatcher.as_deref_mut(),
+        dispatcher,
         cancellation,
         &mut configure_host,
         &mut after_javascript,
@@ -299,7 +299,7 @@ pub(super) fn execute_group_project_with_execution_records_and_farming_plan_run_
     clock: &ExecutionRecordClock,
     farming_context: Option<&FarmingPlanExecutionContext>,
     honor_run_count: bool,
-    mut dispatcher: Option<&mut DispatcherRuntime>,
+    dispatcher: Option<&mut DispatcherRuntime>,
     cancellation: Option<&InputCancellationToken>,
     mut configure_host: impl FnMut(&mut ScriptHostRuntimeConfig),
     mut after_javascript: impl FnMut(&mut JavaScriptExecutionOutcome),
@@ -321,7 +321,7 @@ pub(super) fn execute_group_project_with_execution_records_and_farming_plan_run_
         clock,
         farming_context,
         honor_run_count,
-        dispatcher.as_deref_mut(),
+        dispatcher,
         cancellation,
         &mut configure_host,
         &mut after_javascript,
@@ -599,16 +599,14 @@ fn farming_plan_skip_decision_for_project(
         return None;
     }
 
-    match farming_plan_skip_decision_from_pathing_file(
+    farming_plan_skip_decision_from_pathing_file(
         &roots.pathing_script_root,
         &project.folder_name,
         &project.name,
         farming_context,
         clock.now_server,
-    ) {
-        Ok(decision) => Some(decision),
-        Err(_) => None,
-    }
+    )
+    .ok()
 }
 
 fn farming_plan_skip_reason(project_name: &str, message: &str) -> String {

@@ -188,14 +188,18 @@ fn execute_group_javascript_project(
     prepared.host_runtime_config.cancellation = cancellation.cloned().map(Arc::new);
     configure_host(&mut prepared.host_runtime_config);
     match dispatcher {
-        Some(dispatcher) => execute_prepared_javascript_with_task_dispatcher_and_cancellation(
-            &prepared,
-            dispatcher,
-            cancellation,
-        ),
-        None => execute_prepared_javascript_with_task_mode_and_cancellation(
+        Some(dispatcher) => {
+            execute_prepared_javascript_with_task_dispatcher_context_and_cancellation(
+                &prepared,
+                dispatcher,
+                roots.task_invocation_planning_context(),
+                cancellation,
+            )
+        }
+        None => execute_prepared_javascript_with_task_mode_context_and_cancellation(
             &prepared,
             roots.task_invocation_mode,
+            roots.task_invocation_planning_context(),
             cancellation,
         ),
     }

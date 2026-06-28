@@ -282,7 +282,7 @@ pub fn plan_auto_open_chest(
         search_rule,
         steps: auto_open_chest_steps(),
         pending_native: vec![
-            "live TaskContext/SystemControl preflight and Vision overlay drawing adapters remain pending"
+            "desktop live capture/template/input execution is wired; TaskContext/SystemControl preflight and real-game regression remain pending, while legacy draw-disabled locator overlay cleanup is a no-op"
                 .to_string(),
         ],
     })
@@ -510,10 +510,10 @@ fn auto_open_chest_status_from_decision(
         AutoOpenChestDecisionResult::ChestIconMissing => {
             AutoOpenChestExecutionStatus::ChestIconMissing
         }
-        AutoOpenChestDecisionResult::SearchingContinue => {
-            AutoOpenChestExecutionStatus::TimedOut
+        AutoOpenChestDecisionResult::SearchingContinue => AutoOpenChestExecutionStatus::TimedOut,
+        AutoOpenChestDecisionResult::ChestInteracted => {
+            AutoOpenChestExecutionStatus::ChestInteracted
         }
-        AutoOpenChestDecisionResult::ChestInteracted => AutoOpenChestExecutionStatus::ChestInteracted,
         AutoOpenChestDecisionResult::FlowerInteracted => {
             AutoOpenChestExecutionStatus::FlowerInteracted
         }
@@ -660,4 +660,27 @@ fn f64_member(value: &Value, names: [&str; 3]) -> Option<f64> {
     names
         .iter()
         .find_map(|name| value.get(*name).and_then(Value::as_f64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_open_chest_pending_native_tracks_real_desktop_gaps() {
+        let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
+
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("TaskContext/SystemControl preflight")));
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("overlay cleanup is a no-op")));
+        assert!(!plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("overlay drawing adapters remain pending")));
+    }
 }

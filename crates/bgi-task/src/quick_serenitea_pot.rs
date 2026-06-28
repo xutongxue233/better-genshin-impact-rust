@@ -589,13 +589,12 @@ pub fn plan_quick_serenitea_pot(
         interaction_rule,
         steps,
         pending_native: vec![
-            "live TaskContext/SystemControl preflight, Toast, and asset singleton reset adapter"
+            "live TaskContext initialization preflight and Toast warning dispatch remain pending"
                 .to_string(),
-            "live capture, template matching, Bv main-UI/big-map/F-interaction recognition adapter"
-                .to_string(),
-            "live Genshin action dispatch and GameCaptureRegion coordinate click adapter"
-                .to_string(),
-            "live Vision overlay cleanup adapter".to_string(),
+            "desktop live capture, foreground game-window preflight, template matching, Bv big-map detection, configured Genshin action dispatch, capture-coordinate clicks, and WinRT OCR-backed F-interaction recognition are wired".to_string(),
+            "legacy QuickSereniteaPot asset singleton reset is covered by Rust per-plan locator construction without global mutable asset cache".to_string(),
+            "desktop Vision overlay cleanup is wired as a no-op because QuickSereniteaPot locators do not push drawings into the WPF VisionContext layer".to_string(),
+            "real-game regression remains pending".to_string(),
         ],
     })
 }

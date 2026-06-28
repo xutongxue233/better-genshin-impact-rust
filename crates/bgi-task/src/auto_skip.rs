@@ -554,7 +554,7 @@ pub struct AutoSkipTriggerState {
     pub last_bring_to_front_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct AutoSkipTickObservation {
     pub now_ms: u64,
     pub is_playing: bool,
@@ -571,28 +571,6 @@ pub struct AutoSkipTickObservation {
     pub hangout_candidates: Vec<AutoSkipHangoutOptionCandidate>,
     pub hangout_skip_detected: bool,
     pub random_choice_index: Option<usize>,
-}
-
-impl Default for AutoSkipTickObservation {
-    fn default() -> Self {
-        Self {
-            now_ms: 0,
-            is_playing: false,
-            option_icon_detected: false,
-            interaction_key_detected: false,
-            daily_primogem_detected: false,
-            popup_page_close_detected: false,
-            bottom_triangle_detected: false,
-            character_popup_detected: false,
-            submit_goods_detected: false,
-            black_screen_detected: false,
-            dialogue_candidates: Vec::new(),
-            hangout_option_icons_detected: false,
-            hangout_candidates: Vec::new(),
-            hangout_skip_detected: false,
-            random_choice_index: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -860,24 +838,24 @@ where
     }
     state.prev_tick_ms = Some(observation.now_ms);
 
-    if is_auto_skip_daily_reward_wait_window_active(plan, state, observation.now_ms) {
-        if observation.daily_primogem_detected {
-            runtime.click_auto_skip_daily_primogem(plan.daily_reward_rule.primogem_click)?;
-            state.previous_daily_reward_click_ms = None;
-            executed_actions.push(AutoSkipExecutedAction::ClickDailyPrimogem {
-                point: plan.daily_reward_rule.primogem_click,
-            });
-            decision.skip_reason = Some(AutoSkipTickSkipReason::DailyRewardWaitWindowHandled);
-            return Ok(AutoSkipTickExecutionReport {
-                task_key: plan.task_key.clone(),
-                decision,
-                executed_actions,
-            });
-        }
+    if is_auto_skip_daily_reward_wait_window_active(plan, state, observation.now_ms)
+        && observation.daily_primogem_detected
+    {
+        runtime.click_auto_skip_daily_primogem(plan.daily_reward_rule.primogem_click)?;
+        state.previous_daily_reward_click_ms = None;
+        executed_actions.push(AutoSkipExecutedAction::ClickDailyPrimogem {
+            point: plan.daily_reward_rule.primogem_click,
+        });
+        decision.skip_reason = Some(AutoSkipTickSkipReason::DailyRewardWaitWindowHandled);
+        return Ok(AutoSkipTickExecutionReport {
+            task_key: plan.task_key.clone(),
+            decision,
+            executed_actions,
+        });
     }
 
     if !observation.is_playing {
-        let _handled = execute_auto_skip_not_playing_branches(
+        execute_auto_skip_not_playing_branches(
             plan,
             state,
             &observation,

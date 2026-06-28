@@ -36,7 +36,9 @@ pub const AUTO_FIGHT_AVATAR_SIDE_ICON_FROM_INDEX_RECT_1080P: (i32, i32, i32, i32
 pub const AUTO_FIGHT_COOP_ONE_P_ASSET: &str = "1p.png";
 pub const AUTO_FIGHT_COOP_P_ASSET: &str = "p.png";
 pub const AUTO_FIGHT_FEATURE: &str = "AutoFight";
-pub const AUTO_FIGHT_COOP_SIDE_INDEX_RECTS_1080P: [(&str, &[(i32, i32, i32, i32)]); 6] = [
+type CoopRectMap = [(&'static str, &'static [(i32, i32, i32, i32)]); 6];
+
+pub const AUTO_FIGHT_COOP_SIDE_INDEX_RECTS_1080P: CoopRectMap = [
     ("1p_2", &[(1859, 412, 28, 24), (1859, 508, 28, 24)]),
     ("1p_3", &[(1859, 459, 28, 24), (1859, 555, 28, 24)]),
     ("1p_4", &[(1859, 552, 28, 24)]),
@@ -44,7 +46,7 @@ pub const AUTO_FIGHT_COOP_SIDE_INDEX_RECTS_1080P: [(&str, &[(i32, i32, i32, i32)
     ("p_3", &[(1859, 412, 28, 24)]),
     ("p_4", &[(1859, 507, 28, 24)]),
 ];
-pub const AUTO_FIGHT_COOP_SIDE_ICON_RECTS_1080P: [(&str, &[(i32, i32, i32, i32)]); 6] = [
+pub const AUTO_FIGHT_COOP_SIDE_ICON_RECTS_1080P: CoopRectMap = [
     ("1p_2", &[(1765, 375, 76, 76), (1765, 470, 76, 76)]),
     ("1p_3", &[(1765, 375, 76, 76), (1765, 470, 76, 76)]),
     ("1p_4", &[(1765, 515, 76, 76)]),

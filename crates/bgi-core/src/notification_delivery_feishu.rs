@@ -49,10 +49,13 @@ pub(super) fn feishu_image_dispatch<C: NotificationHttpClient>(
         &config.feishu_webhook_url,
         "Feishu webhook endpoint is not set",
     )?;
-    let image = payload
-        .screenshot
-        .as_ref()
-        .ok_or_else(|| NotificationDispatchError::UnsupportedPayload("Feishu image upload"))?;
+    let image =
+        payload
+            .screenshot
+            .as_ref()
+            .ok_or(NotificationDispatchError::UnsupportedPayload(
+                "Feishu image upload",
+            ))?;
     let token = feishu_access_token(config, client)?;
     let image_key = feishu_upload_image(image, &token, client)?;
     let message = feishu_post_image_message(payload, &image_key);

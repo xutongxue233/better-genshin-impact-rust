@@ -94,7 +94,7 @@ impl AutoPickExecutionConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutoPickExternalConfig {
     pub text_list: Vec<String>,
@@ -128,15 +128,6 @@ impl AutoPickExternalConfig {
         Self {
             text_list,
             force_interaction,
-        }
-    }
-}
-
-impl Default for AutoPickExternalConfig {
-    fn default() -> Self {
-        Self {
-            text_list: Vec::new(),
-            force_interaction: false,
         }
     }
 }
@@ -298,13 +289,13 @@ pub enum AutoPickDoNotPickRule {
     ContainsOnePrefixAndAny { prefix: String, any: Vec<String> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoPickTextDecision {
     Pick,
     Skip(AutoPickTextSkipReason),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoPickTextSkipReason {
     EmptyText,
     StaticDoNotPick,
@@ -314,19 +305,19 @@ pub enum AutoPickTextSkipReason {
     FuzzyBlackList,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoPickPreOcrDecision {
     ContinueToOcr,
     Pick,
     Skip(AutoPickPreOcrSkipReason),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoPickPreOcrSkipReason {
     ExcludedIconWithoutWhiteList,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoPickTickObservation {
     pub runner_pause_count: u32,
     pub found_pick_rect: Option<Rect>,
@@ -337,7 +328,7 @@ pub struct AutoPickTickObservation {
     pub raw_ocr_text: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoPickTickDecisionReport {
     pub text_rect: Option<Rect>,
     pub cleaned_text: Option<String>,
@@ -346,7 +337,7 @@ pub struct AutoPickTickDecisionReport {
     pub action: AutoPickTickDecisionAction,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum AutoPickTickDecisionAction {
     Pick {
@@ -363,14 +354,14 @@ pub enum AutoPickTickDecisionAction {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoPickTickPickReason {
     ForceInteraction,
     DirectNoLists,
     TextAccepted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoPickTickSkipReason {
     Disabled,
     Paused,
@@ -390,14 +381,14 @@ pub struct AutoPickRuntimeLists {
     pub fuzzy_black_list: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoPickTickExecutionReport {
     pub task_key: String,
     pub decision: AutoPickTickDecisionReport,
     pub executed_actions: Vec<AutoPickExecutedAction>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum AutoPickExecutedAction {
     KeyPress {
@@ -664,11 +655,8 @@ pub fn plan_auto_pick(config: AutoPickExecutionConfig) -> AutoPickExecutionPlan 
         tick_steps: auto_pick_tick_steps(engine, pick_key),
         executor_ready: true,
         pending_native: vec![
-            "live adapter for capture frame access and pause-count waiting loop".to_string(),
-            "live adapter for OpenCV template matching for F/L/chat/settings icons".to_string(),
-            "live adapter for scroll icon color probing and input dispatch".to_string(),
-            "live adapter for Sobel/morphology text extraction and Paddle/Yap OCR".to_string(),
-            "live adapter for black/white list file loading and pick key simulation".to_string(),
+            "desktop live adapter now covers capture, pause-count gate, F/L/chat/settings template matching, scroll icon color probing, list loading, pick-key input, scroll input, and delay dispatch".to_string(),
+            "Sobel/morphology text extraction and Paddle/Yap OCR remain pending".to_string(),
         ],
     }
 }

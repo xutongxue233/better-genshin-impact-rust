@@ -1,30 +1,20 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptProjectType {
+    #[default]
     Javascript,
     KeyMouse,
     Pathing,
     Shell,
 }
 
-impl Default for ScriptProjectType {
-    fn default() -> Self {
-        Self::Javascript
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScriptProjectStatus {
+    #[default]
     Enabled,
     Disabled,
-}
-
-impl Default for ScriptProjectStatus {
-    fn default() -> Self {
-        Self::Enabled
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +68,7 @@ pub struct ScriptGroupFile {
     pub group: ScriptGroup,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ScriptGroupProjectPatch {
     pub name: Option<String>,
@@ -89,21 +79,6 @@ pub struct ScriptGroupProjectPatch {
     pub run_num: Option<i32>,
     pub allow_js_notification: Option<bool>,
     pub allow_js_http_hash: Option<Option<String>>,
-}
-
-impl Default for ScriptGroupProjectPatch {
-    fn default() -> Self {
-        Self {
-            name: None,
-            folder_name: None,
-            project_type: None,
-            status: None,
-            schedule: None,
-            run_num: None,
-            allow_js_notification: None,
-            allow_js_http_hash: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -38,7 +38,7 @@ impl SoloTaskHostPlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct AutoPickExternalConfig {
     pub text_list: Vec<String>,
     pub force_interaction: bool,
@@ -86,15 +86,6 @@ impl AutoPickExternalConfig {
             "TextList": self.text_list,
             "ForceInteraction": self.force_interaction
         })
-    }
-}
-
-impl Default for AutoPickExternalConfig {
-    fn default() -> Self {
-        Self {
-            text_list: Vec::new(),
-            force_interaction: false,
-        }
     }
 }
 

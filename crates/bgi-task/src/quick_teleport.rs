@@ -253,13 +253,13 @@ pub enum QuickTeleportTickAction {
     RecheckTeleportButtonWithFreshCapture,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuickTeleportMapChooseCandidate {
     pub icon_rect: Rect,
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuickTeleportDecisionInput {
     pub elapsed_since_previous_tick_ms: u64,
     pub hotkey_pressed: bool,
@@ -270,13 +270,13 @@ pub struct QuickTeleportDecisionInput {
     pub map_choose_candidates: Vec<QuickTeleportMapChooseCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuickTeleportDecisionReport {
     pub sorted_candidates: Vec<QuickTeleportMapChooseCandidate>,
     pub action: QuickTeleportDecisionAction,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum QuickTeleportDecisionAction {
     Skip {
@@ -295,7 +295,7 @@ pub enum QuickTeleportDecisionAction {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuickTeleportSkipReason {
     Disabled,
     TickIntervalNotElapsed,
@@ -306,14 +306,14 @@ pub enum QuickTeleportSkipReason {
     NoValidCandidate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuickTeleportTickExecutionReport {
     pub task_key: String,
     pub decision: QuickTeleportDecisionReport,
     pub executed_actions: Vec<QuickTeleportExecutedAction>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum QuickTeleportExecutedAction {
     ClickTeleportButton {
@@ -419,14 +419,9 @@ pub fn plan_quick_teleport(config: QuickTeleportExecutionConfig) -> QuickTelepor
         steps: quick_teleport_steps(),
         executor_ready: true,
         pending_native: vec![
-            "live adapter for BigMap capture and BV UI recognition".to_string(),
-            "live adapter for OpenCV multi-template matching over grey map icon ROI".to_string(),
-            "live adapter for HDR-aware OCR and color-range OCR for candidate text".to_string(),
-            "live adapter for keyboard/mouse hook state for optional quick-teleport hotkey gate"
-                .to_string(),
-            "live adapter for mouse click dispatch on teleport button and candidate text regions"
-                .to_string(),
-            "live adapter for fresh capture after waiting for the teleport panel".to_string(),
+            "desktop live adapter now covers BitBlt capture, BigMap template gating, teleport-button template matching/clicking, close/map-choose guard templates, map-choose icon multi-template probing, candidate de-duplication, WinRT candidate-text OCR with standard white-text filtering, foreground-aware legacy hold-hotkey polling, tick-local Chat UI hotkey latch suppression, throttle state, and fresh teleport-button recheck".to_string(),
+            "HDR capture-path parity, native global hook event-source parity, and real-game OCR regression remain pending".to_string(),
+            "full Teleport/TpTask map navigation, region switching, SIFT/map matching, and coordinate movement remain pending".to_string(),
         ],
     }
 }

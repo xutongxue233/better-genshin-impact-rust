@@ -46,13 +46,13 @@ use crate::{
     ScanPickYoloRule, SetTimeExecutionPlan, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
     SwitchPartyCurrentPartyRule, SwitchPartyExecutionPlan, SwitchPartyListScanRule,
     SwitchPartyStep, SwitchPartyStepAction, SwitchPartyStepCondition, SwitchPartyStepPhase,
-    SwitchPartyStepResult, TalkOptionPlanResult, TaskError, TeleportExecutionPlan, TeleportStep,
-    TeleportStepAction, TeleportStepPhase, TeleportStepResult, WalkToFActionPress,
-    WalkToFExecutionPlan, WalkToFStep, WalkToFStepAction, WalkToFStepCondition, WalkToFStepPhase,
-    WalkToFStepResult, WeaponOrePrescrollRule, WonderlandCycleExecutionPlan,
-    WonderlandCycleRetryAction, WonderlandCycleRetryRule, WonderlandCycleStep,
-    WonderlandCycleStepAction, WonderlandCycleStepCondition, WonderlandCycleStepPhase,
-    WonderlandCycleStepResult, CHOOSE_TALK_OPTION_TASK_KEY,
+    SwitchPartyStepResult, TalkOptionPlanResult, TaskError, TeleportExecutionPlan,
+    TeleportPlanKind, TeleportStep, TeleportStepAction, TeleportStepPhase, TeleportStepResult,
+    TeleportTargetPlan, WalkToFActionPress, WalkToFExecutionPlan, WalkToFStep, WalkToFStepAction,
+    WalkToFStepCondition, WalkToFStepPhase, WalkToFStepResult, WeaponOrePrescrollRule,
+    WonderlandCycleExecutionPlan, WonderlandCycleRetryAction, WonderlandCycleRetryRule,
+    WonderlandCycleStep, WonderlandCycleStepAction, WonderlandCycleStepCondition,
+    WonderlandCycleStepPhase, WonderlandCycleStepResult, CHOOSE_TALK_OPTION_TASK_KEY,
     CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY, CLAIM_MAIL_REWARDS_COLLECT,
     CLAIM_MAIL_REWARDS_ESC_MAIL_REWARD, RELOGIN_CONFIRM, RELOGIN_ENTER_GAME, RELOGIN_MENU_BAG,
     RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_EXIT_DOOR, RETURN_MAIN_UI_PAIMON_MENU,
@@ -487,7 +487,7 @@ pub fn common_job_executor_bridge_plan(
                 CommonJobRuntimeActionKind::TeleportAction,
                 CommonJobRuntimeActionKind::ReturnResult,
             ],
-            notes: "Teleport has a Rust state machine with injectable big-map, map-matching, click, teleport-completion, and navigation-seed hooks; invocation live execution can now hand it to a caller-provided map/click adapter.".to_string(),
+            notes: "Teleport has a Rust state machine with injectable big-map, map-matching, click, teleport-completion, and navigation-seed hooks; invocation live execution can now hand it to a caller-provided map/click adapter and the execution report records the effective navigation seed for later pathing consumption.".to_string(),
         }),
         CommonJobExecutionPlan::GoToAdventurersGuild(plan) => Some(CommonJobExecutorBridgePlan {
             task_key: plan.task_key.clone(),
@@ -2334,7 +2334,7 @@ pub struct GoToSereniteaPotExecutionReport {
     pub skipped_steps: Vec<GoToSereniteaPotSkippedStep>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TeleportExecutorState {
     pub big_map_open_requested: bool,
     pub big_map_verified: bool,
@@ -2356,6 +2356,7 @@ pub struct TeleportExecutorState {
     pub statue_selected: bool,
     pub teleport_completion_waited: bool,
     pub navigation_previous_position_seeded: bool,
+    pub navigation_previous_position_seed: Option<TeleportTargetPlan>,
     pub result: Option<TeleportStepResult>,
 }
 
@@ -2404,7 +2405,7 @@ impl TeleportRuntimeStepReport {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TeleportExecutionReport {
     pub task_key: String,
     pub completed: bool,
@@ -2873,6 +2874,10 @@ pub trait TeleportRuntime: CommonJobRuntime {
         &mut self,
         action: &TeleportStepAction,
     ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn teleport_navigation_seed_target(&self) -> Option<TeleportTargetPlan> {
+        None
+    }
 }
 
 pub trait ReloginRuntime: CommonJobRuntime {
@@ -4182,19 +4187,88 @@ where
 {
     let mut state = TeleportExecutorState::default();
     let mut executed_steps = Vec::new();
+    let max_attempts = if plan.kind == TeleportPlanKind::CoordinateTeleport {
+        plan.retry_rule.max_attempts.max(1)
+    } else {
+        1
+    };
 
-    for step in &plan.steps {
-        let outcome = execute_teleport_step(step, runtime)?;
-        apply_teleport_outcome(step, outcome, &mut state)?;
-        executed_steps.push(TeleportRuntimeStepReport::executed(step, outcome));
+    for attempt_index in 0..max_attempts {
+        let mut retry_after_point_not_activated = false;
+        for step in &plan.steps {
+            let outcome = execute_teleport_step(step, runtime)?;
+            let point_not_activated_click = plan.kind == TeleportPlanKind::CoordinateTeleport
+                && matches!(
+                    step.action,
+                    TeleportStepAction::ClickTeleportPanelOrCandidate { .. }
+                )
+                && matches!(outcome, CommonJobRuntimeOutcome::Matched(false));
+            let move_map_incomplete = plan.kind == TeleportPlanKind::MoveMapTo
+                && matches!(step.action, TeleportStepAction::MoveMapTo { .. })
+                && matches!(outcome, CommonJobRuntimeOutcome::Matched(false));
+
+            apply_teleport_outcome(step, outcome, &mut state)?;
+            if move_map_incomplete {
+                return Err(TaskError::CommonJobExecution(
+                    "Teleport MoveMapTo did not converge to the target window".to_string(),
+                ));
+            }
+            if matches!(
+                step.action,
+                TeleportStepAction::SeedNavigationPreviousPositionAfterTeleport { .. }
+            ) && state.navigation_previous_position_seeded
+            {
+                if let Some(target) = runtime.teleport_navigation_seed_target() {
+                    state.navigation_previous_position_seed = Some(target);
+                }
+            }
+            executed_steps.push(TeleportRuntimeStepReport::executed(step, outcome));
+
+            if point_not_activated_click {
+                retry_after_point_not_activated = true;
+                continue;
+            }
+            if retry_after_point_not_activated
+                && matches!(
+                    step.action,
+                    TeleportStepAction::HandlePointNotActivated { .. }
+                )
+            {
+                if !state.point_not_activated_handled {
+                    return Err(TaskError::CommonJobExecution(
+                        "Teleport point-not-activated handler did not complete".to_string(),
+                    ));
+                }
+                if attempt_index + 1 >= max_attempts {
+                    return Err(TaskError::CommonJobExecution("传送失败".to_string()));
+                }
+                break;
+            }
+        }
+
+        if retry_after_point_not_activated {
+            continue;
+        }
+
+        return Ok(TeleportExecutionReport {
+            task_key: plan.task_key.clone(),
+            completed: teleport_plan_completed(plan.kind, &state),
+            state,
+            executed_steps,
+        });
     }
 
-    Ok(TeleportExecutionReport {
-        task_key: plan.task_key.clone(),
-        completed: state.result == Some(TeleportStepResult::Planned),
-        state,
-        executed_steps,
-    })
+    Err(TaskError::CommonJobExecution("传送失败".to_string()))
+}
+
+fn teleport_plan_completed(kind: TeleportPlanKind, state: &TeleportExecutorState) -> bool {
+    if state.result != Some(TeleportStepResult::Planned) {
+        return false;
+    }
+    match kind {
+        TeleportPlanKind::MoveMapTo => state.move_map_completed,
+        TeleportPlanKind::CoordinateTeleport | TeleportPlanKind::StatueOfTheSeven => true,
+    }
 }
 
 pub fn execute_walk_to_f_live<F, I, C>(
@@ -6659,9 +6733,9 @@ fn should_execute_go_to_serenitea_pot_step(
         GoToSereniteaPotStepCondition::WhenShopMissingOrNotDue => {
             if state.ayuan_found != Some(true) {
                 Err(GoToSereniteaPotSkipReason::AYuanMissing)
-            } else if plan.secret_treasure_objects.is_empty() {
-                Ok(())
-            } else if state.shop_purchase_completed == Some(false) {
+            } else if plan.secret_treasure_objects.is_empty()
+                || state.shop_purchase_completed == Some(false)
+            {
                 Ok(())
             } else if state.shop_purchase_completed == Some(true) {
                 Err(GoToSereniteaPotSkipReason::ShopPurchased)
@@ -7081,7 +7155,7 @@ where
         }
         ScanPickDropsStepAction::Page { command } => runtime.execute_page_command(command),
         ScanPickDropsStepAction::ReleaseAllKeys => {
-            runtime.dispatch_input(&release_all_keys_sequence().events().to_vec())
+            runtime.dispatch_input(release_all_keys_sequence().events())
         }
         ScanPickDropsStepAction::ClearVisionDrawings => runtime.clear_scan_pick_vision_drawings(),
         ScanPickDropsStepAction::ReturnResult { .. } => Ok(CommonJobRuntimeOutcome::None),
@@ -7476,8 +7550,12 @@ fn apply_teleport_outcome(
         TeleportStepAction::WaitForTeleportCompletion { .. } => {
             state.teleport_completion_waited = teleport_outcome_as_match(outcome, step)?;
         }
-        TeleportStepAction::SeedNavigationPreviousPositionAfterTeleport { .. } => {
+        TeleportStepAction::SeedNavigationPreviousPositionAfterTeleport { target } => {
             state.navigation_previous_position_seeded = teleport_outcome_as_match(outcome, step)?;
+            state.navigation_previous_position_seed = state
+                .navigation_previous_position_seeded
+                .then(|| target.clone())
+                .flatten();
         }
         TeleportStepAction::ReturnResult { result } => {
             state.result = Some(*result);
@@ -7969,7 +8047,7 @@ fn execute_scan_pick_search_sweep<R>(
 where
     R: ScanPickDropsRuntime,
 {
-    runtime.dispatch_input(&release_all_keys_sequence().events().to_vec())?;
+    runtime.dispatch_input(release_all_keys_sequence().events())?;
     for index in 0..rule.iterations {
         state.search_iterations_run = index.saturating_add(1);
         runtime.dispatch_input(&[InputEvent::MouseMoveRelative {

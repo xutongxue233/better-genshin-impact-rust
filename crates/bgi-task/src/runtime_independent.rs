@@ -12,6 +12,10 @@ use crate::auto_boss::{
 use crate::auto_domain::{
     plan_auto_domain, AutoDomainExecutionConfig, AutoDomainExecutionPlan, AUTO_DOMAIN_TASK_KEY,
 };
+use crate::auto_eat::{
+    plan_auto_eat_food, AutoEatFoodExecutionConfig, AutoEatFoodExecutionPlan,
+    AUTO_EAT_FOOD_TASK_KEY,
+};
 use crate::auto_fight::{plan_auto_fight, AutoFightExecutionConfig, AutoFightExecutionPlan};
 use crate::auto_genius_invokation::{
     plan_auto_genius_invokation, AutoGeniusInvokationExecutionConfig,
@@ -87,6 +91,7 @@ pub enum IndependentTaskKind {
     AutoTrackPath,
     AutoMusicGame,
     AutoOpenChest,
+    AutoEatFood,
     AutoStygianOnslaught,
     AutoPathing,
     AutoBoss,
@@ -358,6 +363,18 @@ impl IndependentTaskExecutionRequest {
         }
     }
 
+    pub fn auto_eat_food(
+        config: AutoEatFoodExecutionConfig,
+        working_directory: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            task_key: AUTO_EAT_FOOD_TASK_KEY.to_string(),
+            command: None,
+            config: serde_json::to_value(config).ok(),
+            working_directory: working_directory.into(),
+        }
+    }
+
     pub fn turn_around_macro(
         config: MacroHotkeyExecutionConfig,
         working_directory: impl Into<PathBuf>,
@@ -384,6 +401,125 @@ impl IndependentTaskExecutionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum IndependentTaskExecutionPlan {
+    UseRedeemCodePlan(UseRedeemCodeExecutionPlan),
+    AutoPathingPlan(AutoPathingExecutionPlan),
+    AutoFightPlan(AutoFightExecutionPlan),
+    AutoWoodPlan(AutoWoodExecutionPlan),
+    AutoDomainPlan(AutoDomainExecutionPlan),
+    AutoGeniusInvokationPlan(AutoGeniusInvokationExecutionPlan),
+    AutoTrackPathPlan(AutoTrackPathExecutionPlan),
+    AutoTrackPlan(AutoTrackExecutionPlan),
+    AutoBossPlan(AutoBossExecutionPlan),
+    AutoArtifactSalvagePlan(AutoArtifactSalvageExecutionPlan),
+    AutoMusicGamePlan(AutoMusicGameExecutionPlan),
+    AutoOpenChestPlan(AutoOpenChestExecutionPlan),
+    AutoEatFoodPlan(AutoEatFoodExecutionPlan),
+    AutoStygianOnslaughtPlan(AutoStygianOnslaughtExecutionPlan),
+    AutoLeyLineOutcropPlan(AutoLeyLineOutcropExecutionPlan),
+    GetGridIconsPlan(GetGridIconsExecutionPlan),
+    TurnAroundMacroPlan(MacroHotkeyExecutionPlan),
+    QuickEnhanceArtifactMacroPlan(MacroHotkeyExecutionPlan),
+    QuickBuyPlan(QuickBuyExecutionPlan),
+    QuickSereniteaPotPlan(QuickSereniteaPotExecutionPlan),
+}
+
+impl IndependentTaskExecutionPlan {
+    pub fn task_key(&self) -> &str {
+        match self {
+            IndependentTaskExecutionPlan::UseRedeemCodePlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoPathingPlan(_) => "AutoPathing",
+            IndependentTaskExecutionPlan::AutoFightPlan(_) => "AutoFight",
+            IndependentTaskExecutionPlan::AutoWoodPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoDomainPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoGeniusInvokationPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoTrackPathPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoTrackPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoBossPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoArtifactSalvagePlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoMusicGamePlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoOpenChestPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoEatFoodPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoStygianOnslaughtPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::AutoLeyLineOutcropPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::GetGridIconsPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::TurnAroundMacroPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::QuickEnhanceArtifactMacroPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::QuickBuyPlan(plan) => &plan.task_key,
+            IndependentTaskExecutionPlan::QuickSereniteaPotPlan(plan) => &plan.task_key,
+        }
+    }
+
+    pub fn executor_ready(&self) -> bool {
+        match self {
+            IndependentTaskExecutionPlan::UseRedeemCodePlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoPathingPlan(_) => false,
+            IndependentTaskExecutionPlan::AutoFightPlan(_) => false,
+            IndependentTaskExecutionPlan::AutoWoodPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoDomainPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoGeniusInvokationPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoTrackPathPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoTrackPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoBossPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoArtifactSalvagePlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoMusicGamePlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoOpenChestPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoEatFoodPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoStygianOnslaughtPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::AutoLeyLineOutcropPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::GetGridIconsPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::TurnAroundMacroPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::QuickEnhanceArtifactMacroPlan(plan) => {
+                plan.executor_ready
+            }
+            IndependentTaskExecutionPlan::QuickBuyPlan(plan) => plan.executor_ready,
+            IndependentTaskExecutionPlan::QuickSereniteaPotPlan(plan) => plan.executor_ready,
+        }
+    }
+}
+
+impl From<IndependentTaskExecutionPlan> for IndependentTaskExecution {
+    fn from(plan: IndependentTaskExecutionPlan) -> Self {
+        match plan {
+            IndependentTaskExecutionPlan::UseRedeemCodePlan(plan) => Self::UseRedeemCodePlan(plan),
+            IndependentTaskExecutionPlan::AutoPathingPlan(plan) => Self::AutoPathingPlan(plan),
+            IndependentTaskExecutionPlan::AutoFightPlan(plan) => Self::AutoFightPlan(plan),
+            IndependentTaskExecutionPlan::AutoWoodPlan(plan) => Self::AutoWoodPlan(plan),
+            IndependentTaskExecutionPlan::AutoDomainPlan(plan) => Self::AutoDomainPlan(plan),
+            IndependentTaskExecutionPlan::AutoGeniusInvokationPlan(plan) => {
+                Self::AutoGeniusInvokationPlan(plan)
+            }
+            IndependentTaskExecutionPlan::AutoTrackPathPlan(plan) => Self::AutoTrackPathPlan(plan),
+            IndependentTaskExecutionPlan::AutoTrackPlan(plan) => Self::AutoTrackPlan(plan),
+            IndependentTaskExecutionPlan::AutoBossPlan(plan) => Self::AutoBossPlan(plan),
+            IndependentTaskExecutionPlan::AutoArtifactSalvagePlan(plan) => {
+                Self::AutoArtifactSalvagePlan(plan)
+            }
+            IndependentTaskExecutionPlan::AutoMusicGamePlan(plan) => Self::AutoMusicGamePlan(plan),
+            IndependentTaskExecutionPlan::AutoOpenChestPlan(plan) => Self::AutoOpenChestPlan(plan),
+            IndependentTaskExecutionPlan::AutoEatFoodPlan(plan) => Self::AutoEatFoodPlan(plan),
+            IndependentTaskExecutionPlan::AutoStygianOnslaughtPlan(plan) => {
+                Self::AutoStygianOnslaughtPlan(plan)
+            }
+            IndependentTaskExecutionPlan::AutoLeyLineOutcropPlan(plan) => {
+                Self::AutoLeyLineOutcropPlan(plan)
+            }
+            IndependentTaskExecutionPlan::GetGridIconsPlan(plan) => Self::GetGridIconsPlan(plan),
+            IndependentTaskExecutionPlan::TurnAroundMacroPlan(plan) => {
+                Self::TurnAroundMacroPlan(plan)
+            }
+            IndependentTaskExecutionPlan::QuickEnhanceArtifactMacroPlan(plan) => {
+                Self::QuickEnhanceArtifactMacroPlan(plan)
+            }
+            IndependentTaskExecutionPlan::QuickBuyPlan(plan) => Self::QuickBuyPlan(plan),
+            IndependentTaskExecutionPlan::QuickSereniteaPotPlan(plan) => {
+                Self::QuickSereniteaPotPlan(plan)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum IndependentTaskExecution {
     Shell(ShellExecutionResult),
     UseRedeemCodePlan(UseRedeemCodeExecutionPlan),
@@ -398,6 +534,7 @@ pub enum IndependentTaskExecution {
     AutoArtifactSalvagePlan(AutoArtifactSalvageExecutionPlan),
     AutoMusicGamePlan(AutoMusicGameExecutionPlan),
     AutoOpenChestPlan(AutoOpenChestExecutionPlan),
+    AutoEatFoodPlan(AutoEatFoodExecutionPlan),
     AutoStygianOnslaughtPlan(AutoStygianOnslaughtExecutionPlan),
     AutoLeyLineOutcropPlan(AutoLeyLineOutcropExecutionPlan),
     GetGridIconsPlan(GetGridIconsExecutionPlan),
@@ -414,6 +551,38 @@ pub struct IndependentTaskExecutionResult {
     pub execution: IndependentTaskExecution,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IndependentTaskExecutionPlanResult {
+    pub task_key: String,
+    pub plan: IndependentTaskExecutionPlan,
+}
+
+impl From<IndependentTaskExecutionPlanResult> for IndependentTaskExecutionResult {
+    fn from(result: IndependentTaskExecutionPlanResult) -> Self {
+        Self {
+            task_key: result.task_key,
+            execution: result.plan.into(),
+        }
+    }
+}
+
+pub fn plan_independent_task_execution(
+    request: &IndependentTaskExecutionRequest,
+) -> Result<IndependentTaskExecutionResult> {
+    if let Some(plan) = plan_independent_task_execution_plan(request)? {
+        return Ok(plan.into());
+    }
+
+    let entry = find_task_catalog_entry(&request.task_key)
+        .ok_or_else(|| TaskError::UnknownIndependentTask(request.task_key.clone()))?;
+    Ok(IndependentTaskExecutionResult {
+        task_key: entry.key.to_string(),
+        execution: IndependentTaskExecution::NativePending(independent_task_native_pending_result(
+            request, entry,
+        )),
+    })
+}
+
 pub fn execute_independent_task_with_cancel(
     request: &IndependentTaskExecutionRequest,
     is_cancelled: impl FnMut() -> bool,
@@ -421,200 +590,227 @@ pub fn execute_independent_task_with_cancel(
     let entry = find_task_catalog_entry(&request.task_key)
         .ok_or_else(|| TaskError::UnknownIndependentTask(request.task_key.clone()))?;
     if entry.key == "Shell" {
-        let config = ShellConfig::from_value(request.config.as_ref());
-        let param = ShellTaskParam::build_from_config(
-            request.command.clone().unwrap_or_default(),
-            config,
-            request.working_directory.clone(),
-        );
         return Ok(IndependentTaskExecutionResult {
             task_key: entry.key.to_string(),
             execution: IndependentTaskExecution::Shell(execute_shell_task_with_cancel(
-                &param,
+                &ShellTaskParam::build_from_config(
+                    request.command.clone().unwrap_or_default(),
+                    ShellConfig::from_value(request.config.as_ref()),
+                    request.working_directory.clone(),
+                ),
                 is_cancelled,
             )?),
         });
     }
+
+    if let Some(plan) = plan_independent_task_execution_plan(request)? {
+        return Ok(plan.into());
+    }
+
+    Ok(IndependentTaskExecutionResult {
+        task_key: entry.key.to_string(),
+        execution: IndependentTaskExecution::NativePending(independent_task_native_pending_result(
+            request, entry,
+        )),
+    })
+}
+
+pub fn plan_independent_task_execution_plan(
+    request: &IndependentTaskExecutionRequest,
+) -> Result<Option<IndependentTaskExecutionPlanResult>> {
+    let entry = find_task_catalog_entry(&request.task_key)
+        .ok_or_else(|| TaskError::UnknownIndependentTask(request.task_key.clone()))?;
+    if entry.key == "Shell" {
+        return Ok(None);
+    }
     if entry.key == USE_REDEEM_CODE_TASK_KEY {
         let config = UseRedeemCodeExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::UseRedeemCodePlan(plan_use_redeem_codes(
+            plan: IndependentTaskExecutionPlan::UseRedeemCodePlan(plan_use_redeem_codes(
                 config.codes,
                 config.capture_size,
             )?),
-        });
+        }));
     }
     if entry.key == "AutoPathing" {
         let config = AutoPathingExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoPathingPlan(plan_auto_pathing(
+            plan: IndependentTaskExecutionPlan::AutoPathingPlan(plan_auto_pathing(
                 &request.working_directory,
                 &config.route,
             )?),
-        });
+        }));
     }
     if entry.key == "AutoFight" {
         let config = AutoFightExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoFightPlan(plan_auto_fight(
+            plan: IndependentTaskExecutionPlan::AutoFightPlan(plan_auto_fight(
                 &request.working_directory,
                 config.param,
             )?),
-        });
+        }));
     }
     if entry.key == AUTO_WOOD_TASK_KEY {
         let config = AutoWoodExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoWoodPlan(plan_auto_wood(config)),
-        });
+            plan: IndependentTaskExecutionPlan::AutoWoodPlan(plan_auto_wood(config)),
+        }));
     }
     if entry.key == AUTO_DOMAIN_TASK_KEY {
         let config = AutoDomainExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoDomainPlan(plan_auto_domain(config)?),
-        });
+            plan: IndependentTaskExecutionPlan::AutoDomainPlan(plan_auto_domain(config)?),
+        }));
     }
     if entry.key == AUTO_GENIUS_INVOKATION_TASK_KEY {
         let config = AutoGeniusInvokationExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoGeniusInvokationPlan(
+            plan: IndependentTaskExecutionPlan::AutoGeniusInvokationPlan(
                 plan_auto_genius_invokation(&request.working_directory, config)?,
             ),
-        });
+        }));
     }
     if entry.key == AUTO_TRACK_PATH_TASK_KEY {
         let config = AutoTrackPathExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoTrackPathPlan(plan_auto_track_path(
+            plan: IndependentTaskExecutionPlan::AutoTrackPathPlan(plan_auto_track_path(
                 &request.working_directory,
                 config,
             )?),
-        });
+        }));
     }
     if entry.key == AUTO_TRACK_TASK_KEY {
         let config = AutoTrackExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoTrackPlan(plan_auto_track(config)),
-        });
+            plan: IndependentTaskExecutionPlan::AutoTrackPlan(plan_auto_track(config)),
+        }));
     }
     if entry.key == AUTO_MUSIC_GAME_TASK_KEY {
         let config = AutoMusicGameExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoMusicGamePlan(plan_auto_music_game(config)),
-        });
+            plan: IndependentTaskExecutionPlan::AutoMusicGamePlan(plan_auto_music_game(config)),
+        }));
     }
     if entry.key == AUTO_OPEN_CHEST_TASK_KEY {
         let config = AutoOpenChestExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoOpenChestPlan(plan_auto_open_chest(config)?),
-        });
+            plan: IndependentTaskExecutionPlan::AutoOpenChestPlan(plan_auto_open_chest(config)?),
+        }));
+    }
+    if entry.key == AUTO_EAT_FOOD_TASK_KEY {
+        let config = AutoEatFoodExecutionConfig::from_value(request.config.as_ref())?;
+        return Ok(Some(IndependentTaskExecutionPlanResult {
+            task_key: entry.key.to_string(),
+            plan: IndependentTaskExecutionPlan::AutoEatFoodPlan(plan_auto_eat_food(config)?),
+        }));
     }
     if entry.key == AUTO_STYGIAN_ONSLAUGHT_TASK_KEY {
         let config = AutoStygianOnslaughtExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoStygianOnslaughtPlan(
+            plan: IndependentTaskExecutionPlan::AutoStygianOnslaughtPlan(
                 plan_auto_stygian_onslaught(config)?,
             ),
-        });
+        }));
     }
     if entry.key == AUTO_BOSS_TASK_KEY {
         let config = AutoBossExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoBossPlan(plan_auto_boss(
+            plan: IndependentTaskExecutionPlan::AutoBossPlan(plan_auto_boss(
                 &request.working_directory,
                 config,
             )?),
-        });
+        }));
     }
     if entry.key == AUTO_ARTIFACT_SALVAGE_TASK_KEY {
         let config = AutoArtifactSalvageExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoArtifactSalvagePlan(
+            plan: IndependentTaskExecutionPlan::AutoArtifactSalvagePlan(
                 plan_auto_artifact_salvage(config)?,
             ),
-        });
+        }));
     }
     if entry.key == AUTO_LEY_LINE_OUTCROP_TASK_KEY {
         let config = AutoLeyLineOutcropExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::AutoLeyLineOutcropPlan(
-                plan_auto_ley_line_outcrop(&request.working_directory, config)?,
-            ),
-        });
+            plan: IndependentTaskExecutionPlan::AutoLeyLineOutcropPlan(plan_auto_ley_line_outcrop(
+                &request.working_directory,
+                config,
+            )?),
+        }));
     }
     if entry.key == GET_GRID_ICONS_TASK_KEY {
         let config = GetGridIconsExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::GetGridIconsPlan(plan_get_grid_icons(config)?),
-        });
+            plan: IndependentTaskExecutionPlan::GetGridIconsPlan(plan_get_grid_icons(config)?),
+        }));
     }
     if entry.key == TURN_AROUND_MACRO_TASK_KEY {
         let config = MacroHotkeyExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::TurnAroundMacroPlan(plan_turn_around_macro(
-                config,
-            )),
-        });
+            plan: IndependentTaskExecutionPlan::TurnAroundMacroPlan(plan_turn_around_macro(config)),
+        }));
     }
     if entry.key == QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY {
         let config = MacroHotkeyExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::QuickEnhanceArtifactMacroPlan(
+            plan: IndependentTaskExecutionPlan::QuickEnhanceArtifactMacroPlan(
                 plan_quick_enhance_artifact_macro(config),
             ),
-        });
+        }));
     }
     if entry.key == QUICK_BUY_TASK_KEY {
         let config = QuickBuyExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::QuickBuyPlan(plan_quick_buy(config)?),
-        });
+            plan: IndependentTaskExecutionPlan::QuickBuyPlan(plan_quick_buy(config)?),
+        }));
     }
     if entry.key == QUICK_SERENITEA_POT_TASK_KEY {
         let config = QuickSereniteaPotExecutionConfig::from_value(request.config.as_ref());
-        return Ok(IndependentTaskExecutionResult {
+        return Ok(Some(IndependentTaskExecutionPlanResult {
             task_key: entry.key.to_string(),
-            execution: IndependentTaskExecution::QuickSereniteaPotPlan(plan_quick_serenitea_pot(
+            plan: IndependentTaskExecutionPlan::QuickSereniteaPotPlan(plan_quick_serenitea_pot(
                 config,
             )?),
-        });
+        }));
     }
 
-    let task_key = entry.key.to_string();
-    let plan = TaskInvocationPlan {
-        kind: TaskInvocationKind::RunIndependentTask,
-        task_key: Some(task_key.clone()),
-        catalog_entry: Some(entry),
-        interval_ms: None,
-        clears_existing_triggers: false,
-        config: request.config.clone(),
-        uses_linked_cancellation: false,
-    };
-    Ok(IndependentTaskExecutionResult {
-        task_key,
-        execution: IndependentTaskExecution::NativePending(evaluate_task_invocation_plan(
-            plan,
-            TaskInvocationExecutionMode::ExecuteReady,
-        )),
-    })
+    Ok(None)
+}
+
+fn independent_task_native_pending_result(
+    request: &IndependentTaskExecutionRequest,
+    entry: crate::TaskCatalogEntry,
+) -> TaskInvocationExecutionResult {
+    evaluate_task_invocation_plan(
+        TaskInvocationPlan {
+            kind: TaskInvocationKind::RunIndependentTask,
+            task_key: Some(entry.key.to_string()),
+            catalog_entry: Some(entry),
+            interval_ms: None,
+            clears_existing_triggers: false,
+            config: request.config.clone(),
+            uses_linked_cancellation: false,
+        },
+        TaskInvocationExecutionMode::ExecuteReady,
+    )
 }
 
 pub fn independent_tasks() -> Vec<IndependentTaskDescriptor> {
@@ -631,6 +827,7 @@ pub fn independent_tasks() -> Vec<IndependentTaskDescriptor> {
         (IndependentTaskKind::AutoTrackPath, "AutoTrackPath"),
         (IndependentTaskKind::AutoMusicGame, "AutoMusicGame"),
         (IndependentTaskKind::AutoOpenChest, AUTO_OPEN_CHEST_TASK_KEY),
+        (IndependentTaskKind::AutoEatFood, AUTO_EAT_FOOD_TASK_KEY),
         (
             IndependentTaskKind::AutoStygianOnslaught,
             "AutoStygianOnslaught",

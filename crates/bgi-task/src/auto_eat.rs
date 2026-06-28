@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    plan_count_inventory_item, CountInventoryItemExecutionConfig, CountInventoryItemExecutionPlan,
+    plan_count_inventory_item, CommonJobRuntimeOutcome, CountInventoryGridIconMatch,
+    CountInventoryGridItemFrame, CountInventoryItemExecutionConfig,
+    CountInventoryItemExecutionPlan, CountInventoryOpenInventoryOutcome,
     CountInventoryOpenInventoryRule, GridIconClassifierRule, GridIconCropRule,
     GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate,
     Result, TaskError, TaskPortState, COUNT_INVENTORY_OCR_FAILED, COUNT_INVENTORY_SINGLE_NOT_FOUND,
+    RETURN_MAIN_UI_TASK_KEY,
 };
 
 pub const AUTO_EAT_TASK_KEY: &str = "AutoEat";
@@ -568,6 +571,58 @@ pub enum AutoEatFoodUseLog {
     Warning(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoEatFoodRuntimeActionKind {
+    CommonJob,
+    OpenInventory,
+    ConfirmExpiredItemPrompt,
+    OpenInventoryTab,
+    LoadGridIconClassifier,
+    EnumerateGridItems,
+    CropGridIcon,
+    InferGridIcon,
+    OcrGridItemCount,
+    ClickMatchedFoodItem,
+    DelayAfterItemClick,
+    ClickWhiteConfirmIfPresent,
+    ClearVisionDrawings,
+    ReturnMainUi,
+    Log,
+    Skip,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoEatFoodRuntimeActionReport {
+    pub action_kind: AutoEatFoodRuntimeActionKind,
+    pub outcome: CommonJobRuntimeOutcome,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AutoEatFoodExecutorState {
+    pub initial_return_main_ui_completed: Option<bool>,
+    pub open_inventory_outcome: Option<CountInventoryOpenInventoryOutcome>,
+    pub expired_item_prompt_confirmed: Option<bool>,
+    pub inventory_tab_opened: Option<bool>,
+    pub classifier_loaded: bool,
+    pub grid_items: Vec<CountInventoryGridItemFrame>,
+    pub grid_icons_cropped: bool,
+    pub inferred_icons: Vec<CountInventoryGridIconMatch>,
+    pub target_match: Option<CountInventoryGridIconMatch>,
+    pub ocr_count_text: Option<String>,
+    pub confirm_button_detected: Option<bool>,
+    pub decision: Option<AutoEatFoodUseDecisionReport>,
+    pub final_return_main_ui_completed: Option<bool>,
+    pub vision_drawings_cleared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoEatFoodExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub state: AutoEatFoodExecutorState,
+    pub executed_actions: Vec<AutoEatFoodRuntimeActionReport>,
+}
+
 pub trait AutoEatRuntime {
     fn observe_auto_eat_tick(
         &mut self,
@@ -575,6 +630,75 @@ pub trait AutoEatRuntime {
     ) -> Result<AutoEatTickObservation>;
 
     fn dispatch_auto_eat_action(&mut self, action: &AutoEatTriggeredAction) -> Result<()>;
+}
+
+pub trait AutoEatFoodRuntime {
+    fn execute_auto_eat_food_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn open_auto_eat_food_inventory(
+        &mut self,
+        rule: &CountInventoryOpenInventoryRule,
+    ) -> Result<CountInventoryOpenInventoryOutcome>;
+
+    fn confirm_auto_eat_food_expired_item_prompt(
+        &mut self,
+        confirm_asset: &str,
+        crop_bottom_ratio: f64,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn open_auto_eat_food_inventory_tab(
+        &mut self,
+        rule: &CountInventoryOpenInventoryRule,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn load_auto_eat_food_grid_icon_classifier(
+        &mut self,
+        rule: &GridIconClassifierRule,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn enumerate_auto_eat_food_grid_items(
+        &mut self,
+        template: &GridTemplate,
+        detection_rule: &GridItemDetectionRule,
+        scroll_rule: &GridScrollRule,
+    ) -> Result<Vec<CountInventoryGridItemFrame>>;
+
+    fn crop_auto_eat_food_grid_icons(
+        &mut self,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconCropRule,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn infer_auto_eat_food_grid_icons(
+        &mut self,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconClassifierRule,
+    ) -> Result<Vec<CountInventoryGridIconMatch>>;
+
+    fn ocr_auto_eat_food_item_count(
+        &mut self,
+        matched: &CountInventoryGridIconMatch,
+        rule: &GridItemCountOcrRule,
+    ) -> Result<Option<String>>;
+
+    fn click_auto_eat_food_item(
+        &mut self,
+        matched: &CountInventoryGridIconMatch,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn delay_auto_eat_food_after_item_click(
+        &mut self,
+        duration_ms: u64,
+    ) -> Result<CommonJobRuntimeOutcome>;
+
+    fn click_auto_eat_food_white_confirm_if_present(&mut self, asset: &str) -> Result<bool>;
+
+    fn clear_auto_eat_food_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome>;
+
+    fn log_auto_eat_food(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome>;
 }
 
 pub fn plan_auto_eat(config: AutoEatExecutionConfig) -> AutoEatExecutionPlan {
@@ -624,9 +748,8 @@ pub fn plan_auto_eat(config: AutoEatExecutionConfig) -> AutoEatExecutionPlan {
         steps: auto_eat_steps(),
         executor_ready: true,
         pending_native: vec![
-            "live adapter for BV current-avatar low-HP recognition over capture".to_string(),
-            "live adapter for template matching Recovery and Resurrection icons".to_string(),
-            "live adapter for Genshin action dispatch for QuickUseGadget".to_string(),
+            "full BV current-avatar low-HP parity beyond the desktop pixel probe remains pending"
+                .to_string(),
             "optional notification behavior and solo AutoEatTask food inventory flow".to_string(),
         ],
     }
@@ -674,7 +797,7 @@ pub fn plan_auto_eat_food(config: AutoEatFoodExecutionConfig) -> Result<AutoEatF
         script_task_name: AUTO_EAT_SCRIPT_TASK_NAME.to_string(),
         display_name: "Auto Eat Food".to_string(),
         port_state: TaskPortState::RuntimeScaffolded,
-        executor_ready: false,
+        executor_ready: true,
         capture_size,
         mode,
         food_name,
@@ -684,15 +807,11 @@ pub fn plan_auto_eat_food(config: AutoEatFoodExecutionConfig) -> Result<AutoEatF
         result_contract,
         steps,
         pending_native: vec![
-            "live adapter for ReturnMainUi before and after the inventory flow".to_string(),
-            "live adapter for opening the Food inventory tab and confirming expired-item prompts"
-                .to_string(),
-            "live adapter for OpenCV grid enumeration, ONNX grid-icon inference, Paddle OCR, matched food click, white confirm click, and overlay cleanup"
-                .to_string(),
+            "desktop live adapter for ReturnMainUi, opening Food inventory, expired-item prompts, grid enumeration, ONNX grid-icon inference, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi remains pending".to_string(),
             "portable nutrition bag loop for script-dispatched AutoEat without foodName remains pending"
                 .to_string(),
         ],
-        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, and legacy int? result semantics; live capture/input/ONNX/OCR/click execution remains pending.".to_string(),
+        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, and an injectable Rust executor for the inventory-food branch; live desktop capture/input/ONNX/OCR/click adapters remain pending.".to_string(),
     })
 }
 
@@ -796,6 +915,309 @@ pub fn decide_auto_eat_food_use(
             AutoEatFoodUseAction::ReturnMainUi,
         ],
         logs,
+    }
+}
+
+pub fn execute_auto_eat_food_plan<R>(
+    plan: &AutoEatFoodExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoEatFoodExecutionReport>
+where
+    R: AutoEatFoodRuntime,
+{
+    let mut state = AutoEatFoodExecutorState::default();
+    let mut executed_actions = Vec::new();
+
+    match &plan.mode {
+        AutoEatFoodPlanMode::MissingDefaultFood { .. }
+        | AutoEatFoodPlanMode::PortableNutritionBagLoop => {
+            let decision = decide_auto_eat_food_use(
+                plan,
+                AutoEatFoodUseObservation {
+                    matched_food_name: None,
+                    count_ocr_text: None,
+                    confirm_button_detected: false,
+                },
+            );
+            execute_auto_eat_food_decision_actions(
+                &decision,
+                plan,
+                runtime,
+                &mut state,
+                &mut executed_actions,
+            )?;
+            state.decision = Some(decision);
+            return Ok(auto_eat_food_execution_report(
+                plan,
+                state,
+                executed_actions,
+            ));
+        }
+        AutoEatFoodPlanMode::InventoryFood { .. } => {}
+    }
+
+    let inventory_plan =
+        plan.inventory_plan
+            .as_ref()
+            .ok_or_else(|| TaskError::InvalidTaskConfig {
+                key: plan.task_key.clone(),
+                message: "AutoEatFood inventory mode requires an inventory plan".to_string(),
+            })?;
+
+    execute_auto_eat_food_inventory_scan(
+        inventory_plan,
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+    )?;
+    let matched_food_name = state
+        .target_match
+        .as_ref()
+        .map(|matched| matched.item_name.clone());
+    let decision = decide_auto_eat_food_use(
+        plan,
+        AutoEatFoodUseObservation {
+            matched_food_name,
+            count_ocr_text: state.ocr_count_text.clone(),
+            confirm_button_detected: state.confirm_button_detected.unwrap_or(false),
+        },
+    );
+    execute_auto_eat_food_decision_actions(
+        &decision,
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+    )?;
+    state.decision = Some(decision);
+
+    Ok(auto_eat_food_execution_report(
+        plan,
+        state,
+        executed_actions,
+    ))
+}
+
+fn execute_auto_eat_food_inventory_scan<R>(
+    inventory_plan: &CountInventoryItemExecutionPlan,
+    plan: &AutoEatFoodExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoEatFoodExecutorState,
+    executed_actions: &mut Vec<AutoEatFoodRuntimeActionReport>,
+) -> Result<()>
+where
+    R: AutoEatFoodRuntime,
+{
+    let outcome = runtime.execute_auto_eat_food_common_job(RETURN_MAIN_UI_TASK_KEY)?;
+    state.initial_return_main_ui_completed = Some(auto_eat_food_outcome_succeeded(outcome));
+    executed_actions.push(auto_eat_food_action_report(
+        AutoEatFoodRuntimeActionKind::CommonJob,
+        outcome,
+    ));
+
+    let open_outcome = runtime.open_auto_eat_food_inventory(&inventory_plan.open_inventory_rule)?;
+    state.open_inventory_outcome = Some(open_outcome);
+    executed_actions.push(auto_eat_food_action_report(
+        AutoEatFoodRuntimeActionKind::OpenInventory,
+        CommonJobRuntimeOutcome::Matched(!open_outcome.still_on_main_ui),
+    ));
+
+    if open_outcome.expired_item_prompt_detected {
+        let outcome = runtime.confirm_auto_eat_food_expired_item_prompt(
+            &inventory_plan
+                .open_inventory_rule
+                .expired_item_prompt_confirm_asset,
+            inventory_plan
+                .open_inventory_rule
+                .expired_item_prompt_crop_bottom_ratio,
+        )?;
+        state.expired_item_prompt_confirmed = Some(auto_eat_food_outcome_succeeded(outcome));
+        executed_actions.push(auto_eat_food_action_report(
+            AutoEatFoodRuntimeActionKind::ConfirmExpiredItemPrompt,
+            outcome,
+        ));
+    }
+
+    if !open_outcome.inventory_tab_checked {
+        let outcome =
+            runtime.open_auto_eat_food_inventory_tab(&inventory_plan.open_inventory_rule)?;
+        state.inventory_tab_opened = Some(auto_eat_food_outcome_succeeded(outcome));
+        executed_actions.push(auto_eat_food_action_report(
+            AutoEatFoodRuntimeActionKind::OpenInventoryTab,
+            outcome,
+        ));
+    }
+
+    let outcome =
+        runtime.load_auto_eat_food_grid_icon_classifier(&inventory_plan.classifier_rule)?;
+    state.classifier_loaded = auto_eat_food_outcome_succeeded(outcome);
+    executed_actions.push(auto_eat_food_action_report(
+        AutoEatFoodRuntimeActionKind::LoadGridIconClassifier,
+        outcome,
+    ));
+
+    state.grid_items = runtime.enumerate_auto_eat_food_grid_items(
+        &inventory_plan.grid_template,
+        &inventory_plan.grid_item_detection_rule,
+        &inventory_plan.scroll_rule,
+    )?;
+    executed_actions.push(auto_eat_food_action_report(
+        AutoEatFoodRuntimeActionKind::EnumerateGridItems,
+        CommonJobRuntimeOutcome::Matched(!state.grid_items.is_empty()),
+    ));
+
+    let outcome = runtime
+        .crop_auto_eat_food_grid_icons(&state.grid_items, &inventory_plan.grid_icon_crop_rule)?;
+    state.grid_icons_cropped = auto_eat_food_outcome_succeeded(outcome);
+    executed_actions.push(auto_eat_food_action_report(
+        AutoEatFoodRuntimeActionKind::CropGridIcon,
+        outcome,
+    ));
+
+    state.inferred_icons = runtime
+        .infer_auto_eat_food_grid_icons(&state.grid_items, &inventory_plan.classifier_rule)?;
+    state.target_match = state
+        .inferred_icons
+        .iter()
+        .find(|matched| plan.food_name.as_deref() == Some(matched.item_name.as_str()))
+        .cloned();
+    executed_actions.push(auto_eat_food_action_report(
+        AutoEatFoodRuntimeActionKind::InferGridIcon,
+        CommonJobRuntimeOutcome::Matched(state.target_match.is_some()),
+    ));
+
+    if let Some(matched) = state.target_match.as_ref() {
+        state.ocr_count_text =
+            runtime.ocr_auto_eat_food_item_count(matched, &inventory_plan.count_ocr_rule)?;
+        executed_actions.push(auto_eat_food_action_report(
+            AutoEatFoodRuntimeActionKind::OcrGridItemCount,
+            CommonJobRuntimeOutcome::Matched(state.ocr_count_text.is_some()),
+        ));
+    }
+
+    Ok(())
+}
+
+fn execute_auto_eat_food_decision_actions<R>(
+    decision: &AutoEatFoodUseDecisionReport,
+    plan: &AutoEatFoodExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoEatFoodExecutorState,
+    executed_actions: &mut Vec<AutoEatFoodRuntimeActionReport>,
+) -> Result<()>
+where
+    R: AutoEatFoodRuntime,
+{
+    for log in &decision.logs {
+        let message = match log {
+            AutoEatFoodUseLog::Info(message) | AutoEatFoodUseLog::Warning(message) => message,
+        };
+        let outcome = runtime.log_auto_eat_food(message)?;
+        executed_actions.push(auto_eat_food_action_report(
+            AutoEatFoodRuntimeActionKind::Log,
+            outcome,
+        ));
+    }
+
+    for action in &decision.actions {
+        match action {
+            AutoEatFoodUseAction::ClickMatchedFoodItem { .. } => {
+                let Some(matched) = state.target_match.as_ref() else {
+                    return Err(TaskError::CommonJobExecution(
+                        "AutoEatFood has no matched food item to click".to_string(),
+                    ));
+                };
+                let outcome = runtime.click_auto_eat_food_item(matched)?;
+                executed_actions.push(auto_eat_food_action_report(
+                    AutoEatFoodRuntimeActionKind::ClickMatchedFoodItem,
+                    outcome,
+                ));
+            }
+            AutoEatFoodUseAction::DelayAfterItemClick { delay_ms } => {
+                let outcome = runtime.delay_auto_eat_food_after_item_click(*delay_ms)?;
+                executed_actions.push(auto_eat_food_action_report(
+                    AutoEatFoodRuntimeActionKind::DelayAfterItemClick,
+                    outcome,
+                ));
+            }
+            AutoEatFoodUseAction::ClickWhiteConfirmIfPresent { asset, .. } => {
+                let detected = runtime.click_auto_eat_food_white_confirm_if_present(asset)?;
+                state.confirm_button_detected = Some(detected);
+                executed_actions.push(auto_eat_food_action_report(
+                    AutoEatFoodRuntimeActionKind::ClickWhiteConfirmIfPresent,
+                    CommonJobRuntimeOutcome::Matched(detected),
+                ));
+            }
+            AutoEatFoodUseAction::ClearVisionDrawings => {
+                let outcome = runtime.clear_auto_eat_food_vision_drawings()?;
+                state.vision_drawings_cleared = auto_eat_food_outcome_succeeded(outcome);
+                executed_actions.push(auto_eat_food_action_report(
+                    AutoEatFoodRuntimeActionKind::ClearVisionDrawings,
+                    outcome,
+                ));
+            }
+            AutoEatFoodUseAction::ReturnMainUi => {
+                let outcome = runtime.execute_auto_eat_food_common_job(RETURN_MAIN_UI_TASK_KEY)?;
+                state.final_return_main_ui_completed =
+                    Some(auto_eat_food_outcome_succeeded(outcome));
+                executed_actions.push(auto_eat_food_action_report(
+                    AutoEatFoodRuntimeActionKind::ReturnMainUi,
+                    outcome,
+                ));
+            }
+            AutoEatFoodUseAction::Skip { reason } => {
+                let outcome = runtime.log_auto_eat_food(reason)?;
+                executed_actions.push(auto_eat_food_action_report(
+                    AutoEatFoodRuntimeActionKind::Skip,
+                    outcome,
+                ));
+            }
+        }
+    }
+
+    if plan.use_rule.clear_drawings_in_finally && !state.vision_drawings_cleared {
+        let outcome = runtime.clear_auto_eat_food_vision_drawings()?;
+        state.vision_drawings_cleared = auto_eat_food_outcome_succeeded(outcome);
+        executed_actions.push(auto_eat_food_action_report(
+            AutoEatFoodRuntimeActionKind::ClearVisionDrawings,
+            outcome,
+        ));
+    }
+
+    Ok(())
+}
+
+fn auto_eat_food_execution_report(
+    plan: &AutoEatFoodExecutionPlan,
+    state: AutoEatFoodExecutorState,
+    executed_actions: Vec<AutoEatFoodRuntimeActionReport>,
+) -> AutoEatFoodExecutionReport {
+    AutoEatFoodExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: state
+            .decision
+            .as_ref()
+            .is_some_and(|decision| decision.return_value.is_some()),
+        state,
+        executed_actions,
+    }
+}
+
+fn auto_eat_food_action_report(
+    action_kind: AutoEatFoodRuntimeActionKind,
+    outcome: CommonJobRuntimeOutcome,
+) -> AutoEatFoodRuntimeActionReport {
+    AutoEatFoodRuntimeActionReport {
+        action_kind,
+        outcome,
+    }
+}
+
+fn auto_eat_food_outcome_succeeded(outcome: CommonJobRuntimeOutcome) -> bool {
+    match outcome {
+        CommonJobRuntimeOutcome::Matched(value) => value,
+        CommonJobRuntimeOutcome::None => true,
     }
 }
 

@@ -1,3 +1,5 @@
+#![allow(clippy::cloned_ref_to_slice_refs, clippy::field_reassign_with_default)]
+
 use super::*;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
 use serde_json::json;

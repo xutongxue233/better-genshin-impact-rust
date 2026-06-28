@@ -60,7 +60,7 @@ fn collect_index_nodes(
         let node_type = object
             .get("type")
             .and_then(|value| value.as_str())
-            .unwrap_or_else(|| {
+            .unwrap_or({
                 if children.is_empty() {
                     "file"
                 } else {

@@ -172,14 +172,14 @@ pub(super) fn infer_avatar_index_rects_from_known_and_arrow(
     current_avatar: Rect,
 ) -> Result<Vec<Option<Rect>>> {
     let mut inferred = rects_by_index.to_vec();
-    for index in 0..inferred.len() {
-        if inferred[index].is_some() {
+    for (index, inferred_rect) in inferred.iter_mut().enumerate() {
+        if inferred_rect.is_some() {
             continue;
         }
         let rect =
             index_rect_from_known_index_rect(image_size, known_index, known_rect, index + 1)?;
         if rects_intersect_vertically(current_avatar, rect) {
-            inferred[index] = Some(rect);
+            *inferred_rect = Some(rect);
         }
     }
     Ok(inferred)

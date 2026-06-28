@@ -1,3 +1,8 @@
+use crate::map_recognition::{teyvat_big_map_sift_recognition_rule, BigMapSiftRecognitionRule};
+pub use crate::map_recognition::{
+    TEYVAT_256_SIFT_KEYPOINTS as MAP_MASK_TEYVAT_256_SIFT_KEYPOINTS,
+    TEYVAT_256_SIFT_MAT as MAP_MASK_TEYVAT_256_SIFT_MAT,
+};
 use bgi_core::MapMaskConfig;
 use bgi_vision::{Point, Rect, Size, TemplateMatchMode};
 use serde::{Deserialize, Serialize};
@@ -9,8 +14,6 @@ pub const MAP_MASK_DEFAULT_CAPTURE_HEIGHT: u32 = 1080;
 pub const MAP_MASK_BIG_MAP_SCALE_BUTTON: &str = "QuickTeleport:MapScaleButton.png";
 pub const MAP_MASK_BIG_MAP_SETTINGS_BUTTON: &str = "QuickTeleport:MapSettingsButton.png";
 pub const MAP_MASK_PAIMON_MENU: &str = "Common/Element:paimon_menu.png";
-pub const MAP_MASK_TEYVAT_256_SIFT_KEYPOINTS: &str = "Assets/Map/Teyvat/Teyvat_0_256_SIFT.kp.bin";
-pub const MAP_MASK_TEYVAT_256_SIFT_MAT: &str = "Assets/Map/Teyvat/Teyvat_0_256_SIFT.mat.png";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MapMaskExecutionPlan {
@@ -131,6 +134,7 @@ pub struct MapMaskBigMapRule {
     pub feature_keypoints_asset: String,
     pub feature_mat_asset: String,
     pub layer_256_to_2048_scale: u64,
+    pub sift_recognition_rule: BigMapSiftRecognitionRule,
     pub reject_when_width_lt_and_height_lt: MapMaskSizeRejectRule,
     pub reject_when_width_gt_and_height_gt: MapMaskSizeRejectRule,
     pub update_points_canvas_when_rect_found: bool,
@@ -198,21 +202,11 @@ pub struct MapMaskOverlayRule {
     pub path_auto_record_status: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct MapMaskRuntimeState {
     pub stable_count: u64,
     pub previous_big_map_rect_256: Option<Rect>,
     pub is_in_big_map_ui: bool,
-}
-
-impl Default for MapMaskRuntimeState {
-    fn default() -> Self {
-        Self {
-            stable_count: 0,
-            previous_big_map_rect_256: None,
-            is_in_big_map_ui: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -401,6 +395,7 @@ pub fn plan_map_mask(config: MapMaskExecutionConfig) -> MapMaskExecutionPlan {
         "pt-pt".to_string(),
         "es-es".to_string(),
     ];
+    let sift_recognition_rule = teyvat_big_map_sift_recognition_rule();
     let config_rule = MapMaskConfigRule {
         enabled: map_mask_config.enabled,
         mini_map_mask_enabled: map_mask_config.mini_map_mask_enabled,
@@ -465,9 +460,10 @@ pub fn plan_map_mask(config: MapMaskExecutionConfig) -> MapMaskExecutionPlan {
             reset_after_stable_count: 20,
         },
         big_map_rule: MapMaskBigMapRule {
-            feature_keypoints_asset: MAP_MASK_TEYVAT_256_SIFT_KEYPOINTS.to_string(),
-            feature_mat_asset: MAP_MASK_TEYVAT_256_SIFT_MAT.to_string(),
-            layer_256_to_2048_scale: 8,
+            feature_keypoints_asset: sift_recognition_rule.feature_keypoints_asset.clone(),
+            feature_mat_asset: sift_recognition_rule.feature_mat_asset.clone(),
+            layer_256_to_2048_scale: sift_recognition_rule.feature_layer.image_to_2048_scale,
+            sift_recognition_rule,
             reject_when_width_lt_and_height_lt: MapMaskSizeRejectRule {
                 width: 50,
                 height: 40,

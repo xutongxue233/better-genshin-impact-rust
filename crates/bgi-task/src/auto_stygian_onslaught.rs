@@ -108,7 +108,7 @@ impl AutoStygianOnslaughtExecutionConfig {
             serde_json::from_value(stygian_value.clone()).unwrap_or_default();
         apply_auto_stygian_config(&mut config.param, &config.auto_stygian_onslaught_config);
         overlay_param(&mut config.param, stygian_value);
-        if stygian_value as *const Value != value as *const Value {
+        if !std::ptr::eq(stygian_value, value) {
             overlay_param(&mut config.param, value);
         }
 
@@ -467,7 +467,7 @@ pub struct AutoStygianOnslaughtStep {
     pub action: AutoStygianOnslaughtStepAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoStygianOnslaughtStepPhase {
     Startup,
     Navigate,
@@ -478,7 +478,7 @@ pub enum AutoStygianOnslaughtStepPhase {
     Cleanup,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoStygianOnslaughtStepAction {
     DestroyAutoFightAssetsAndParseCombatScriptBag,
     NotifyDomainStart,
@@ -510,6 +510,514 @@ pub enum AutoStygianOnslaughtStepAction {
     NotifyDomainEnd,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoStygianOnslaughtExecutionStatus {
+    Completed,
+    StartupFailed,
+    StateDetectionFailed,
+    NavigationFailed,
+    EntryFailed,
+    ChallengeSetupFailed,
+    CombatFailed,
+    BattleLost,
+    RewardSkipped,
+    RewardFailed,
+    ContinueFailed,
+    ExitFailed,
+    Cancelled,
+    LoopLimitReached,
+    RuntimeError,
+    CleanupFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoStygianOnslaughtRuntimeActionStatus {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoStygianOnslaughtRuntimeActionKind {
+    Startup,
+    NotifyStart,
+    DetectState,
+    NavigateEvent,
+    TeleportToDomain,
+    EnterDomain,
+    SelectDifficulty,
+    WalkToKey,
+    SelectBoss,
+    SwitchTeam,
+    StartChallenge,
+    InitializeCombat,
+    SelectCombatScript,
+    MoveForwardBeforeFight,
+    RunCombat,
+    HandleBattleResult,
+    MoveToLeylineFlower,
+    SelectResin,
+    ClaimReward,
+    ContinueOrExit,
+    ExitDomain,
+    ArtifactSalvage,
+    NotifyEnd,
+    Cleanup,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoStygianOnslaughtBattleResult {
+    Win,
+    Lose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoStygianOnslaughtRewardDecision {
+    Claim,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoStygianOnslaughtSkipReason {
+    Cancelled,
+    NoResin,
+    SpecifiedResinUnavailable,
+    RewardPromptMissing,
+    BattleLost,
+    ClaimDeclined,
+    RuntimeRequestedStop,
+    LoopLimitReached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtRuntimeContext {
+    pub battle_index: u32,
+    pub selected_boss_num: i32,
+    pub fight_team_name: String,
+    pub claimed_rewards: u32,
+    pub selected_resin: Option<String>,
+    pub specified_resin_remaining: i32,
+    pub is_first_battle: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtStartupOutcome {
+    pub completed: bool,
+    pub assets_initialized: bool,
+    pub combat_strategy_parsed: bool,
+    pub specified_resin_records_built: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtNotificationOutcome {
+    pub sent: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtStateDetectionOutcome {
+    pub detected: bool,
+    pub state: StygianState,
+    pub expected_state: Option<StygianState>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtNavigationOutcome {
+    pub completed: bool,
+    pub returned_main_ui: bool,
+    pub event_found: bool,
+    pub challenge_clicked: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtTeleportOutcome {
+    pub completed: bool,
+    pub teleport_clicked: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtEntryOutcome {
+    pub completed: bool,
+    pub entrance_interacted: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtBasicOutcome {
+    pub completed: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtDifficultyOutcome {
+    pub completed: bool,
+    pub hard_mode_selected: bool,
+    pub single_player_confirmed: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtBossSelectionOutcome {
+    pub completed: bool,
+    pub selected_boss_num: i32,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtTeamSelectionOutcome {
+    pub attempted: bool,
+    pub completed: bool,
+    pub team_name: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtCombatOutcome {
+    pub completed: bool,
+    pub result: AutoStygianOnslaughtBattleResult,
+    pub duration_ms: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtBattleResultOutcome {
+    pub completed: bool,
+    pub result: AutoStygianOnslaughtBattleResult,
+    pub retry_requested: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtRewardNavigationOutcome {
+    pub completed: bool,
+    pub prompt_found: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtResinSelection {
+    pub decision: AutoStygianOnslaughtRewardDecision,
+    pub resin_name: Option<String>,
+    pub available_count: Option<i32>,
+    pub skip_reason: Option<AutoStygianOnslaughtSkipReason>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtRewardOutcome {
+    pub claimed: bool,
+    pub resin_name: Option<String>,
+    pub stop_after_claim: bool,
+    pub skip_reason: Option<AutoStygianOnslaughtSkipReason>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtContinuationOutcome {
+    pub completed: bool,
+    pub continue_next_battle: bool,
+    pub exited_domain: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtExitOutcome {
+    pub completed: bool,
+    pub main_world_reached: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtArtifactSalvageOutcome {
+    pub attempted: bool,
+    pub completed: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtCleanupOutcome {
+    pub completed: bool,
+    pub inputs_released: bool,
+    pub overlays_cleared: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoStygianOnslaughtRuntimeActionOutcome {
+    Startup(AutoStygianOnslaughtStartupOutcome),
+    Notification(AutoStygianOnslaughtNotificationOutcome),
+    StateDetection(AutoStygianOnslaughtStateDetectionOutcome),
+    Navigation(AutoStygianOnslaughtNavigationOutcome),
+    Teleport(AutoStygianOnslaughtTeleportOutcome),
+    Entry(AutoStygianOnslaughtEntryOutcome),
+    Basic(AutoStygianOnslaughtBasicOutcome),
+    Difficulty(AutoStygianOnslaughtDifficultyOutcome),
+    BossSelection(AutoStygianOnslaughtBossSelectionOutcome),
+    TeamSelection(AutoStygianOnslaughtTeamSelectionOutcome),
+    Combat(AutoStygianOnslaughtCombatOutcome),
+    BattleResult(AutoStygianOnslaughtBattleResultOutcome),
+    RewardNavigation(AutoStygianOnslaughtRewardNavigationOutcome),
+    ResinSelection(AutoStygianOnslaughtResinSelection),
+    Reward(AutoStygianOnslaughtRewardOutcome),
+    Continuation(AutoStygianOnslaughtContinuationOutcome),
+    Exit(AutoStygianOnslaughtExitOutcome),
+    ArtifactSalvage(AutoStygianOnslaughtArtifactSalvageOutcome),
+    Cleanup(AutoStygianOnslaughtCleanupOutcome),
+    Skipped(AutoStygianOnslaughtSkipReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtRuntimeActionReport {
+    pub phase: AutoStygianOnslaughtStepPhase,
+    pub action_kind: AutoStygianOnslaughtRuntimeActionKind,
+    pub status: AutoStygianOnslaughtRuntimeActionStatus,
+    pub battle_index: Option<u32>,
+    pub detail: String,
+    pub outcome: AutoStygianOnslaughtRuntimeActionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtSkippedStep {
+    pub action_kind: AutoStygianOnslaughtRuntimeActionKind,
+    pub battle_index: Option<u32>,
+    pub reason: AutoStygianOnslaughtSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtExecutorState {
+    pub startup_completed: bool,
+    pub current_state: StygianState,
+    pub navigation_completed: bool,
+    pub domain_entered: bool,
+    pub difficulty_selected: bool,
+    pub selected_boss_num: i32,
+    pub team_switched: bool,
+    pub challenge_started: bool,
+    pub battle_index: u32,
+    pub fights_attempted: u32,
+    pub fights_won: u32,
+    pub fights_lost: u32,
+    pub rewards_claimed: u32,
+    pub rewards_skipped: u32,
+    pub resin_records: Vec<AutoDomainResinUseRecord>,
+    pub selected_resin: Option<String>,
+    pub exited_domain: bool,
+    pub artifact_salvage_completed: bool,
+    pub cancelled: bool,
+    pub cleanup_completed: bool,
+    pub last_skip_reason: Option<AutoStygianOnslaughtSkipReason>,
+}
+
+impl AutoStygianOnslaughtExecutorState {
+    fn new(plan: &AutoStygianOnslaughtExecutionPlan) -> Self {
+        Self {
+            startup_completed: false,
+            current_state: plan.state_machine_rule.initial_state,
+            navigation_completed: false,
+            domain_entered: false,
+            difficulty_selected: false,
+            selected_boss_num: plan.boss_rule.selected_boss_num,
+            team_switched: false,
+            challenge_started: false,
+            battle_index: 0,
+            fights_attempted: 0,
+            fights_won: 0,
+            fights_lost: 0,
+            rewards_claimed: 0,
+            rewards_skipped: 0,
+            resin_records: plan.resin_rule.specified_records.clone(),
+            selected_resin: None,
+            exited_domain: false,
+            artifact_salvage_completed: false,
+            cancelled: false,
+            cleanup_completed: false,
+            last_skip_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStygianOnslaughtExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub status: AutoStygianOnslaughtExecutionStatus,
+    pub state: AutoStygianOnslaughtExecutorState,
+    pub executed_actions: Vec<AutoStygianOnslaughtRuntimeActionReport>,
+    pub skipped_steps: Vec<AutoStygianOnslaughtSkippedStep>,
+}
+
+pub trait AutoStygianOnslaughtRuntime {
+    fn start_auto_stygian_onslaught(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtStartupOutcome>;
+
+    fn notify_auto_stygian_onslaught_start(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtNotificationOutcome>;
+
+    fn detect_auto_stygian_onslaught_state(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        expected_state: Option<StygianState>,
+    ) -> Result<AutoStygianOnslaughtStateDetectionOutcome>;
+
+    fn navigate_auto_stygian_onslaught_event(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtNavigationOutcome>;
+
+    fn teleport_auto_stygian_onslaught_to_domain(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtTeleportOutcome>;
+
+    fn enter_auto_stygian_onslaught_domain(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtEntryOutcome>;
+
+    fn select_auto_stygian_onslaught_difficulty(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtDifficultyOutcome>;
+
+    fn walk_auto_stygian_onslaught_to_key(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtBasicOutcome>;
+
+    fn select_auto_stygian_onslaught_boss(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtBossSelectionOutcome>;
+
+    fn switch_auto_stygian_onslaught_team(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtTeamSelectionOutcome>;
+
+    fn start_auto_stygian_onslaught_challenge(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtBasicOutcome>;
+
+    fn initialize_auto_stygian_onslaught_combat(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+    ) -> Result<AutoStygianOnslaughtBasicOutcome>;
+
+    fn select_auto_stygian_onslaught_combat_script(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+    ) -> Result<AutoStygianOnslaughtBasicOutcome>;
+
+    fn move_auto_stygian_onslaught_forward_before_fight(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+    ) -> Result<AutoStygianOnslaughtBasicOutcome>;
+
+    fn run_auto_stygian_onslaught_combat(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+    ) -> Result<AutoStygianOnslaughtCombatOutcome>;
+
+    fn handle_auto_stygian_onslaught_battle_result(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+        combat: &AutoStygianOnslaughtCombatOutcome,
+    ) -> Result<AutoStygianOnslaughtBattleResultOutcome>;
+
+    fn move_auto_stygian_onslaught_to_leyline_flower(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+    ) -> Result<AutoStygianOnslaughtRewardNavigationOutcome>;
+
+    fn select_auto_stygian_onslaught_resin(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+        records: &[AutoDomainResinUseRecord],
+    ) -> Result<AutoStygianOnslaughtResinSelection>;
+
+    fn claim_auto_stygian_onslaught_reward(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+        selection: &AutoStygianOnslaughtResinSelection,
+    ) -> Result<AutoStygianOnslaughtRewardOutcome>;
+
+    fn continue_or_exit_auto_stygian_onslaught(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        context: &AutoStygianOnslaughtRuntimeContext,
+        should_continue: bool,
+    ) -> Result<AutoStygianOnslaughtContinuationOutcome>;
+
+    fn exit_auto_stygian_onslaught_domain(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtExitOutcome>;
+
+    fn run_auto_stygian_onslaught_artifact_salvage(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+    ) -> Result<AutoStygianOnslaughtArtifactSalvageOutcome>;
+
+    fn notify_auto_stygian_onslaught_end(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        status: AutoStygianOnslaughtExecutionStatus,
+    ) -> Result<AutoStygianOnslaughtNotificationOutcome>;
+
+    fn cleanup_auto_stygian_onslaught(
+        &mut self,
+        plan: &AutoStygianOnslaughtExecutionPlan,
+        status: AutoStygianOnslaughtExecutionStatus,
+    ) -> Result<AutoStygianOnslaughtCleanupOutcome>;
+
+    fn is_auto_stygian_onslaught_cancelled(&mut self) -> bool {
+        false
+    }
+}
+
 pub fn plan_auto_stygian_onslaught(
     config: AutoStygianOnslaughtExecutionConfig,
 ) -> Result<AutoStygianOnslaughtExecutionPlan> {
@@ -522,7 +1030,7 @@ pub fn plan_auto_stygian_onslaught(
         task_key: AUTO_STYGIAN_ONSLAUGHT_TASK_KEY.to_string(),
         display_name: AUTO_STYGIAN_ONSLAUGHT_DISPLAY_NAME.to_string(),
         port_state: TaskPortState::RuntimeScaffolded,
-        executor_ready: false,
+        executor_ready: true,
         capture_size: config.capture_size,
         asset_scale: config.asset_scale,
         param_rule: AutoStygianOnslaughtParamRule {
@@ -593,6 +1101,851 @@ pub fn build_stygian_resin_records(
         });
     }
     Ok(records)
+}
+
+pub fn execute_auto_stygian_onslaught_plan<R>(
+    plan: &AutoStygianOnslaughtExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoStygianOnslaughtExecutionReport>
+where
+    R: AutoStygianOnslaughtRuntime,
+{
+    let mut state = AutoStygianOnslaughtExecutorState::new(plan);
+    let mut executed_actions = Vec::new();
+    let mut skipped_steps = Vec::new();
+
+    let execution_result = execute_auto_stygian_onslaught_plan_inner(
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+        &mut skipped_steps,
+    );
+    let status = match execution_result {
+        Ok(status) => status,
+        Err(error) => {
+            let cleanup_error = execute_auto_stygian_onslaught_cleanup(
+                plan,
+                runtime,
+                AutoStygianOnslaughtExecutionStatus::RuntimeError,
+                &mut state,
+                &mut executed_actions,
+            )
+            .err();
+            return Err(cleanup_error.unwrap_or(error));
+        }
+    };
+
+    let cleanup_status = execute_auto_stygian_onslaught_cleanup(
+        plan,
+        runtime,
+        status,
+        &mut state,
+        &mut executed_actions,
+    )?;
+    let status = if cleanup_status == AutoStygianOnslaughtExecutionStatus::CleanupFailed {
+        AutoStygianOnslaughtExecutionStatus::CleanupFailed
+    } else {
+        status
+    };
+
+    Ok(auto_stygian_report(
+        plan,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    ))
+}
+
+fn execute_auto_stygian_onslaught_plan_inner<R>(
+    plan: &AutoStygianOnslaughtExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoStygianOnslaughtExecutorState,
+    executed_actions: &mut Vec<AutoStygianOnslaughtRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoStygianOnslaughtSkippedStep>,
+) -> Result<AutoStygianOnslaughtExecutionStatus>
+where
+    R: AutoStygianOnslaughtRuntime,
+{
+    let startup = runtime.start_auto_stygian_onslaught(plan)?;
+    state.startup_completed = startup.completed;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Startup,
+        AutoStygianOnslaughtRuntimeActionKind::Startup,
+        if startup.completed {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        startup
+            .message
+            .clone()
+            .unwrap_or_else(|| "auto stygian onslaught startup boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Startup(startup.clone()),
+    ));
+    if !startup.completed {
+        return Ok(AutoStygianOnslaughtExecutionStatus::StartupFailed);
+    }
+
+    let start_notification = runtime.notify_auto_stygian_onslaught_start(plan)?;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Startup,
+        AutoStygianOnslaughtRuntimeActionKind::NotifyStart,
+        if start_notification.sent {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Skipped
+        },
+        None,
+        start_notification
+            .message
+            .clone()
+            .unwrap_or_else(|| "start notification boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Notification(start_notification),
+    ));
+
+    if runtime.is_auto_stygian_onslaught_cancelled() {
+        state.cancelled = true;
+        return Ok(auto_stygian_skip(
+            state,
+            executed_actions,
+            skipped_steps,
+            AutoStygianOnslaughtStepPhase::Startup,
+            AutoStygianOnslaughtRuntimeActionKind::Skip,
+            None,
+            AutoStygianOnslaughtSkipReason::Cancelled,
+            AutoStygianOnslaughtExecutionStatus::Cancelled,
+        ));
+    }
+
+    let detected = runtime.detect_auto_stygian_onslaught_state(plan, None)?;
+    let detected_state = detected.state;
+    state.current_state = detected_state;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Navigate,
+        AutoStygianOnslaughtRuntimeActionKind::DetectState,
+        if detected.detected {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        detected
+            .message
+            .clone()
+            .unwrap_or_else(|| "state detection boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::StateDetection(detected),
+    ));
+    if !executed_actions
+        .last()
+        .is_some_and(|report| report.status == AutoStygianOnslaughtRuntimeActionStatus::Succeeded)
+    {
+        return Ok(AutoStygianOnslaughtExecutionStatus::StateDetectionFailed);
+    }
+
+    let navigation = runtime.navigate_auto_stygian_onslaught_event(plan)?;
+    state.navigation_completed = navigation.completed && navigation.event_found;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Navigate,
+        AutoStygianOnslaughtRuntimeActionKind::NavigateEvent,
+        if state.navigation_completed {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        navigation
+            .message
+            .clone()
+            .unwrap_or_else(|| "event navigation boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Navigation(navigation),
+    ));
+    if !state.navigation_completed {
+        return Ok(AutoStygianOnslaughtExecutionStatus::NavigationFailed);
+    }
+
+    let teleport = runtime.teleport_auto_stygian_onslaught_to_domain(plan)?;
+    let teleport_completed = teleport.completed && teleport.teleport_clicked;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Navigate,
+        AutoStygianOnslaughtRuntimeActionKind::TeleportToDomain,
+        if teleport_completed {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        teleport
+            .message
+            .clone()
+            .unwrap_or_else(|| "teleport boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Teleport(teleport),
+    ));
+    if !teleport_completed {
+        return Ok(AutoStygianOnslaughtExecutionStatus::NavigationFailed);
+    }
+
+    let entry = runtime.enter_auto_stygian_onslaught_domain(plan)?;
+    state.domain_entered = entry.completed && entry.entrance_interacted;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Navigate,
+        AutoStygianOnslaughtRuntimeActionKind::EnterDomain,
+        if state.domain_entered {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        entry
+            .message
+            .clone()
+            .unwrap_or_else(|| "domain entry boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Entry(entry),
+    ));
+    if !state.domain_entered {
+        return Ok(AutoStygianOnslaughtExecutionStatus::EntryFailed);
+    }
+
+    let difficulty = runtime.select_auto_stygian_onslaught_difficulty(plan)?;
+    state.difficulty_selected =
+        difficulty.completed && difficulty.hard_mode_selected && difficulty.single_player_confirmed;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::SelectChallenge,
+        AutoStygianOnslaughtRuntimeActionKind::SelectDifficulty,
+        if state.difficulty_selected {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        difficulty
+            .message
+            .clone()
+            .unwrap_or_else(|| "difficulty selection boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Difficulty(difficulty),
+    ));
+    if !state.difficulty_selected {
+        return Ok(AutoStygianOnslaughtExecutionStatus::ChallengeSetupFailed);
+    }
+
+    let walk = runtime.walk_auto_stygian_onslaught_to_key(plan)?;
+    let walk_completed = walk.completed;
+    executed_actions.push(auto_stygian_basic_report(
+        AutoStygianOnslaughtStepPhase::SelectChallenge,
+        AutoStygianOnslaughtRuntimeActionKind::WalkToKey,
+        None,
+        "walk to challenge key boundary completed",
+        walk,
+    ));
+    if !walk_completed {
+        return Ok(AutoStygianOnslaughtExecutionStatus::ChallengeSetupFailed);
+    }
+
+    let boss = runtime.select_auto_stygian_onslaught_boss(plan)?;
+    state.selected_boss_num = boss.selected_boss_num;
+    let boss_completed =
+        boss.completed && boss.selected_boss_num == plan.boss_rule.selected_boss_num;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::SelectChallenge,
+        AutoStygianOnslaughtRuntimeActionKind::SelectBoss,
+        if boss_completed {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        boss.message
+            .clone()
+            .unwrap_or_else(|| "boss selection boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::BossSelection(boss),
+    ));
+    if !boss_completed {
+        return Ok(AutoStygianOnslaughtExecutionStatus::ChallengeSetupFailed);
+    }
+
+    if plan.team_rule.enabled {
+        let team = runtime.switch_auto_stygian_onslaught_team(plan)?;
+        state.team_switched = team.completed;
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::SelectChallenge,
+            AutoStygianOnslaughtRuntimeActionKind::SwitchTeam,
+            if team.completed {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else if team.attempted {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Skipped
+            },
+            None,
+            team.message
+                .clone()
+                .unwrap_or_else(|| "team switch boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::TeamSelection(team.clone()),
+        ));
+        if !team.completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::ChallengeSetupFailed);
+        }
+    } else {
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::SelectChallenge,
+            AutoStygianOnslaughtRuntimeActionKind::SwitchTeam,
+            AutoStygianOnslaughtRuntimeActionStatus::Skipped,
+            None,
+            "fight team is not configured; team switch skipped".to_string(),
+            AutoStygianOnslaughtRuntimeActionOutcome::Skipped(
+                AutoStygianOnslaughtSkipReason::RuntimeRequestedStop,
+            ),
+        ));
+    }
+
+    loop {
+        if state.battle_index >= plan.state_machine_rule.battle_loop_limit {
+            return Ok(auto_stygian_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoStygianOnslaughtStepPhase::BattleLoop,
+                AutoStygianOnslaughtRuntimeActionKind::Skip,
+                Some(state.battle_index),
+                AutoStygianOnslaughtSkipReason::LoopLimitReached,
+                AutoStygianOnslaughtExecutionStatus::LoopLimitReached,
+            ));
+        }
+        if runtime.is_auto_stygian_onslaught_cancelled() {
+            state.cancelled = true;
+            return Ok(auto_stygian_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoStygianOnslaughtStepPhase::BattleLoop,
+                AutoStygianOnslaughtRuntimeActionKind::Skip,
+                Some(state.battle_index.saturating_add(1)),
+                AutoStygianOnslaughtSkipReason::Cancelled,
+                AutoStygianOnslaughtExecutionStatus::Cancelled,
+            ));
+        }
+
+        state.battle_index += 1;
+        let battle_index = state.battle_index;
+        let start = runtime.start_auto_stygian_onslaught_challenge(plan)?;
+        state.challenge_started = start.completed;
+        let start_completed = start.completed;
+        executed_actions.push(auto_stygian_basic_report(
+            AutoStygianOnslaughtStepPhase::SelectChallenge,
+            AutoStygianOnslaughtRuntimeActionKind::StartChallenge,
+            Some(battle_index),
+            "challenge start boundary completed",
+            start,
+        ));
+        if !start_completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::ChallengeSetupFailed);
+        }
+
+        let mut context = auto_stygian_context(plan, state);
+        let initialize = runtime.initialize_auto_stygian_onslaught_combat(plan, &context)?;
+        let initialize_completed = initialize.completed;
+        executed_actions.push(auto_stygian_basic_report(
+            AutoStygianOnslaughtStepPhase::BattleLoop,
+            AutoStygianOnslaughtRuntimeActionKind::InitializeCombat,
+            Some(battle_index),
+            "combat initialization boundary completed",
+            initialize,
+        ));
+        if !initialize_completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::CombatFailed);
+        }
+
+        let script = runtime.select_auto_stygian_onslaught_combat_script(plan, &context)?;
+        let script_completed = script.completed;
+        executed_actions.push(auto_stygian_basic_report(
+            AutoStygianOnslaughtStepPhase::BattleLoop,
+            AutoStygianOnslaughtRuntimeActionKind::SelectCombatScript,
+            Some(battle_index),
+            "combat script selection boundary completed",
+            script,
+        ));
+        if !script_completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::CombatFailed);
+        }
+
+        let forward = runtime.move_auto_stygian_onslaught_forward_before_fight(plan, &context)?;
+        let forward_completed = forward.completed;
+        executed_actions.push(auto_stygian_basic_report(
+            AutoStygianOnslaughtStepPhase::BattleLoop,
+            AutoStygianOnslaughtRuntimeActionKind::MoveForwardBeforeFight,
+            Some(battle_index),
+            "pre-fight movement boundary completed",
+            forward,
+        ));
+        if !forward_completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::CombatFailed);
+        }
+
+        state.fights_attempted += 1;
+        let combat = runtime.run_auto_stygian_onslaught_combat(plan, &context)?;
+        let combat_completed = combat.completed;
+        if combat_completed && combat.result == AutoStygianOnslaughtBattleResult::Win {
+            state.fights_won += 1;
+        } else if combat_completed {
+            state.fights_lost += 1;
+        }
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::BattleLoop,
+            AutoStygianOnslaughtRuntimeActionKind::RunCombat,
+            if combat_completed && combat.result == AutoStygianOnslaughtBattleResult::Win {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            },
+            Some(battle_index),
+            combat
+                .message
+                .clone()
+                .unwrap_or_else(|| "auto combat boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::Combat(combat.clone()),
+        ));
+        if !combat_completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::CombatFailed);
+        }
+
+        let result =
+            runtime.handle_auto_stygian_onslaught_battle_result(plan, &context, &combat)?;
+        let battle_won = result.completed && result.result == AutoStygianOnslaughtBattleResult::Win;
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::BattleLoop,
+            AutoStygianOnslaughtRuntimeActionKind::HandleBattleResult,
+            if battle_won {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else if result.result == AutoStygianOnslaughtBattleResult::Lose {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Skipped
+            },
+            Some(battle_index),
+            result
+                .message
+                .clone()
+                .unwrap_or_else(|| "battle result boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::BattleResult(result.clone()),
+        ));
+        if !battle_won && result.retry_requested {
+            continue;
+        }
+        if !battle_won {
+            return Ok(auto_stygian_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoStygianOnslaughtStepPhase::BattleLoop,
+                AutoStygianOnslaughtRuntimeActionKind::HandleBattleResult,
+                Some(battle_index),
+                AutoStygianOnslaughtSkipReason::BattleLost,
+                AutoStygianOnslaughtExecutionStatus::BattleLost,
+            ));
+        }
+
+        context = auto_stygian_context(plan, state);
+        let reward_navigation =
+            runtime.move_auto_stygian_onslaught_to_leyline_flower(plan, &context)?;
+        let reward_prompt_found = reward_navigation.completed && reward_navigation.prompt_found;
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Reward,
+            AutoStygianOnslaughtRuntimeActionKind::MoveToLeylineFlower,
+            if reward_prompt_found {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            },
+            Some(battle_index),
+            reward_navigation
+                .message
+                .clone()
+                .unwrap_or_else(|| "leyline flower navigation boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::RewardNavigation(reward_navigation),
+        ));
+        if !reward_prompt_found {
+            return Ok(auto_stygian_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoStygianOnslaughtStepPhase::Reward,
+                AutoStygianOnslaughtRuntimeActionKind::MoveToLeylineFlower,
+                Some(battle_index),
+                AutoStygianOnslaughtSkipReason::RewardPromptMissing,
+                AutoStygianOnslaughtExecutionStatus::RewardSkipped,
+            ));
+        }
+
+        let selection =
+            runtime.select_auto_stygian_onslaught_resin(plan, &context, &state.resin_records)?;
+        state.selected_resin = selection.resin_name.clone();
+        context.selected_resin = selection.resin_name.clone();
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Reward,
+            AutoStygianOnslaughtRuntimeActionKind::SelectResin,
+            match selection.decision {
+                AutoStygianOnslaughtRewardDecision::Claim => {
+                    AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+                }
+                AutoStygianOnslaughtRewardDecision::Skip => {
+                    AutoStygianOnslaughtRuntimeActionStatus::Skipped
+                }
+            },
+            Some(battle_index),
+            selection
+                .message
+                .clone()
+                .unwrap_or_else(|| "resin selection boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::ResinSelection(selection.clone()),
+        ));
+        if selection.decision == AutoStygianOnslaughtRewardDecision::Skip {
+            let reason = selection
+                .skip_reason
+                .unwrap_or(AutoStygianOnslaughtSkipReason::NoResin);
+            return Ok(auto_stygian_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoStygianOnslaughtStepPhase::Reward,
+                AutoStygianOnslaughtRuntimeActionKind::SelectResin,
+                Some(battle_index),
+                reason,
+                AutoStygianOnslaughtExecutionStatus::RewardSkipped,
+            ));
+        }
+
+        let reward = runtime.claim_auto_stygian_onslaught_reward(plan, &context, &selection)?;
+        if reward.claimed {
+            state.rewards_claimed += 1;
+            auto_stygian_consume_resin_record(
+                &mut state.resin_records,
+                reward.resin_name.as_deref(),
+            );
+        } else {
+            state.rewards_skipped += 1;
+            state.last_skip_reason = reward.skip_reason;
+        }
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Reward,
+            AutoStygianOnslaughtRuntimeActionKind::ClaimReward,
+            if reward.claimed {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Skipped
+            },
+            Some(battle_index),
+            reward
+                .message
+                .clone()
+                .unwrap_or_else(|| "reward claim boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::Reward(reward.clone()),
+        ));
+        if !reward.claimed {
+            let reason = reward
+                .skip_reason
+                .unwrap_or(AutoStygianOnslaughtSkipReason::ClaimDeclined);
+            return Ok(auto_stygian_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoStygianOnslaughtStepPhase::Reward,
+                AutoStygianOnslaughtRuntimeActionKind::ClaimReward,
+                Some(battle_index),
+                reason,
+                AutoStygianOnslaughtExecutionStatus::RewardSkipped,
+            ));
+        }
+
+        let should_continue = !reward.stop_after_claim && auto_stygian_should_continue(plan, state);
+        let continuation =
+            runtime.continue_or_exit_auto_stygian_onslaught(plan, &context, should_continue)?;
+        let continuation_completed =
+            continuation.completed && continuation.continue_next_battle == should_continue;
+        if continuation.exited_domain {
+            state.exited_domain = true;
+        }
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Reward,
+            AutoStygianOnslaughtRuntimeActionKind::ContinueOrExit,
+            if continuation_completed {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            },
+            Some(battle_index),
+            continuation
+                .message
+                .clone()
+                .unwrap_or_else(|| "continue or exit boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::Continuation(continuation),
+        ));
+        if !continuation_completed {
+            return Ok(AutoStygianOnslaughtExecutionStatus::ContinueFailed);
+        }
+        if !should_continue {
+            break;
+        }
+    }
+
+    if state.exited_domain {
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Exit,
+            AutoStygianOnslaughtRuntimeActionKind::ExitDomain,
+            AutoStygianOnslaughtRuntimeActionStatus::Skipped,
+            None,
+            "domain was already exited by continuation boundary".to_string(),
+            AutoStygianOnslaughtRuntimeActionOutcome::Skipped(
+                AutoStygianOnslaughtSkipReason::RuntimeRequestedStop,
+            ),
+        ));
+    } else {
+        let exit = runtime.exit_auto_stygian_onslaught_domain(plan)?;
+        state.exited_domain = exit.completed && exit.main_world_reached;
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Exit,
+            AutoStygianOnslaughtRuntimeActionKind::ExitDomain,
+            if state.exited_domain {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            },
+            None,
+            exit.message
+                .clone()
+                .unwrap_or_else(|| "domain exit boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::Exit(exit),
+        ));
+        if !state.exited_domain {
+            return Ok(AutoStygianOnslaughtExecutionStatus::ExitFailed);
+        }
+    }
+
+    Ok(AutoStygianOnslaughtExecutionStatus::Completed)
+}
+
+fn execute_auto_stygian_onslaught_cleanup<R>(
+    plan: &AutoStygianOnslaughtExecutionPlan,
+    runtime: &mut R,
+    execution_status: AutoStygianOnslaughtExecutionStatus,
+    state: &mut AutoStygianOnslaughtExecutorState,
+    executed_actions: &mut Vec<AutoStygianOnslaughtRuntimeActionReport>,
+) -> Result<AutoStygianOnslaughtExecutionStatus>
+where
+    R: AutoStygianOnslaughtRuntime,
+{
+    let cleanup = runtime.cleanup_auto_stygian_onslaught(plan, execution_status)?;
+    state.cleanup_completed = cleanup.completed;
+    let cleanup_completed = cleanup.completed;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Cleanup,
+        AutoStygianOnslaughtRuntimeActionKind::Cleanup,
+        if cleanup_completed {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Failed
+        },
+        None,
+        cleanup
+            .message
+            .clone()
+            .unwrap_or_else(|| "auto stygian onslaught cleanup boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Cleanup(cleanup),
+    ));
+
+    if plan.artifact_salvage_rule.enabled {
+        let salvage = runtime.run_auto_stygian_onslaught_artifact_salvage(plan)?;
+        state.artifact_salvage_completed = salvage.completed;
+        executed_actions.push(auto_stygian_action_report(
+            AutoStygianOnslaughtStepPhase::Cleanup,
+            AutoStygianOnslaughtRuntimeActionKind::ArtifactSalvage,
+            if salvage.completed {
+                AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+            } else if salvage.attempted {
+                AutoStygianOnslaughtRuntimeActionStatus::Failed
+            } else {
+                AutoStygianOnslaughtRuntimeActionStatus::Skipped
+            },
+            None,
+            salvage
+                .message
+                .clone()
+                .unwrap_or_else(|| "artifact salvage boundary completed".to_string()),
+            AutoStygianOnslaughtRuntimeActionOutcome::ArtifactSalvage(salvage),
+        ));
+    }
+
+    let notification_status = if cleanup_completed {
+        execution_status
+    } else {
+        AutoStygianOnslaughtExecutionStatus::CleanupFailed
+    };
+    let end_notification = runtime.notify_auto_stygian_onslaught_end(plan, notification_status)?;
+    executed_actions.push(auto_stygian_action_report(
+        AutoStygianOnslaughtStepPhase::Cleanup,
+        AutoStygianOnslaughtRuntimeActionKind::NotifyEnd,
+        if end_notification.sent {
+            AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+        } else {
+            AutoStygianOnslaughtRuntimeActionStatus::Skipped
+        },
+        None,
+        end_notification
+            .message
+            .clone()
+            .unwrap_or_else(|| "end notification boundary completed".to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Notification(end_notification),
+    ));
+
+    if cleanup_completed {
+        Ok(AutoStygianOnslaughtExecutionStatus::Completed)
+    } else {
+        Ok(AutoStygianOnslaughtExecutionStatus::CleanupFailed)
+    }
+}
+
+fn auto_stygian_context(
+    plan: &AutoStygianOnslaughtExecutionPlan,
+    state: &AutoStygianOnslaughtExecutorState,
+) -> AutoStygianOnslaughtRuntimeContext {
+    AutoStygianOnslaughtRuntimeContext {
+        battle_index: state.battle_index,
+        selected_boss_num: state.selected_boss_num,
+        fight_team_name: plan.param.fight_team_name.clone(),
+        claimed_rewards: state.rewards_claimed,
+        selected_resin: state.selected_resin.clone(),
+        specified_resin_remaining: state
+            .resin_records
+            .iter()
+            .map(|record| record.remain_count.max(0))
+            .sum(),
+        is_first_battle: state.battle_index <= 1,
+    }
+}
+
+fn auto_stygian_should_continue(
+    plan: &AutoStygianOnslaughtExecutionPlan,
+    state: &AutoStygianOnslaughtExecutorState,
+) -> bool {
+    if !plan.resin_rule.specify_resin_use {
+        return true;
+    }
+    state
+        .resin_records
+        .iter()
+        .any(|record| record.remain_count > 0)
+}
+
+fn auto_stygian_consume_resin_record(
+    records: &mut [AutoDomainResinUseRecord],
+    resin_name: Option<&str>,
+) {
+    let Some(resin_name) = resin_name else {
+        return;
+    };
+    if let Some(record) = records
+        .iter_mut()
+        .find(|record| record.name == resin_name && record.remain_count > 0)
+    {
+        record.remain_count -= 1;
+    }
+}
+
+fn auto_stygian_skip(
+    state: &mut AutoStygianOnslaughtExecutorState,
+    executed_actions: &mut Vec<AutoStygianOnslaughtRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoStygianOnslaughtSkippedStep>,
+    phase: AutoStygianOnslaughtStepPhase,
+    action_kind: AutoStygianOnslaughtRuntimeActionKind,
+    battle_index: Option<u32>,
+    reason: AutoStygianOnslaughtSkipReason,
+    status: AutoStygianOnslaughtExecutionStatus,
+) -> AutoStygianOnslaughtExecutionStatus {
+    if matches!(
+        reason,
+        AutoStygianOnslaughtSkipReason::NoResin
+            | AutoStygianOnslaughtSkipReason::SpecifiedResinUnavailable
+            | AutoStygianOnslaughtSkipReason::RewardPromptMissing
+            | AutoStygianOnslaughtSkipReason::ClaimDeclined
+    ) {
+        state.rewards_skipped += 1;
+    }
+    state.last_skip_reason = Some(reason);
+    skipped_steps.push(AutoStygianOnslaughtSkippedStep {
+        action_kind,
+        battle_index,
+        reason,
+    });
+    executed_actions.push(auto_stygian_action_report(
+        phase,
+        action_kind,
+        AutoStygianOnslaughtRuntimeActionStatus::Skipped,
+        battle_index,
+        format!("skipped AutoStygianOnslaught step: {:?}", reason),
+        AutoStygianOnslaughtRuntimeActionOutcome::Skipped(reason),
+    ));
+    status
+}
+
+fn auto_stygian_report(
+    plan: &AutoStygianOnslaughtExecutionPlan,
+    status: AutoStygianOnslaughtExecutionStatus,
+    state: AutoStygianOnslaughtExecutorState,
+    executed_actions: Vec<AutoStygianOnslaughtRuntimeActionReport>,
+    skipped_steps: Vec<AutoStygianOnslaughtSkippedStep>,
+) -> AutoStygianOnslaughtExecutionReport {
+    AutoStygianOnslaughtExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: status == AutoStygianOnslaughtExecutionStatus::Completed,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    }
+}
+
+fn auto_stygian_basic_report(
+    phase: AutoStygianOnslaughtStepPhase,
+    action_kind: AutoStygianOnslaughtRuntimeActionKind,
+    battle_index: Option<u32>,
+    default_detail: &str,
+    outcome: AutoStygianOnslaughtBasicOutcome,
+) -> AutoStygianOnslaughtRuntimeActionReport {
+    let status = if outcome.completed {
+        AutoStygianOnslaughtRuntimeActionStatus::Succeeded
+    } else {
+        AutoStygianOnslaughtRuntimeActionStatus::Failed
+    };
+    auto_stygian_action_report(
+        phase,
+        action_kind,
+        status,
+        battle_index,
+        outcome
+            .message
+            .clone()
+            .unwrap_or_else(|| default_detail.to_string()),
+        AutoStygianOnslaughtRuntimeActionOutcome::Basic(outcome),
+    )
+}
+
+fn auto_stygian_action_report(
+    phase: AutoStygianOnslaughtStepPhase,
+    action_kind: AutoStygianOnslaughtRuntimeActionKind,
+    status: AutoStygianOnslaughtRuntimeActionStatus,
+    battle_index: Option<u32>,
+    detail: impl Into<String>,
+    outcome: AutoStygianOnslaughtRuntimeActionOutcome,
+) -> AutoStygianOnslaughtRuntimeActionReport {
+    AutoStygianOnslaughtRuntimeActionReport {
+        phase,
+        action_kind,
+        status,
+        battle_index,
+        detail: detail.into(),
+        outcome,
+    }
 }
 
 fn push_resin_record(records: &mut Vec<AutoDomainResinUseRecord>, name: &str, count: i32) {
@@ -1225,18 +2578,21 @@ fn step(
 
 fn pending_native(artifact_salvage_enabled: bool, team_switch_enabled: bool) -> Vec<String> {
     let mut pending = vec![
-        "StateMachineBase runtime, BvPage locators, live capture, OCR, template matching, and transition timeouts".to_string(),
-        "ReturnMainUiTask, OpenEventsMenu/OpenPaimonMenu/PickUpOrInteract/MoveForward input dispatch, mouse drag, and click execution".to_string(),
-        "CombatScriptParser, CombatScenes team recognition, avatar switching, combat command loop, and AutoFight FightStatusFlag lifecycle".to_string(),
-        "domain-end detection thread, cancellation coordination, key release, and result-state OCR".to_string(),
-        "ResinStatus OCR, AutoDomainTask.PressUseResin button matching, continuation/exit clicks, and reward notifications".to_string(),
-        "WalkToFTask and LowerHeadThenWalkToTask movement/camera execution for key and leyline flower interaction".to_string(),
+        "executor-ready Rust orchestration is available behind AutoStygianOnslaughtRuntime; desktop live adapters are not wired yet".to_string(),
+        "live capture, BvPage/state locators, OCR, template matching, and transition-timeout adapters remain pending".to_string(),
+        "ReturnMainUiTask, OpenEventsMenu/OpenPaimonMenu/PickUpOrInteract/MoveForward input dispatch, mouse drag, and click adapters remain pending".to_string(),
+        "CombatScriptParser, CombatScenes team recognition, avatar switching, combat command loop, and AutoFight FightStatusFlag adapters remain pending".to_string(),
+        "domain-end detection thread, cancellation coordination, key release, and result-state OCR adapters remain pending".to_string(),
+        "ResinStatus OCR, AutoDomainTask.PressUseResin button matching, continuation/exit clicks, and reward notification adapters remain pending".to_string(),
+        "WalkToFTask and LowerHeadThenWalkToTask movement/camera adapters for key and leyline flower interaction remain pending".to_string(),
     ];
     if team_switch_enabled {
-        pending.push("preset-team panel OCR, scroll/drag selection, repeated team-name click, and fallback panel close".to_string());
+        pending.push("preset-team panel OCR, scroll/drag selection, repeated team-name click, and fallback panel close adapters remain pending".to_string());
     }
     if artifact_salvage_enabled {
-        pending.push("post-domain AutoArtifactSalvage native quick-salvage execution remains disabled behind its Rust plan".to_string());
+        pending.push(
+            "post-domain AutoArtifactSalvage runtime handoff adapter remains pending".to_string(),
+        );
     }
     pending
 }
@@ -1401,4 +2757,481 @@ fn string_vec_member<const N: usize>(value: &Value, keys: [&str; N]) -> Option<V
 
 fn member<'a, const N: usize>(value: &'a Value, keys: [&str; N]) -> Option<&'a Value> {
     keys.into_iter().find_map(|key| value.get(key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct FakeAutoStygianOnslaughtRuntime {
+        calls: Vec<AutoStygianOnslaughtRuntimeActionKind>,
+        selection: AutoStygianOnslaughtResinSelection,
+        reward: AutoStygianOnslaughtRewardOutcome,
+        combat: AutoStygianOnslaughtCombatOutcome,
+        battle_result: AutoStygianOnslaughtBattleResultOutcome,
+        cleanup_statuses: Vec<AutoStygianOnslaughtExecutionStatus>,
+        claim_calls: u32,
+        cleanup_calls: u32,
+        error_on_navigation: bool,
+    }
+
+    impl Default for FakeAutoStygianOnslaughtRuntime {
+        fn default() -> Self {
+            Self {
+                calls: Vec::new(),
+                selection: AutoStygianOnslaughtResinSelection {
+                    decision: AutoStygianOnslaughtRewardDecision::Claim,
+                    resin_name: Some("浓缩树脂".to_string()),
+                    available_count: Some(1),
+                    skip_reason: None,
+                    message: None,
+                },
+                reward: AutoStygianOnslaughtRewardOutcome {
+                    claimed: true,
+                    resin_name: Some("浓缩树脂".to_string()),
+                    stop_after_claim: false,
+                    skip_reason: None,
+                    message: None,
+                },
+                combat: AutoStygianOnslaughtCombatOutcome {
+                    completed: true,
+                    result: AutoStygianOnslaughtBattleResult::Win,
+                    duration_ms: Some(12_000),
+                    message: None,
+                },
+                battle_result: AutoStygianOnslaughtBattleResultOutcome {
+                    completed: true,
+                    result: AutoStygianOnslaughtBattleResult::Win,
+                    retry_requested: false,
+                    message: None,
+                },
+                cleanup_statuses: Vec::new(),
+                claim_calls: 0,
+                cleanup_calls: 0,
+                error_on_navigation: false,
+            }
+        }
+    }
+
+    impl AutoStygianOnslaughtRuntime for FakeAutoStygianOnslaughtRuntime {
+        fn start_auto_stygian_onslaught(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtStartupOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::Startup);
+            Ok(AutoStygianOnslaughtStartupOutcome {
+                completed: true,
+                assets_initialized: true,
+                combat_strategy_parsed: true,
+                specified_resin_records_built: true,
+                message: None,
+            })
+        }
+
+        fn notify_auto_stygian_onslaught_start(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtNotificationOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::NotifyStart);
+            Ok(notification_outcome())
+        }
+
+        fn detect_auto_stygian_onslaught_state(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            expected_state: Option<StygianState>,
+        ) -> Result<AutoStygianOnslaughtStateDetectionOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::DetectState);
+            Ok(AutoStygianOnslaughtStateDetectionOutcome {
+                detected: true,
+                state: expected_state.unwrap_or(StygianState::MainWorld),
+                expected_state,
+                message: None,
+            })
+        }
+
+        fn navigate_auto_stygian_onslaught_event(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtNavigationOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::NavigateEvent);
+            if self.error_on_navigation {
+                return Err(TaskError::CommonJobExecution(
+                    "event navigation failed".to_string(),
+                ));
+            }
+            Ok(AutoStygianOnslaughtNavigationOutcome {
+                completed: true,
+                returned_main_ui: true,
+                event_found: true,
+                challenge_clicked: true,
+                message: None,
+            })
+        }
+
+        fn teleport_auto_stygian_onslaught_to_domain(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtTeleportOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::TeleportToDomain);
+            Ok(AutoStygianOnslaughtTeleportOutcome {
+                completed: true,
+                teleport_clicked: true,
+                message: None,
+            })
+        }
+
+        fn enter_auto_stygian_onslaught_domain(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtEntryOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::EnterDomain);
+            Ok(AutoStygianOnslaughtEntryOutcome {
+                completed: true,
+                entrance_interacted: true,
+                message: None,
+            })
+        }
+
+        fn select_auto_stygian_onslaught_difficulty(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtDifficultyOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::SelectDifficulty);
+            Ok(AutoStygianOnslaughtDifficultyOutcome {
+                completed: true,
+                hard_mode_selected: true,
+                single_player_confirmed: true,
+                message: None,
+            })
+        }
+
+        fn walk_auto_stygian_onslaught_to_key(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtBasicOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::WalkToKey);
+            Ok(basic_outcome())
+        }
+
+        fn select_auto_stygian_onslaught_boss(
+            &mut self,
+            plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtBossSelectionOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::SelectBoss);
+            Ok(AutoStygianOnslaughtBossSelectionOutcome {
+                completed: true,
+                selected_boss_num: plan.boss_rule.selected_boss_num,
+                message: None,
+            })
+        }
+
+        fn switch_auto_stygian_onslaught_team(
+            &mut self,
+            plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtTeamSelectionOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::SwitchTeam);
+            Ok(AutoStygianOnslaughtTeamSelectionOutcome {
+                attempted: plan.team_rule.enabled,
+                completed: true,
+                team_name: plan.team_rule.fight_team_name.clone(),
+                message: None,
+            })
+        }
+
+        fn start_auto_stygian_onslaught_challenge(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtBasicOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::StartChallenge);
+            Ok(basic_outcome())
+        }
+
+        fn initialize_auto_stygian_onslaught_combat(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+        ) -> Result<AutoStygianOnslaughtBasicOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::InitializeCombat);
+            Ok(basic_outcome())
+        }
+
+        fn select_auto_stygian_onslaught_combat_script(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+        ) -> Result<AutoStygianOnslaughtBasicOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::SelectCombatScript);
+            Ok(basic_outcome())
+        }
+
+        fn move_auto_stygian_onslaught_forward_before_fight(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+        ) -> Result<AutoStygianOnslaughtBasicOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::MoveForwardBeforeFight);
+            Ok(basic_outcome())
+        }
+
+        fn run_auto_stygian_onslaught_combat(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+        ) -> Result<AutoStygianOnslaughtCombatOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::RunCombat);
+            Ok(self.combat.clone())
+        }
+
+        fn handle_auto_stygian_onslaught_battle_result(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+            _combat: &AutoStygianOnslaughtCombatOutcome,
+        ) -> Result<AutoStygianOnslaughtBattleResultOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::HandleBattleResult);
+            Ok(self.battle_result.clone())
+        }
+
+        fn move_auto_stygian_onslaught_to_leyline_flower(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+        ) -> Result<AutoStygianOnslaughtRewardNavigationOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::MoveToLeylineFlower);
+            Ok(AutoStygianOnslaughtRewardNavigationOutcome {
+                completed: true,
+                prompt_found: true,
+                message: None,
+            })
+        }
+
+        fn select_auto_stygian_onslaught_resin(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+            _records: &[AutoDomainResinUseRecord],
+        ) -> Result<AutoStygianOnslaughtResinSelection> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::SelectResin);
+            Ok(self.selection.clone())
+        }
+
+        fn claim_auto_stygian_onslaught_reward(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+            _selection: &AutoStygianOnslaughtResinSelection,
+        ) -> Result<AutoStygianOnslaughtRewardOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::ClaimReward);
+            self.claim_calls += 1;
+            Ok(self.reward.clone())
+        }
+
+        fn continue_or_exit_auto_stygian_onslaught(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _context: &AutoStygianOnslaughtRuntimeContext,
+            should_continue: bool,
+        ) -> Result<AutoStygianOnslaughtContinuationOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::ContinueOrExit);
+            Ok(AutoStygianOnslaughtContinuationOutcome {
+                completed: true,
+                continue_next_battle: should_continue,
+                exited_domain: !should_continue,
+                message: None,
+            })
+        }
+
+        fn exit_auto_stygian_onslaught_domain(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtExitOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::ExitDomain);
+            Ok(AutoStygianOnslaughtExitOutcome {
+                completed: true,
+                main_world_reached: true,
+                message: None,
+            })
+        }
+
+        fn run_auto_stygian_onslaught_artifact_salvage(
+            &mut self,
+            plan: &AutoStygianOnslaughtExecutionPlan,
+        ) -> Result<AutoStygianOnslaughtArtifactSalvageOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::ArtifactSalvage);
+            Ok(AutoStygianOnslaughtArtifactSalvageOutcome {
+                attempted: plan.artifact_salvage_rule.enabled,
+                completed: true,
+                message: None,
+            })
+        }
+
+        fn notify_auto_stygian_onslaught_end(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            _status: AutoStygianOnslaughtExecutionStatus,
+        ) -> Result<AutoStygianOnslaughtNotificationOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::NotifyEnd);
+            Ok(notification_outcome())
+        }
+
+        fn cleanup_auto_stygian_onslaught(
+            &mut self,
+            _plan: &AutoStygianOnslaughtExecutionPlan,
+            status: AutoStygianOnslaughtExecutionStatus,
+        ) -> Result<AutoStygianOnslaughtCleanupOutcome> {
+            self.calls
+                .push(AutoStygianOnslaughtRuntimeActionKind::Cleanup);
+            self.cleanup_statuses.push(status);
+            self.cleanup_calls += 1;
+            Ok(AutoStygianOnslaughtCleanupOutcome {
+                completed: true,
+                inputs_released: true,
+                overlays_cleared: true,
+                message: None,
+            })
+        }
+    }
+
+    #[test]
+    fn auto_stygian_onslaught_executor_claims_reward_after_victory() {
+        let plan = test_plan_with_condensed_resin(1);
+        let mut runtime = FakeAutoStygianOnslaughtRuntime::default();
+
+        let report = execute_auto_stygian_onslaught_plan(&plan, &mut runtime).unwrap();
+
+        assert!(plan.executor_ready);
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("desktop live adapters are not wired yet")));
+        assert_eq!(
+            report.status,
+            AutoStygianOnslaughtExecutionStatus::Completed
+        );
+        assert!(report.completed);
+        assert_eq!(report.state.fights_attempted, 1);
+        assert_eq!(report.state.fights_won, 1);
+        assert_eq!(report.state.rewards_claimed, 1);
+        assert_eq!(report.state.resin_records[0].remain_count, 0);
+        assert!(report.state.cleanup_completed);
+        assert_eq!(runtime.claim_calls, 1);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(runtime
+            .calls
+            .contains(&AutoStygianOnslaughtRuntimeActionKind::ClaimReward));
+        assert!(runtime
+            .calls
+            .contains(&AutoStygianOnslaughtRuntimeActionKind::Cleanup));
+    }
+
+    #[test]
+    fn auto_stygian_onslaught_executor_skips_reward_when_no_resin() {
+        let plan = test_plan();
+        let mut runtime = FakeAutoStygianOnslaughtRuntime {
+            selection: AutoStygianOnslaughtResinSelection {
+                decision: AutoStygianOnslaughtRewardDecision::Skip,
+                resin_name: None,
+                available_count: Some(0),
+                skip_reason: Some(AutoStygianOnslaughtSkipReason::NoResin),
+                message: Some("resin unavailable".to_string()),
+            },
+            ..FakeAutoStygianOnslaughtRuntime::default()
+        };
+
+        let report = execute_auto_stygian_onslaught_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.status,
+            AutoStygianOnslaughtExecutionStatus::RewardSkipped
+        );
+        assert!(!report.completed);
+        assert_eq!(report.state.rewards_claimed, 0);
+        assert_eq!(report.state.rewards_skipped, 1);
+        assert_eq!(
+            report.state.last_skip_reason,
+            Some(AutoStygianOnslaughtSkipReason::NoResin)
+        );
+        assert_eq!(runtime.claim_calls, 0);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(runtime
+            .calls
+            .contains(&AutoStygianOnslaughtRuntimeActionKind::Cleanup));
+    }
+
+    #[test]
+    fn auto_stygian_onslaught_executor_runs_cleanup_after_runtime_error() {
+        let plan = test_plan();
+        let mut runtime = FakeAutoStygianOnslaughtRuntime {
+            error_on_navigation: true,
+            ..FakeAutoStygianOnslaughtRuntime::default()
+        };
+
+        let error = execute_auto_stygian_onslaught_plan(&plan, &mut runtime).unwrap_err();
+
+        assert!(matches!(error, TaskError::CommonJobExecution(_)));
+        assert_eq!(
+            runtime.cleanup_statuses,
+            vec![AutoStygianOnslaughtExecutionStatus::RuntimeError]
+        );
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(runtime
+            .calls
+            .contains(&AutoStygianOnslaughtRuntimeActionKind::Cleanup));
+        assert!(runtime
+            .calls
+            .contains(&AutoStygianOnslaughtRuntimeActionKind::NotifyEnd));
+    }
+
+    fn test_plan() -> AutoStygianOnslaughtExecutionPlan {
+        let mut config = AutoStygianOnslaughtExecutionConfig::default();
+        config.param.boss_num = 1;
+        plan_auto_stygian_onslaught(config).unwrap()
+    }
+
+    fn test_plan_with_condensed_resin(count: i32) -> AutoStygianOnslaughtExecutionPlan {
+        let mut config = AutoStygianOnslaughtExecutionConfig::default();
+        config.param.boss_num = 1;
+        config.param.specify_resin_use = true;
+        config.param.condensed_resin_use_count = count;
+        plan_auto_stygian_onslaught(config).unwrap()
+    }
+
+    fn basic_outcome() -> AutoStygianOnslaughtBasicOutcome {
+        AutoStygianOnslaughtBasicOutcome {
+            completed: true,
+            message: None,
+        }
+    }
+
+    fn notification_outcome() -> AutoStygianOnslaughtNotificationOutcome {
+        AutoStygianOnslaughtNotificationOutcome {
+            sent: true,
+            message: None,
+        }
+    }
 }

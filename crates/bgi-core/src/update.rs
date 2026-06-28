@@ -14,28 +14,18 @@ mod update_redeem_code;
 
 pub use update_redeem_code::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum UpdateTrigger {
+    #[default]
     Auto,
     Manual,
 }
 
-impl Default for UpdateTrigger {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum UpdateChannel {
+    #[default]
     Stable,
     Alpha,
-}
-
-impl Default for UpdateChannel {
-    fn default() -> Self {
-        Self::Stable
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err, clippy::too_many_arguments)]
+
 use bgi_script::{
     farming_plan_skip_decision_from_pathing_file, is_skip_task, pathing_pre_run_skip_decision,
     try_plan_pre_execution_priority_projects, DailyExecutionRecord, ExecutionRecord,
@@ -16,6 +18,7 @@ use bgi_task::{
     execute_shell_task_with_cancel, AutoBossParam, AutoDomainParam, AutoFightParam,
     AutoLeyLineOutcropParam, AutoSkipConfigParam, AutoStygianOnslaughtParam, DispatcherRuntime,
     ShellConfig, ShellExecutionStatus, ShellTaskParam, TaskInvocationExecutionMode,
+    TaskInvocationPlanningContext,
 };
 use bgi_vision::{
     BvImage as VisionBvImage, BvLocator as VisionBvLocator, BvPage as VisionBvPage,
@@ -187,8 +190,29 @@ fn execute_prepared_javascript_with_task_mode_and_cancellation(
     task_invocation_mode: TaskInvocationExecutionMode,
     cancellation: Option<&InputCancellationToken>,
 ) -> Result<JavaScriptExecutionOutcome> {
+    execute_prepared_javascript_with_task_mode_context_and_cancellation(
+        prepared,
+        task_invocation_mode,
+        &TaskInvocationPlanningContext::default(),
+        cancellation,
+    )
+}
+
+fn execute_prepared_javascript_with_task_mode_context_and_cancellation(
+    prepared: &PreparedScriptExecution,
+    task_invocation_mode: TaskInvocationExecutionMode,
+    task_invocation_context: &TaskInvocationPlanningContext,
+    cancellation: Option<&InputCancellationToken>,
+) -> Result<JavaScriptExecutionOutcome> {
     let host = script_host_runtime(prepared, cancellation)?;
-    execute_prepared_javascript_with_host(prepared, task_invocation_mode, None, cancellation, host)
+    execute_prepared_javascript_with_host(
+        prepared,
+        task_invocation_mode,
+        task_invocation_context,
+        None,
+        cancellation,
+        host,
+    )
 }
 
 pub fn execute_prepared_javascript_with_task_dispatcher(
@@ -203,10 +227,25 @@ pub fn execute_prepared_javascript_with_task_dispatcher_and_cancellation(
     dispatcher: &mut DispatcherRuntime,
     cancellation: Option<&InputCancellationToken>,
 ) -> Result<JavaScriptExecutionOutcome> {
+    execute_prepared_javascript_with_task_dispatcher_context_and_cancellation(
+        prepared,
+        dispatcher,
+        &TaskInvocationPlanningContext::default(),
+        cancellation,
+    )
+}
+
+fn execute_prepared_javascript_with_task_dispatcher_context_and_cancellation(
+    prepared: &PreparedScriptExecution,
+    dispatcher: &mut DispatcherRuntime,
+    task_invocation_context: &TaskInvocationPlanningContext,
+    cancellation: Option<&InputCancellationToken>,
+) -> Result<JavaScriptExecutionOutcome> {
     let host = script_host_runtime(prepared, cancellation)?;
     execute_prepared_javascript_with_host(
         prepared,
         TaskInvocationExecutionMode::ExecuteReady,
+        task_invocation_context,
         Some(dispatcher),
         cancellation,
         host,
@@ -227,6 +266,7 @@ fn script_host_runtime(
 fn execute_prepared_javascript_with_host(
     prepared: &PreparedScriptExecution,
     task_invocation_mode: TaskInvocationExecutionMode,
+    task_invocation_context: &TaskInvocationPlanningContext,
     dispatcher: Option<&mut DispatcherRuntime>,
     cancellation: Option<&InputCancellationToken>,
     host: ScriptHostRuntime,
@@ -267,8 +307,20 @@ fn execute_prepared_javascript_with_host(
     let host_calls = state.host_calls.borrow().clone();
     let task_invocations = JavaScriptTaskInvocations::from_host(&state.host.borrow());
     let task_execution = dispatcher.map_or_else(
-        || JavaScriptTaskExecution::evaluate(&task_invocations, task_invocation_mode),
-        |dispatcher| JavaScriptTaskExecution::execute_ready(&task_invocations, dispatcher),
+        || {
+            JavaScriptTaskExecution::evaluate(
+                &task_invocations,
+                task_invocation_mode,
+                task_invocation_context,
+            )
+        },
+        |dispatcher| {
+            JavaScriptTaskExecution::execute_ready(
+                &task_invocations,
+                dispatcher,
+                task_invocation_context,
+            )
+        },
     );
     let html_mask_from_html = state.host.borrow().html_mask_remaining_from_html_messages();
 

@@ -44,34 +44,24 @@ pub fn write_config(path: impl AsRef<Path>, config: &AppConfig) -> Result<()> {
     fs::write(path, text).map_err(|source| BgiError::io(path, source))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CaptureMode {
+    #[default]
     BitBlt,
     DwmGetDxSharedSurface,
     WindowsGraphicsCapture,
     WindowsGraphicsCaptureHdr,
 }
 
-impl Default for CaptureMode {
-    fn default() -> Self {
-        Self::BitBlt
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeType {
+    #[default]
     DarkNone,
     DarkMica,
     DarkAcrylic,
     LightNone,
     LightMica,
     LightAcrylic,
-}
-
-impl Default for ThemeType {
-    fn default() -> Self {
-        Self::DarkNone
-    }
 }
 
 impl ThemeType {

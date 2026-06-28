@@ -395,7 +395,7 @@ pub struct AutoBossTaskStep {
     pub action: AutoBossTaskAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoBossTaskPhase {
     Startup,
     Prepare,
@@ -407,7 +407,7 @@ pub enum AutoBossTaskPhase {
     Cleanup,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoBossTaskAction {
     ValidateAndParseCombatStrategy,
     LogScreenResolution,
@@ -421,6 +421,326 @@ pub enum AutoBossTaskAction {
     RecognizeRewardWhenEnabled,
     RepositionForNextRound,
     ReleaseInputsAndNotifyEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoBossExecutionStatus {
+    Completed,
+    StartupFailed,
+    PrepareFailed,
+    ResinExhausted,
+    RewardSkipped,
+    NavigationFailed,
+    CombatFailed,
+    RewardFailed,
+    RepositionFailed,
+    Cancelled,
+    RoundLimitReached,
+    CleanupFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoBossRuntimeActionStatus {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoBossRuntimeActionKind {
+    Startup,
+    PrepareRound,
+    CheckOriginalResin,
+    UseSupplementalResin,
+    SkipReward,
+    NavigateToBoss,
+    RunAutoFight,
+    MoveToRewardFlower,
+    TakeReward,
+    RecognizeReward,
+    RepositionForNextRound,
+    Cleanup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoBossNavigationKind {
+    FirstNavigation,
+    RepositionForNextRound,
+    ReturnToStatue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoBossSkipReason {
+    InsufficientResin,
+    SupplementalResinUnavailable,
+    RewardDisabledByRuntime,
+    RewardPromptMissing,
+    Cancelled,
+    RoundLimitReached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossRuntimeRoundContext {
+    pub round_index: u32,
+    pub boss_name: String,
+    pub target_reward_count: Option<u32>,
+    pub claimed_rewards: u32,
+    pub is_first_round: bool,
+    pub should_claim_reward: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossNavigationRequest {
+    pub kind: AutoBossNavigationKind,
+    pub boss_name: String,
+    pub route_files: Vec<String>,
+    pub no_pathing_support: bool,
+    pub talk_to_start: bool,
+    pub return_to_statue: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossStartupOutcome {
+    pub completed: bool,
+    pub combat_strategy_parsed: bool,
+    pub screen_resolution_logged: bool,
+    pub start_notification_sent: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossPrepareOutcome {
+    pub completed: bool,
+    pub main_ui_ready: bool,
+    pub party_switched: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossResinCheckOutcome {
+    pub precheck_succeeded: bool,
+    pub original_resin: Option<i32>,
+    pub can_claim_reward: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossSupplementalResinOutcome {
+    pub attempted: bool,
+    pub used_transient_resin: i32,
+    pub used_fragile_resin: i32,
+    pub original_resin_after: Option<i32>,
+    pub can_claim_reward: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossNavigationOutcome {
+    pub completed: bool,
+    pub teleport_used: bool,
+    pub pathing_used: bool,
+    pub route_files: Vec<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossCombatOutcome {
+    pub completed: bool,
+    pub victory: bool,
+    pub normal_end: bool,
+    pub duration_ms: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossRewardNavigationOutcome {
+    pub completed: bool,
+    pub reward_prompt_found: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossRewardOutcome {
+    pub claimed: bool,
+    pub original_resin_spent: i32,
+    pub skip_reason: Option<AutoBossSkipReason>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossRewardRecognitionOutcome {
+    pub attempted: bool,
+    pub recognized: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossRepositionOutcome {
+    pub completed: bool,
+    pub returned_to_statue: bool,
+    pub route_files: Vec<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossCleanupOutcome {
+    pub completed: bool,
+    pub released_all_keys: bool,
+    pub released_left_mouse: bool,
+    pub end_notification_sent: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoBossRuntimeActionOutcome {
+    Startup(AutoBossStartupOutcome),
+    Prepare(AutoBossPrepareOutcome),
+    ResinCheck(AutoBossResinCheckOutcome),
+    SupplementalResin(AutoBossSupplementalResinOutcome),
+    Navigation(AutoBossNavigationOutcome),
+    Combat(AutoBossCombatOutcome),
+    RewardNavigation(AutoBossRewardNavigationOutcome),
+    Reward(AutoBossRewardOutcome),
+    RewardRecognition(AutoBossRewardRecognitionOutcome),
+    Reposition(AutoBossRepositionOutcome),
+    Cleanup(AutoBossCleanupOutcome),
+    Skipped(AutoBossSkipReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossRuntimeActionReport {
+    pub phase: AutoBossTaskPhase,
+    pub action_kind: AutoBossRuntimeActionKind,
+    pub status: AutoBossRuntimeActionStatus,
+    pub round_index: Option<u32>,
+    pub detail: String,
+    pub outcome: AutoBossRuntimeActionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossSkippedStep {
+    pub action_kind: AutoBossRuntimeActionKind,
+    pub round_index: Option<u32>,
+    pub reason: AutoBossSkipReason,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossExecutorState {
+    pub startup_completed: bool,
+    pub current_round: u32,
+    pub target_reward_count: Option<u32>,
+    pub rounds_started: u32,
+    pub navigation_attempts: u32,
+    pub fights_attempted: u32,
+    pub fights_succeeded: u32,
+    pub combat_failures: u32,
+    pub reward_navigation_attempts: u32,
+    pub rewards_claimed: u32,
+    pub rewards_skipped: u32,
+    pub reward_recognition_attempts: u32,
+    pub original_resin_spent: i32,
+    pub supplemental_resin_used: i32,
+    pub last_observed_original_resin: Option<i32>,
+    pub stopped_by_resin: bool,
+    pub cancelled: bool,
+    pub cleanup_completed: bool,
+    pub last_skip_reason: Option<AutoBossSkipReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBossExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub status: AutoBossExecutionStatus,
+    pub state: AutoBossExecutorState,
+    pub executed_actions: Vec<AutoBossRuntimeActionReport>,
+    pub skipped_steps: Vec<AutoBossSkippedStep>,
+}
+
+pub trait AutoBossRuntime {
+    fn start_auto_boss(&mut self, plan: &AutoBossExecutionPlan) -> Result<AutoBossStartupOutcome>;
+
+    fn prepare_auto_boss_round(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+    ) -> Result<AutoBossPrepareOutcome>;
+
+    fn check_auto_boss_resin(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+    ) -> Result<AutoBossResinCheckOutcome>;
+
+    fn use_auto_boss_supplemental_resin(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+        resin_check: &AutoBossResinCheckOutcome,
+    ) -> Result<AutoBossSupplementalResinOutcome>;
+
+    fn navigate_auto_boss_to_boss(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+        request: &AutoBossNavigationRequest,
+    ) -> Result<AutoBossNavigationOutcome>;
+
+    fn run_auto_boss_fight(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+    ) -> Result<AutoBossCombatOutcome>;
+
+    fn move_auto_boss_to_reward(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+    ) -> Result<AutoBossRewardNavigationOutcome>;
+
+    fn take_auto_boss_reward(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+    ) -> Result<AutoBossRewardOutcome>;
+
+    fn recognize_auto_boss_reward(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+    ) -> Result<AutoBossRewardRecognitionOutcome>;
+
+    fn reposition_auto_boss_for_next_round(
+        &mut self,
+        plan: &AutoBossExecutionPlan,
+        context: &AutoBossRuntimeRoundContext,
+        request: &AutoBossNavigationRequest,
+    ) -> Result<AutoBossRepositionOutcome>;
+
+    fn cleanup_auto_boss(&mut self, plan: &AutoBossExecutionPlan)
+        -> Result<AutoBossCleanupOutcome>;
+
+    fn is_auto_boss_cancelled(&mut self) -> bool {
+        false
+    }
 }
 
 pub fn plan_auto_boss(
@@ -648,14 +968,614 @@ pub fn plan_auto_boss(
         },
         locators: auto_boss_locators(),
         steps: auto_boss_steps(),
-        executor_ready: false,
+        executor_ready: true,
         pending_native: vec![
-            "live capture, 16:9 game window probing, BvPage OCR/template matching, and Rust AutoBoss asset locator initialization".to_string(),
-            "TpTask big-map resin probing, supplemental resin UI clicking/OCR, ReturnMainUi/SwitchParty common jobs, and statue teleport".to_string(),
-            "PathExecutor, KeyMouseMacroPlayer, CombatScenes/AutoFightTask dispatch, reward flower camera/input navigation, RewardResultRecognizer, notifications, and cancellation/retry boundaries".to_string(),
+            "AutoBoss now has a Rust injectable execution boundary for startup, per-round main-UI/team preparation, resin decisions, supplemental-resin decisions, boss navigation requests, fight dispatch, reward collection, reposition, cancellation checks, and cleanup".to_string(),
+            "desktop live adapters remain pending: live capture/OCR/template probing, ReturnMainUi/SwitchParty/TpTask wiring, supplemental resin UI clicking/OCR, notifications, and cancellation integration".to_string(),
+            "full pathing/fight adapters remain pending: PathExecutor, KeyMouseMacroPlayer, CombatScenes/AutoFightTask dispatch, reward-flower camera/input navigation, and RewardResultRecognizer live wiring".to_string(),
         ],
         param,
     })
+}
+
+pub fn execute_auto_boss_plan<R>(
+    plan: &AutoBossExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoBossExecutionReport>
+where
+    R: AutoBossRuntime,
+{
+    let mut state = AutoBossExecutorState {
+        target_reward_count: auto_boss_target_reward_count(&plan.param),
+        ..AutoBossExecutorState::default()
+    };
+    let mut executed_actions = Vec::new();
+    let mut skipped_steps = Vec::new();
+
+    let execution_result = execute_auto_boss_plan_inner(
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+        &mut skipped_steps,
+    );
+
+    let status = match execution_result {
+        Ok(status) => status,
+        Err(error) => {
+            let cleanup_error =
+                execute_auto_boss_cleanup(plan, runtime, &mut state, &mut executed_actions).err();
+            return Err(cleanup_error.unwrap_or(error));
+        }
+    };
+
+    let cleanup_status =
+        execute_auto_boss_cleanup(plan, runtime, &mut state, &mut executed_actions)?;
+    let status = if cleanup_status == AutoBossExecutionStatus::CleanupFailed {
+        AutoBossExecutionStatus::CleanupFailed
+    } else {
+        status
+    };
+
+    Ok(auto_boss_report(
+        plan,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    ))
+}
+
+fn execute_auto_boss_plan_inner<R>(
+    plan: &AutoBossExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoBossExecutorState,
+    executed_actions: &mut Vec<AutoBossRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoBossSkippedStep>,
+) -> Result<AutoBossExecutionStatus>
+where
+    R: AutoBossRuntime,
+{
+    let startup = runtime.start_auto_boss(plan)?;
+    state.startup_completed = startup.completed;
+    executed_actions.push(auto_boss_action_report(
+        AutoBossTaskPhase::Startup,
+        AutoBossRuntimeActionKind::Startup,
+        if startup.completed {
+            AutoBossRuntimeActionStatus::Succeeded
+        } else {
+            AutoBossRuntimeActionStatus::Failed
+        },
+        None,
+        startup
+            .message
+            .clone()
+            .unwrap_or_else(|| "startup boundary completed".to_string()),
+        AutoBossRuntimeActionOutcome::Startup(startup.clone()),
+    ));
+    if !startup.completed {
+        return Ok(AutoBossExecutionStatus::StartupFailed);
+    }
+
+    loop {
+        if let Some(target_reward_count) = state.target_reward_count {
+            if state.rewards_claimed >= target_reward_count {
+                return Ok(AutoBossExecutionStatus::Completed);
+            }
+        }
+
+        if runtime.is_auto_boss_cancelled() {
+            state.cancelled = true;
+            return Ok(auto_boss_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoBossTaskPhase::Prepare,
+                AutoBossRuntimeActionKind::SkipReward,
+                None,
+                AutoBossSkipReason::Cancelled,
+                AutoBossExecutionStatus::Cancelled,
+            ));
+        }
+
+        state.current_round += 1;
+        state.rounds_started += 1;
+        let round_index = state.current_round;
+        let context = auto_boss_round_context(plan, state, true);
+
+        let prepare = runtime.prepare_auto_boss_round(plan, &context)?;
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Prepare,
+            AutoBossRuntimeActionKind::PrepareRound,
+            if prepare.completed {
+                AutoBossRuntimeActionStatus::Succeeded
+            } else {
+                AutoBossRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            prepare
+                .message
+                .clone()
+                .unwrap_or_else(|| "round preparation completed".to_string()),
+            AutoBossRuntimeActionOutcome::Prepare(prepare.clone()),
+        ));
+        if !prepare.completed {
+            return Ok(AutoBossExecutionStatus::PrepareFailed);
+        }
+
+        let resin_check = runtime.check_auto_boss_resin(plan, &context)?;
+        state.last_observed_original_resin = resin_check.original_resin;
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Resin,
+            AutoBossRuntimeActionKind::CheckOriginalResin,
+            AutoBossRuntimeActionStatus::Succeeded,
+            Some(round_index),
+            resin_check.message.clone().unwrap_or_else(|| {
+                if resin_check.can_claim_reward {
+                    "original resin can claim reward".to_string()
+                } else {
+                    "original resin cannot claim reward".to_string()
+                }
+            }),
+            AutoBossRuntimeActionOutcome::ResinCheck(resin_check.clone()),
+        ));
+
+        let should_claim_reward = auto_boss_resolve_reward_claim(
+            plan,
+            runtime,
+            state,
+            executed_actions,
+            &context,
+            resin_check,
+        )?;
+        if !should_claim_reward {
+            let status = if state.target_reward_count.is_none() {
+                state.stopped_by_resin = true;
+                AutoBossExecutionStatus::ResinExhausted
+            } else {
+                AutoBossExecutionStatus::RewardSkipped
+            };
+            let reason = state
+                .last_skip_reason
+                .unwrap_or(AutoBossSkipReason::InsufficientResin);
+            return Ok(auto_boss_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoBossTaskPhase::Resin,
+                AutoBossRuntimeActionKind::SkipReward,
+                Some(round_index),
+                reason,
+                status,
+            ));
+        }
+
+        let context = auto_boss_round_context(plan, state, true);
+        let navigation_request =
+            auto_boss_navigation_request(plan, AutoBossNavigationKind::FirstNavigation);
+        state.navigation_attempts += 1;
+        let navigation = runtime.navigate_auto_boss_to_boss(plan, &context, &navigation_request)?;
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Navigation,
+            AutoBossRuntimeActionKind::NavigateToBoss,
+            if navigation.completed {
+                AutoBossRuntimeActionStatus::Succeeded
+            } else {
+                AutoBossRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            navigation
+                .message
+                .clone()
+                .unwrap_or_else(|| "boss navigation boundary completed".to_string()),
+            AutoBossRuntimeActionOutcome::Navigation(navigation.clone()),
+        ));
+        if !navigation.completed {
+            return Ok(AutoBossExecutionStatus::NavigationFailed);
+        }
+
+        state.fights_attempted += 1;
+        let combat = runtime.run_auto_boss_fight(plan, &context)?;
+        let combat_succeeded = combat.completed && combat.victory;
+        if combat_succeeded {
+            state.fights_succeeded += 1;
+        } else {
+            state.combat_failures += 1;
+        }
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Combat,
+            AutoBossRuntimeActionKind::RunAutoFight,
+            if combat_succeeded {
+                AutoBossRuntimeActionStatus::Succeeded
+            } else {
+                AutoBossRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            combat
+                .message
+                .clone()
+                .unwrap_or_else(|| "auto fight boundary completed".to_string()),
+            AutoBossRuntimeActionOutcome::Combat(combat),
+        ));
+        if !combat_succeeded {
+            return Ok(AutoBossExecutionStatus::CombatFailed);
+        }
+
+        let reward_navigation = runtime.move_auto_boss_to_reward(plan, &context)?;
+        state.reward_navigation_attempts += 1;
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Reward,
+            AutoBossRuntimeActionKind::MoveToRewardFlower,
+            if reward_navigation.completed {
+                AutoBossRuntimeActionStatus::Succeeded
+            } else {
+                AutoBossRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            reward_navigation
+                .message
+                .clone()
+                .unwrap_or_else(|| "reward navigation boundary completed".to_string()),
+            AutoBossRuntimeActionOutcome::RewardNavigation(reward_navigation.clone()),
+        ));
+        if !reward_navigation.completed {
+            if !reward_navigation.reward_prompt_found {
+                return Ok(auto_boss_skip(
+                    state,
+                    executed_actions,
+                    skipped_steps,
+                    AutoBossTaskPhase::Reward,
+                    AutoBossRuntimeActionKind::SkipReward,
+                    Some(round_index),
+                    AutoBossSkipReason::RewardPromptMissing,
+                    AutoBossExecutionStatus::RewardSkipped,
+                ));
+            }
+            return Ok(AutoBossExecutionStatus::RewardFailed);
+        }
+
+        let reward = runtime.take_auto_boss_reward(plan, &context)?;
+        if reward.claimed {
+            state.rewards_claimed += 1;
+            state.original_resin_spent += reward.original_resin_spent;
+        } else {
+            state.rewards_skipped += 1;
+            state.last_skip_reason = reward.skip_reason;
+        }
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Reward,
+            AutoBossRuntimeActionKind::TakeReward,
+            if reward.claimed {
+                AutoBossRuntimeActionStatus::Succeeded
+            } else {
+                AutoBossRuntimeActionStatus::Skipped
+            },
+            Some(round_index),
+            reward.message.clone().unwrap_or_else(|| {
+                if reward.claimed {
+                    "reward claimed".to_string()
+                } else {
+                    "reward skipped".to_string()
+                }
+            }),
+            AutoBossRuntimeActionOutcome::Reward(reward.clone()),
+        ));
+        if !reward.claimed {
+            let reason = reward
+                .skip_reason
+                .unwrap_or(AutoBossSkipReason::RewardDisabledByRuntime);
+            skipped_steps.push(AutoBossSkippedStep {
+                action_kind: AutoBossRuntimeActionKind::TakeReward,
+                round_index: Some(round_index),
+                reason,
+            });
+            return Ok(AutoBossExecutionStatus::RewardSkipped);
+        }
+
+        if plan.reward_rule.reward_recognition_enabled {
+            let recognition = runtime.recognize_auto_boss_reward(plan, &context)?;
+            if recognition.attempted {
+                state.reward_recognition_attempts += 1;
+            }
+            executed_actions.push(auto_boss_action_report(
+                AutoBossTaskPhase::Reward,
+                AutoBossRuntimeActionKind::RecognizeReward,
+                if !recognition.attempted {
+                    AutoBossRuntimeActionStatus::Skipped
+                } else if recognition.recognized {
+                    AutoBossRuntimeActionStatus::Succeeded
+                } else {
+                    AutoBossRuntimeActionStatus::Failed
+                },
+                Some(round_index),
+                recognition
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "reward recognition boundary completed".to_string()),
+                AutoBossRuntimeActionOutcome::RewardRecognition(recognition),
+            ));
+        }
+
+        if let Some(target_reward_count) = state.target_reward_count {
+            if state.rewards_claimed >= target_reward_count {
+                return Ok(AutoBossExecutionStatus::Completed);
+            }
+        }
+
+        if runtime.is_auto_boss_cancelled() {
+            state.cancelled = true;
+            return Ok(auto_boss_skip(
+                state,
+                executed_actions,
+                skipped_steps,
+                AutoBossTaskPhase::Reposition,
+                AutoBossRuntimeActionKind::SkipReward,
+                Some(round_index),
+                AutoBossSkipReason::Cancelled,
+                AutoBossExecutionStatus::Cancelled,
+            ));
+        }
+
+        let reposition_request =
+            auto_boss_navigation_request(plan, auto_boss_next_reposition_kind(plan));
+        let reposition =
+            runtime.reposition_auto_boss_for_next_round(plan, &context, &reposition_request)?;
+        executed_actions.push(auto_boss_action_report(
+            AutoBossTaskPhase::Reposition,
+            AutoBossRuntimeActionKind::RepositionForNextRound,
+            if reposition.completed {
+                AutoBossRuntimeActionStatus::Succeeded
+            } else {
+                AutoBossRuntimeActionStatus::Failed
+            },
+            Some(round_index),
+            reposition
+                .message
+                .clone()
+                .unwrap_or_else(|| "reposition boundary completed".to_string()),
+            AutoBossRuntimeActionOutcome::Reposition(reposition),
+        ));
+        if !executed_actions
+            .last()
+            .is_some_and(|report| report.status == AutoBossRuntimeActionStatus::Succeeded)
+        {
+            return Ok(AutoBossExecutionStatus::RepositionFailed);
+        }
+    }
+}
+
+fn auto_boss_resolve_reward_claim<R>(
+    plan: &AutoBossExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoBossExecutorState,
+    executed_actions: &mut Vec<AutoBossRuntimeActionReport>,
+    context: &AutoBossRuntimeRoundContext,
+    resin_check: AutoBossResinCheckOutcome,
+) -> Result<bool>
+where
+    R: AutoBossRuntime,
+{
+    if resin_check.can_claim_reward {
+        return Ok(true);
+    }
+
+    if !resin_check.precheck_succeeded
+        && plan.resin_rule.precheck_failure_falls_back_to_reward_prompt
+    {
+        return Ok(true);
+    }
+
+    if plan
+        .supplemental_resin_rule
+        .enabled_resin_options
+        .is_empty()
+    {
+        state.last_skip_reason = Some(AutoBossSkipReason::InsufficientResin);
+        return Ok(false);
+    }
+
+    let supplemental = runtime.use_auto_boss_supplemental_resin(plan, context, &resin_check)?;
+    state.supplemental_resin_used +=
+        supplemental.used_transient_resin + supplemental.used_fragile_resin;
+    state.last_observed_original_resin = supplemental
+        .original_resin_after
+        .or(state.last_observed_original_resin);
+    let can_claim_reward = supplemental.can_claim_reward;
+    executed_actions.push(auto_boss_action_report(
+        AutoBossTaskPhase::Resin,
+        AutoBossRuntimeActionKind::UseSupplementalResin,
+        if can_claim_reward {
+            AutoBossRuntimeActionStatus::Succeeded
+        } else if supplemental.attempted {
+            AutoBossRuntimeActionStatus::Failed
+        } else {
+            AutoBossRuntimeActionStatus::Skipped
+        },
+        Some(context.round_index),
+        supplemental.message.clone().unwrap_or_else(|| {
+            if can_claim_reward {
+                "supplemental resin made reward claim possible".to_string()
+            } else {
+                "supplemental resin did not make reward claim possible".to_string()
+            }
+        }),
+        AutoBossRuntimeActionOutcome::SupplementalResin(supplemental),
+    ));
+
+    if !can_claim_reward {
+        state.last_skip_reason = Some(AutoBossSkipReason::SupplementalResinUnavailable);
+    }
+    Ok(can_claim_reward)
+}
+
+fn execute_auto_boss_cleanup<R>(
+    plan: &AutoBossExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoBossExecutorState,
+    executed_actions: &mut Vec<AutoBossRuntimeActionReport>,
+) -> Result<AutoBossExecutionStatus>
+where
+    R: AutoBossRuntime,
+{
+    let cleanup = runtime.cleanup_auto_boss(plan)?;
+    state.cleanup_completed = cleanup.completed;
+    let status = if cleanup.completed {
+        AutoBossRuntimeActionStatus::Succeeded
+    } else {
+        AutoBossRuntimeActionStatus::Failed
+    };
+    executed_actions.push(auto_boss_action_report(
+        AutoBossTaskPhase::Cleanup,
+        AutoBossRuntimeActionKind::Cleanup,
+        status,
+        None,
+        cleanup
+            .message
+            .clone()
+            .unwrap_or_else(|| "cleanup boundary completed".to_string()),
+        AutoBossRuntimeActionOutcome::Cleanup(cleanup.clone()),
+    ));
+
+    if cleanup.completed {
+        Ok(AutoBossExecutionStatus::Completed)
+    } else {
+        Ok(AutoBossExecutionStatus::CleanupFailed)
+    }
+}
+
+fn auto_boss_target_reward_count(param: &AutoBossParam) -> Option<u32> {
+    if param.specify_run_count {
+        Some(param.run_count.max(1) as u32)
+    } else {
+        None
+    }
+}
+
+fn auto_boss_round_context(
+    plan: &AutoBossExecutionPlan,
+    state: &AutoBossExecutorState,
+    should_claim_reward: bool,
+) -> AutoBossRuntimeRoundContext {
+    AutoBossRuntimeRoundContext {
+        round_index: state.current_round,
+        boss_name: plan.param.boss_name.clone(),
+        target_reward_count: state.target_reward_count,
+        claimed_rewards: state.rewards_claimed,
+        is_first_round: state.current_round <= 1,
+        should_claim_reward,
+    }
+}
+
+fn auto_boss_navigation_request(
+    plan: &AutoBossExecutionPlan,
+    kind: AutoBossNavigationKind,
+) -> AutoBossNavigationRequest {
+    let boss_name = plan.param.boss_name.clone();
+    let route_files = match kind {
+        AutoBossNavigationKind::FirstNavigation => plan.pathing_rule.first_navigation_files.clone(),
+        AutoBossNavigationKind::ReturnToStatue => Vec::new(),
+        AutoBossNavigationKind::RepositionForNextRound => {
+            if auto_boss_is_no_pathing_support(&boss_name) {
+                auto_boss_first_navigation_files(&boss_name)
+            } else if auto_boss_is_talk_to_start(&boss_name) {
+                vec![format!("{boss_name}战斗后快速前往.json")]
+            } else {
+                vec![format!("{boss_name}前往.json")]
+            }
+        }
+    };
+
+    AutoBossNavigationRequest {
+        kind,
+        boss_name,
+        route_files,
+        no_pathing_support: plan
+            .pathing_rule
+            .no_pathing_support_uses_force_teleport_and_key_mouse,
+        talk_to_start: plan
+            .reposition_rule
+            .talk_to_start_uses_after_fight_quick_route,
+        return_to_statue: kind == AutoBossNavigationKind::ReturnToStatue,
+    }
+}
+
+fn auto_boss_next_reposition_kind(plan: &AutoBossExecutionPlan) -> AutoBossNavigationKind {
+    if plan.loop_rule.return_to_statue_after_each_round_option {
+        AutoBossNavigationKind::ReturnToStatue
+    } else {
+        AutoBossNavigationKind::RepositionForNextRound
+    }
+}
+
+fn auto_boss_skip(
+    state: &mut AutoBossExecutorState,
+    executed_actions: &mut Vec<AutoBossRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoBossSkippedStep>,
+    phase: AutoBossTaskPhase,
+    action_kind: AutoBossRuntimeActionKind,
+    round_index: Option<u32>,
+    reason: AutoBossSkipReason,
+    status: AutoBossExecutionStatus,
+) -> AutoBossExecutionStatus {
+    if matches!(
+        reason,
+        AutoBossSkipReason::InsufficientResin
+            | AutoBossSkipReason::SupplementalResinUnavailable
+            | AutoBossSkipReason::RewardDisabledByRuntime
+            | AutoBossSkipReason::RewardPromptMissing
+    ) {
+        state.rewards_skipped += 1;
+    }
+    state.last_skip_reason = Some(reason);
+    skipped_steps.push(AutoBossSkippedStep {
+        action_kind,
+        round_index,
+        reason,
+    });
+    executed_actions.push(auto_boss_action_report(
+        phase,
+        action_kind,
+        AutoBossRuntimeActionStatus::Skipped,
+        round_index,
+        format!("skipped AutoBoss step: {:?}", reason),
+        AutoBossRuntimeActionOutcome::Skipped(reason),
+    ));
+    status
+}
+
+fn auto_boss_report(
+    plan: &AutoBossExecutionPlan,
+    status: AutoBossExecutionStatus,
+    state: AutoBossExecutorState,
+    executed_actions: Vec<AutoBossRuntimeActionReport>,
+    skipped_steps: Vec<AutoBossSkippedStep>,
+) -> AutoBossExecutionReport {
+    AutoBossExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: status == AutoBossExecutionStatus::Completed,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    }
+}
+
+fn auto_boss_action_report(
+    phase: AutoBossTaskPhase,
+    action_kind: AutoBossRuntimeActionKind,
+    status: AutoBossRuntimeActionStatus,
+    round_index: Option<u32>,
+    detail: impl Into<String>,
+    outcome: AutoBossRuntimeActionOutcome,
+) -> AutoBossRuntimeActionReport {
+    AutoBossRuntimeActionReport {
+        phase,
+        action_kind,
+        status,
+        round_index,
+        detail: detail.into(),
+        outcome,
+    }
 }
 
 pub fn auto_boss_supported_boss_names() -> Vec<String> {
@@ -1058,4 +1978,448 @@ fn f64_member<const N: usize>(value: &Value, names: [&str; N]) -> Option<f64> {
         .iter()
         .find_map(|name| value.get(*name))
         .and_then(Value::as_f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum RuntimeCall {
+        Startup,
+        Prepare(u32),
+        CheckResin(u32),
+        UseSupplementalResin(u32),
+        Navigate(u32, AutoBossNavigationKind, Vec<String>),
+        Fight(u32),
+        MoveToReward(u32),
+        TakeReward(u32),
+        RecognizeReward(u32),
+        Reposition(u32, AutoBossNavigationKind, Vec<String>),
+        Cleanup,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct FakeAutoBossRuntime {
+        calls: Vec<RuntimeCall>,
+        resin_checks: Vec<AutoBossResinCheckOutcome>,
+        supplemental_outcomes: Vec<AutoBossSupplementalResinOutcome>,
+        combat_outcomes: Vec<AutoBossCombatOutcome>,
+        reward_outcomes: Vec<AutoBossRewardOutcome>,
+        reward_navigation_outcomes: Vec<AutoBossRewardNavigationOutcome>,
+        cleanup_count: u32,
+    }
+
+    impl AutoBossRuntime for FakeAutoBossRuntime {
+        fn start_auto_boss(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+        ) -> Result<AutoBossStartupOutcome> {
+            self.calls.push(RuntimeCall::Startup);
+            Ok(AutoBossStartupOutcome {
+                completed: true,
+                combat_strategy_parsed: true,
+                screen_resolution_logged: true,
+                start_notification_sent: true,
+                message: None,
+            })
+        }
+
+        fn prepare_auto_boss_round(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+        ) -> Result<AutoBossPrepareOutcome> {
+            self.calls.push(RuntimeCall::Prepare(context.round_index));
+            Ok(AutoBossPrepareOutcome {
+                completed: true,
+                main_ui_ready: true,
+                party_switched: true,
+                message: None,
+            })
+        }
+
+        fn check_auto_boss_resin(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+        ) -> Result<AutoBossResinCheckOutcome> {
+            self.calls
+                .push(RuntimeCall::CheckResin(context.round_index));
+            Ok(if self.resin_checks.is_empty() {
+                AutoBossResinCheckOutcome {
+                    precheck_succeeded: true,
+                    original_resin: Some(160),
+                    can_claim_reward: true,
+                    message: None,
+                }
+            } else {
+                self.resin_checks.remove(0)
+            })
+        }
+
+        fn use_auto_boss_supplemental_resin(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+            _resin_check: &AutoBossResinCheckOutcome,
+        ) -> Result<AutoBossSupplementalResinOutcome> {
+            self.calls
+                .push(RuntimeCall::UseSupplementalResin(context.round_index));
+            Ok(if self.supplemental_outcomes.is_empty() {
+                AutoBossSupplementalResinOutcome {
+                    attempted: false,
+                    used_transient_resin: 0,
+                    used_fragile_resin: 0,
+                    original_resin_after: None,
+                    can_claim_reward: false,
+                    message: None,
+                }
+            } else {
+                self.supplemental_outcomes.remove(0)
+            })
+        }
+
+        fn navigate_auto_boss_to_boss(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+            request: &AutoBossNavigationRequest,
+        ) -> Result<AutoBossNavigationOutcome> {
+            self.calls.push(RuntimeCall::Navigate(
+                context.round_index,
+                request.kind,
+                request.route_files.clone(),
+            ));
+            Ok(AutoBossNavigationOutcome {
+                completed: true,
+                teleport_used: request.no_pathing_support,
+                pathing_used: !request.route_files.is_empty(),
+                route_files: request.route_files.clone(),
+                message: None,
+            })
+        }
+
+        fn run_auto_boss_fight(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+        ) -> Result<AutoBossCombatOutcome> {
+            self.calls.push(RuntimeCall::Fight(context.round_index));
+            Ok(if self.combat_outcomes.is_empty() {
+                AutoBossCombatOutcome {
+                    completed: true,
+                    victory: true,
+                    normal_end: true,
+                    duration_ms: Some(1_000),
+                    message: None,
+                }
+            } else {
+                self.combat_outcomes.remove(0)
+            })
+        }
+
+        fn move_auto_boss_to_reward(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+        ) -> Result<AutoBossRewardNavigationOutcome> {
+            self.calls
+                .push(RuntimeCall::MoveToReward(context.round_index));
+            Ok(if self.reward_navigation_outcomes.is_empty() {
+                AutoBossRewardNavigationOutcome {
+                    completed: true,
+                    reward_prompt_found: true,
+                    message: None,
+                }
+            } else {
+                self.reward_navigation_outcomes.remove(0)
+            })
+        }
+
+        fn take_auto_boss_reward(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+        ) -> Result<AutoBossRewardOutcome> {
+            self.calls
+                .push(RuntimeCall::TakeReward(context.round_index));
+            Ok(if self.reward_outcomes.is_empty() {
+                AutoBossRewardOutcome {
+                    claimed: true,
+                    original_resin_spent: AUTO_BOSS_ORIGINAL_RESIN_COST,
+                    skip_reason: None,
+                    message: None,
+                }
+            } else {
+                self.reward_outcomes.remove(0)
+            })
+        }
+
+        fn recognize_auto_boss_reward(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+        ) -> Result<AutoBossRewardRecognitionOutcome> {
+            self.calls
+                .push(RuntimeCall::RecognizeReward(context.round_index));
+            Ok(AutoBossRewardRecognitionOutcome {
+                attempted: true,
+                recognized: true,
+                message: None,
+            })
+        }
+
+        fn reposition_auto_boss_for_next_round(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+            context: &AutoBossRuntimeRoundContext,
+            request: &AutoBossNavigationRequest,
+        ) -> Result<AutoBossRepositionOutcome> {
+            self.calls.push(RuntimeCall::Reposition(
+                context.round_index,
+                request.kind,
+                request.route_files.clone(),
+            ));
+            Ok(AutoBossRepositionOutcome {
+                completed: true,
+                returned_to_statue: request.return_to_statue,
+                route_files: request.route_files.clone(),
+                message: None,
+            })
+        }
+
+        fn cleanup_auto_boss(
+            &mut self,
+            _plan: &AutoBossExecutionPlan,
+        ) -> Result<AutoBossCleanupOutcome> {
+            self.calls.push(RuntimeCall::Cleanup);
+            self.cleanup_count += 1;
+            Ok(AutoBossCleanupOutcome {
+                completed: true,
+                released_all_keys: true,
+                released_left_mouse: true,
+                end_notification_sent: true,
+                message: None,
+            })
+        }
+    }
+
+    #[test]
+    fn auto_boss_execute_single_boss_success_loop() {
+        let root = test_root("auto-boss-execute-success");
+        let plan = test_plan(
+            &root,
+            serde_json::json!({
+                "bossName": "爆炎树",
+                "strategyName": "boss",
+                "teamName": "Boss Team",
+                "specifyRunCount": true,
+                "runCount": 1,
+                "rewardRecognitionEnabled": true
+            }),
+        );
+        assert!(plan.executor_ready);
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("desktop live adapters remain pending")));
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("full pathing/fight adapters remain pending")));
+
+        let mut runtime = FakeAutoBossRuntime::default();
+        let report = execute_auto_boss_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoBossExecutionStatus::Completed);
+        assert!(report.completed);
+        assert_eq!(report.state.rounds_started, 1);
+        assert_eq!(report.state.fights_succeeded, 1);
+        assert_eq!(report.state.rewards_claimed, 1);
+        assert_eq!(report.state.original_resin_spent, 40);
+        assert!(report.state.cleanup_completed);
+        assert_eq!(runtime.cleanup_count, 1);
+        assert!(runtime.calls.contains(&RuntimeCall::Navigate(
+            1,
+            AutoBossNavigationKind::FirstNavigation,
+            vec!["爆炎树前往.json".to_string()]
+        )));
+        assert!(runtime.calls.contains(&RuntimeCall::RecognizeReward(1)));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn auto_boss_execute_insufficient_resin_skips_without_reward() {
+        let root = test_root("auto-boss-execute-no-resin");
+        let plan = test_plan(
+            &root,
+            serde_json::json!({
+                "bossName": "爆炎树",
+                "strategyName": "boss",
+                "specifyRunCount": false
+            }),
+        );
+        let mut runtime = FakeAutoBossRuntime {
+            resin_checks: vec![AutoBossResinCheckOutcome {
+                precheck_succeeded: true,
+                original_resin: Some(20),
+                can_claim_reward: false,
+                message: Some("not enough resin".to_string()),
+            }],
+            ..FakeAutoBossRuntime::default()
+        };
+
+        let report = execute_auto_boss_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoBossExecutionStatus::ResinExhausted);
+        assert!(!report.completed);
+        assert!(report.state.stopped_by_resin);
+        assert_eq!(report.state.rewards_claimed, 0);
+        assert_eq!(report.state.rewards_skipped, 1);
+        assert_eq!(
+            report.state.last_skip_reason,
+            Some(AutoBossSkipReason::InsufficientResin)
+        );
+        assert_eq!(runtime.cleanup_count, 1);
+        assert!(!runtime
+            .calls
+            .iter()
+            .any(|call| matches!(call, RuntimeCall::Fight(_))));
+        assert!(!runtime
+            .calls
+            .iter()
+            .any(|call| matches!(call, RuntimeCall::TakeReward(_))));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn auto_boss_execute_combat_failure_records_failure_and_stops() {
+        let root = test_root("auto-boss-execute-combat-failure");
+        let plan = test_plan(
+            &root,
+            serde_json::json!({
+                "bossName": "爆炎树",
+                "strategyName": "boss",
+                "specifyRunCount": true,
+                "runCount": 2
+            }),
+        );
+        let mut runtime = FakeAutoBossRuntime {
+            combat_outcomes: vec![AutoBossCombatOutcome {
+                completed: true,
+                victory: false,
+                normal_end: false,
+                duration_ms: Some(500),
+                message: Some("fight failed".to_string()),
+            }],
+            ..FakeAutoBossRuntime::default()
+        };
+
+        let report = execute_auto_boss_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoBossExecutionStatus::CombatFailed);
+        assert!(!report.completed);
+        assert_eq!(report.state.fights_attempted, 1);
+        assert_eq!(report.state.fights_succeeded, 0);
+        assert_eq!(report.state.combat_failures, 1);
+        assert_eq!(report.state.rewards_claimed, 0);
+        assert_eq!(runtime.cleanup_count, 1);
+        assert!(report.executed_actions.iter().any(|action| {
+            action.action_kind == AutoBossRuntimeActionKind::RunAutoFight
+                && action.status == AutoBossRuntimeActionStatus::Failed
+        }));
+        assert!(!runtime
+            .calls
+            .iter()
+            .any(|call| matches!(call, RuntimeCall::MoveToReward(_))));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn auto_boss_execute_cleanup_runs_after_reward_skip() {
+        let root = test_root("auto-boss-execute-cleanup-skip");
+        let plan = test_plan(
+            &root,
+            serde_json::json!({
+                "bossName": "爆炎树",
+                "strategyName": "boss",
+                "specifyRunCount": true,
+                "runCount": 1
+            }),
+        );
+        let mut runtime = FakeAutoBossRuntime {
+            reward_outcomes: vec![AutoBossRewardOutcome {
+                claimed: false,
+                original_resin_spent: 0,
+                skip_reason: Some(AutoBossSkipReason::RewardDisabledByRuntime),
+                message: Some("runtime declined reward".to_string()),
+            }],
+            ..FakeAutoBossRuntime::default()
+        };
+
+        let report = execute_auto_boss_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoBossExecutionStatus::RewardSkipped);
+        assert!(!report.completed);
+        assert_eq!(report.state.rewards_claimed, 0);
+        assert_eq!(report.state.rewards_skipped, 1);
+        assert!(report.state.cleanup_completed);
+        assert_eq!(runtime.cleanup_count, 1);
+        assert_eq!(runtime.calls.last(), Some(&RuntimeCall::Cleanup));
+        assert_eq!(report.skipped_steps.len(), 1);
+        assert_eq!(
+            report.skipped_steps[0].reason,
+            AutoBossSkipReason::RewardDisabledByRuntime
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_plan(root: &Path, auto_boss_config: Value) -> AutoBossExecutionPlan {
+        write_test_file(
+            &root.join("User").join("AutoFight").join("boss.txt"),
+            "钟离 e, wait(0.2)",
+        );
+        let boss_name = auto_boss_config
+            .get("bossName")
+            .and_then(Value::as_str)
+            .unwrap_or("爆炎树");
+        for route in auto_boss_required_route_files(boss_name) {
+            write_test_file(
+                &root
+                    .join("GameTask")
+                    .join("AutoBoss")
+                    .join("Assets")
+                    .join("Pathing")
+                    .join(route),
+                r#"{"positions":[]}"#,
+            );
+        }
+        let config = AutoBossExecutionConfig::from_value(Some(&serde_json::json!({
+            "autoBossConfig": auto_boss_config
+        })));
+        plan_auto_boss(root, config).unwrap()
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("bgi-task-{name}-{nonce}"))
+    }
+
+    fn write_test_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
 }

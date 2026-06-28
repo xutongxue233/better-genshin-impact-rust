@@ -114,12 +114,10 @@ impl ScriptHostRuntime {
                     sink,
                 );
             }
-            "records" | "Records" => {
-                return Ok(ScriptHostCallResult::NotificationRecords(
-                    self.notification.records().to_vec(),
-                ));
-            }
-            _ => return Err(unknown_method(&call)),
+            "records" | "Records" => Ok(ScriptHostCallResult::NotificationRecords(
+                self.notification.records().to_vec(),
+            )),
+            _ => Err(unknown_method(&call)),
         }
     }
 

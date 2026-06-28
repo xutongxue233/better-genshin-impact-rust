@@ -1,3 +1,11 @@
+#![allow(
+    clippy::bool_assert_comparison,
+    clippy::excessive_precision,
+    clippy::field_reassign_with_default,
+    clippy::manual_contains,
+    clippy::useless_conversion
+)]
+
 use super::*;
 use bgi_core::{
     AutoCookConfig, AutoDomainConfig, AutoEatConfig, AutoFishingConfig, AutoGeniusInvokationConfig,
@@ -2558,7 +2566,7 @@ fn auto_eat_food_plan_preserves_legacy_inventory_food_flow_and_result_contract()
     assert_eq!(plan.task_key, AUTO_EAT_FOOD_TASK_KEY);
     assert_eq!(plan.script_task_name, AUTO_EAT_SCRIPT_TASK_NAME);
     assert_eq!(plan.capture_size, Size::new(1280, 720));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert_eq!(plan.food_name.as_deref(), Some("甜甜花酿鸡"));
     assert_eq!(
         plan.mode,
@@ -2680,6 +2688,12 @@ fn auto_eat_food_plan_preserves_legacy_inventory_food_flow_and_result_contract()
         food_catalog.rust_execution_surface(),
         TaskRustExecutionSurface::ExecutionPlanOnly
     );
+    assert!(food_catalog
+        .notes
+        .contains("desktop script-dispatcher live execution now covers"));
+    assert!(food_catalog
+        .notes
+        .contains("inventory-food capture/input/ONNX/OCR/click adapters remain pending"));
 }
 
 #[test]
@@ -2866,6 +2880,390 @@ fn auto_eat_food_decision_preserves_legacy_return_values_and_full_width_ocr() {
             asset: AUTO_EAT_FOOD_WHITE_CONFIRM_ASSET.to_string(),
             detected: false
         }));
+}
+
+#[derive(Debug, Default)]
+struct FakeAutoEatFoodRuntime {
+    common_job_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    open_outcomes: VecDeque<CountInventoryOpenInventoryOutcome>,
+    confirm_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    open_tab_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    load_classifier_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    grid_items: VecDeque<Vec<CountInventoryGridItemFrame>>,
+    crop_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    infer_outcomes: VecDeque<Vec<CountInventoryGridIconMatch>>,
+    ocr_texts: VecDeque<Option<String>>,
+    click_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    delay_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    confirm_detections: VecDeque<bool>,
+    clear_outcomes: VecDeque<CommonJobRuntimeOutcome>,
+    common_job_calls: Vec<String>,
+    open_calls: usize,
+    confirm_calls: Vec<(String, f64)>,
+    open_tab_calls: Vec<CountInventoryOpenInventoryRule>,
+    load_classifier_calls: Vec<GridIconClassifierRule>,
+    enumerate_calls: Vec<(GridTemplate, GridItemDetectionRule, GridScrollRule)>,
+    crop_calls: Vec<(Vec<CountInventoryGridItemFrame>, GridIconCropRule)>,
+    infer_calls: Vec<(Vec<CountInventoryGridItemFrame>, GridIconClassifierRule)>,
+    ocr_calls: Vec<(CountInventoryGridIconMatch, GridItemCountOcrRule)>,
+    clicked_items: Vec<CountInventoryGridIconMatch>,
+    delays: Vec<u64>,
+    confirm_assets: Vec<String>,
+    clear_calls: usize,
+    logs: Vec<String>,
+}
+
+impl FakeAutoEatFoodRuntime {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_open_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = CountInventoryOpenInventoryOutcome>,
+    ) -> Self {
+        self.open_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_grid_items(
+        mut self,
+        batches: impl IntoIterator<Item = Vec<CountInventoryGridItemFrame>>,
+    ) -> Self {
+        self.grid_items = batches.into_iter().collect();
+        self
+    }
+
+    fn with_infer_outcomes(
+        mut self,
+        outcomes: impl IntoIterator<Item = Vec<CountInventoryGridIconMatch>>,
+    ) -> Self {
+        self.infer_outcomes = outcomes.into_iter().collect();
+        self
+    }
+
+    fn with_ocr_texts(mut self, texts: impl IntoIterator<Item = Option<String>>) -> Self {
+        self.ocr_texts = texts.into_iter().collect();
+        self
+    }
+
+    fn with_confirm_detections(mut self, detections: impl IntoIterator<Item = bool>) -> Self {
+        self.confirm_detections = detections.into_iter().collect();
+        self
+    }
+}
+
+impl AutoEatFoodRuntime for FakeAutoEatFoodRuntime {
+    fn execute_auto_eat_food_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.common_job_calls.push(task_key.to_string());
+        Ok(self
+            .common_job_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn open_auto_eat_food_inventory(
+        &mut self,
+        _rule: &CountInventoryOpenInventoryRule,
+    ) -> Result<CountInventoryOpenInventoryOutcome> {
+        self.open_calls += 1;
+        Ok(self
+            .open_outcomes
+            .pop_front()
+            .unwrap_or(CountInventoryOpenInventoryOutcome {
+                expired_item_prompt_detected: false,
+                inventory_tab_checked: true,
+                still_on_main_ui: false,
+            }))
+    }
+
+    fn confirm_auto_eat_food_expired_item_prompt(
+        &mut self,
+        confirm_asset: &str,
+        crop_bottom_ratio: f64,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.confirm_calls
+            .push((confirm_asset.to_string(), crop_bottom_ratio));
+        Ok(self
+            .confirm_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn open_auto_eat_food_inventory_tab(
+        &mut self,
+        rule: &CountInventoryOpenInventoryRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.open_tab_calls.push(rule.clone());
+        Ok(self
+            .open_tab_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn load_auto_eat_food_grid_icon_classifier(
+        &mut self,
+        rule: &GridIconClassifierRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.load_classifier_calls.push(rule.clone());
+        Ok(self
+            .load_classifier_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn enumerate_auto_eat_food_grid_items(
+        &mut self,
+        template: &GridTemplate,
+        detection_rule: &GridItemDetectionRule,
+        scroll_rule: &GridScrollRule,
+    ) -> Result<Vec<CountInventoryGridItemFrame>> {
+        self.enumerate_calls.push((
+            template.clone(),
+            detection_rule.clone(),
+            scroll_rule.clone(),
+        ));
+        Ok(self.grid_items.pop_front().unwrap_or_default())
+    }
+
+    fn crop_auto_eat_food_grid_icons(
+        &mut self,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconCropRule,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.crop_calls.push((items.to_vec(), rule.clone()));
+        Ok(self
+            .crop_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn infer_auto_eat_food_grid_icons(
+        &mut self,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconClassifierRule,
+    ) -> Result<Vec<CountInventoryGridIconMatch>> {
+        self.infer_calls.push((items.to_vec(), rule.clone()));
+        Ok(self.infer_outcomes.pop_front().unwrap_or_default())
+    }
+
+    fn ocr_auto_eat_food_item_count(
+        &mut self,
+        matched: &CountInventoryGridIconMatch,
+        rule: &GridItemCountOcrRule,
+    ) -> Result<Option<String>> {
+        self.ocr_calls.push((matched.clone(), rule.clone()));
+        Ok(self.ocr_texts.pop_front().unwrap_or(None))
+    }
+
+    fn click_auto_eat_food_item(
+        &mut self,
+        matched: &CountInventoryGridIconMatch,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.clicked_items.push(matched.clone());
+        Ok(self
+            .click_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn delay_auto_eat_food_after_item_click(
+        &mut self,
+        duration_ms: u64,
+    ) -> Result<CommonJobRuntimeOutcome> {
+        self.delays.push(duration_ms);
+        Ok(self
+            .delay_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::None))
+    }
+
+    fn click_auto_eat_food_white_confirm_if_present(&mut self, asset: &str) -> Result<bool> {
+        self.confirm_assets.push(asset.to_string());
+        Ok(self.confirm_detections.pop_front().unwrap_or(false))
+    }
+
+    fn clear_auto_eat_food_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        self.clear_calls += 1;
+        Ok(self
+            .clear_outcomes
+            .pop_front()
+            .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
+    }
+
+    fn log_auto_eat_food(&mut self, message: &str) -> Result<CommonJobRuntimeOutcome> {
+        self.logs.push(message.to_string());
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+#[test]
+fn auto_eat_food_executor_scans_inventory_clicks_food_and_returns_count() {
+    let plan = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodName": "甜甜花酿鸡"
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut runtime = FakeAutoEatFoodRuntime::new()
+        .with_open_outcomes([CountInventoryOpenInventoryOutcome {
+            expired_item_prompt_detected: true,
+            inventory_tab_checked: false,
+            still_on_main_ui: false,
+        }])
+        .with_grid_items([vec![fake_inventory_frame(0), fake_inventory_frame(1)]])
+        .with_infer_outcomes([vec![
+            fake_inventory_match(0, "晶核"),
+            fake_inventory_match(1, "甜甜花酿鸡"),
+        ]])
+        .with_ocr_texts([Some("１２".to_string())])
+        .with_confirm_detections([true]);
+
+    let report = execute_auto_eat_food_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.task_key, AUTO_EAT_FOOD_TASK_KEY);
+    assert_eq!(report.state.initial_return_main_ui_completed, Some(true));
+    assert_eq!(report.state.expired_item_prompt_confirmed, Some(true));
+    assert_eq!(report.state.inventory_tab_opened, Some(true));
+    assert!(report.state.classifier_loaded);
+    assert!(report.state.grid_icons_cropped);
+    assert_eq!(report.state.grid_items.len(), 2);
+    assert_eq!(
+        report
+            .state
+            .target_match
+            .as_ref()
+            .map(|matched| matched.item_name.as_str()),
+        Some("甜甜花酿鸡")
+    );
+    assert_eq!(report.state.ocr_count_text.as_deref(), Some("１２"));
+    assert_eq!(report.state.confirm_button_detected, Some(true));
+    assert!(report.state.vision_drawings_cleared);
+    assert_eq!(report.state.final_return_main_ui_completed, Some(true));
+    let decision = report.state.decision.as_ref().unwrap();
+    assert_eq!(decision.outcome, AutoEatFoodUseOutcome::Consumed);
+    assert_eq!(decision.normalized_count_text.as_deref(), Some("12"));
+    assert_eq!(decision.return_value, Some(11));
+    assert_eq!(
+        runtime.common_job_calls,
+        vec![
+            RETURN_MAIN_UI_TASK_KEY.to_string(),
+            RETURN_MAIN_UI_TASK_KEY.to_string()
+        ]
+    );
+    assert_eq!(runtime.open_calls, 1);
+    assert_eq!(runtime.confirm_calls.len(), 1);
+    assert_eq!(runtime.open_tab_calls.len(), 1);
+    assert_eq!(runtime.ocr_calls.len(), 1);
+    assert_eq!(
+        runtime
+            .clicked_items
+            .iter()
+            .map(|matched| matched.item_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["甜甜花酿鸡"]
+    );
+    assert_eq!(runtime.delays, vec![AUTO_EAT_FOOD_CONFIRM_DELAY_MS]);
+    assert_eq!(
+        runtime.confirm_assets,
+        vec![AUTO_EAT_FOOD_WHITE_CONFIRM_ASSET.to_string()]
+    );
+    assert_eq!(runtime.clear_calls, 1);
+    assert!(report.executed_actions.iter().any(|action| {
+        action.action_kind == AutoEatFoodRuntimeActionKind::ClickMatchedFoodItem
+    }));
+    assert!(report.executed_actions.iter().any(|action| {
+        action.action_kind == AutoEatFoodRuntimeActionKind::ClickWhiteConfirmIfPresent
+    }));
+    assert!(report
+        .executed_actions
+        .iter()
+        .any(|action| { action.action_kind == AutoEatFoodRuntimeActionKind::ReturnMainUi }));
+}
+
+#[test]
+fn auto_eat_food_executor_returns_not_found_without_clicking() {
+    let plan = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodName": "甜甜花酿鸡"
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut runtime = FakeAutoEatFoodRuntime::new()
+        .with_grid_items([vec![fake_inventory_frame(0)]])
+        .with_infer_outcomes([vec![fake_inventory_match(0, "晶核")]]);
+
+    let report = execute_auto_eat_food_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.target_match.is_none());
+    assert_eq!(report.state.ocr_count_text, None);
+    assert_eq!(report.state.confirm_button_detected, None);
+    let decision = report.state.decision.as_ref().unwrap();
+    assert_eq!(decision.outcome, AutoEatFoodUseOutcome::NotFound);
+    assert_eq!(
+        decision.return_value,
+        Some(COUNT_INVENTORY_SINGLE_NOT_FOUND)
+    );
+    assert!(runtime.clicked_items.is_empty());
+    assert!(runtime.ocr_calls.is_empty());
+    assert!(runtime.confirm_assets.is_empty());
+    assert_eq!(runtime.clear_calls, 1);
+    assert_eq!(
+        runtime.common_job_calls,
+        vec![
+            RETURN_MAIN_UI_TASK_KEY.to_string(),
+            RETURN_MAIN_UI_TASK_KEY.to_string()
+        ]
+    );
+    assert!(runtime
+        .logs
+        .iter()
+        .any(|message| message == "没有找到甜甜花酿鸡"));
+}
+
+#[test]
+fn auto_eat_food_executor_skips_missing_default_without_inventory_scan() {
+    let plan = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodEffectType": "DEFBoostingDish",
+            "autoEatConfig": {
+                "defaultDefBoostingDishName": " "
+            }
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut runtime = FakeAutoEatFoodRuntime::new();
+
+    let report = execute_auto_eat_food_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(runtime.open_calls, 0);
+    assert!(runtime.common_job_calls.is_empty());
+    assert_eq!(runtime.clear_calls, 1);
+    assert!(runtime
+        .logs
+        .iter()
+        .any(|message| message == "缺少默认的防御类料理配置，跳过吃Buff"));
+    assert!(report
+        .executed_actions
+        .iter()
+        .any(|action| { action.action_kind == AutoEatFoodRuntimeActionKind::Skip }));
+    assert_eq!(
+        report
+            .state
+            .decision
+            .as_ref()
+            .map(|decision| decision.outcome),
+        Some(AutoEatFoodUseOutcome::MissingDefaultSkipped)
+    );
 }
 
 fn auto_eat_enabled_plan(check_interval: u64, eat_interval: u64) -> AutoEatExecutionPlan {
@@ -3632,7 +4030,7 @@ fn auto_wood_plan_preserves_legacy_params_assets_ocr_and_refresh_rules() {
     assert_eq!(plan.display_name, "自动伐木");
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
     assert_eq!(plan.asset_scale, 2.0);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert_eq!(plan.param_rule.raw_round_num, 0);
     assert_eq!(plan.param_rule.normalized_round_num, 9999);
     assert_eq!(plan.param_rule.raw_daily_max_count, 0);
@@ -3909,7 +4307,7 @@ fn auto_domain_plan_preserves_legacy_entry_combat_reward_and_resin_rules() {
     assert_eq!(plan.display_name, "自动秘境");
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
     assert_eq!(plan.asset_scale, 2.0);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert_eq!(plan.param.domain_round_num, 9999);
     assert_eq!(plan.param.combat_strategy_path, "User/AutoFight/daily.txt");
     assert_eq!(plan.param.party_name, "daily party");
@@ -4269,7 +4667,7 @@ fn auto_genius_invokation_plan_preserves_legacy_strategy_assets_and_duel_rules()
     assert_eq!(plan.display_name, "自动七圣召唤");
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
     assert_eq!(plan.asset_scale, 2.0);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert_eq!(plan.config_rule.strategy_name, "test");
     assert_eq!(plan.config_rule.sleep_delay_ms, 250);
     assert_eq!(plan.config_rule.sleep_delay_max_ms, 5_000);
@@ -4498,7 +4896,7 @@ fn auto_track_path_plan_preserves_legacy_way_file_tracking_and_jump_rules() {
     assert_eq!(plan.display_name, "自动路线");
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
     assert_eq!(plan.path_file, "log/way/way2.json");
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert!(!plan.config_rule.map_zoom_enabled);
     assert_eq!(plan.config_rule.map_zoom_out_distance, 1200);
@@ -4598,11 +4996,15 @@ fn auto_track_path_plan_preserves_legacy_way_file_tracking_and_jump_rules() {
     assert_eq!(plan.jump_rule.first_jump_interval_ms, 300);
     assert_eq!(plan.jump_rule.second_jump_followup_sleep_ms, 3_500);
     assert_eq!(plan.jump_rule.interrupted_motion_sleep_ms, 1_600);
-    assert_eq!(plan.steps.len(), 12);
+    assert_eq!(plan.steps.len(), 13);
+    assert!(plan
+        .steps
+        .iter()
+        .any(|step| step.action == AutoTrackPathAction::ClearOverlayAndReleaseSemaphore));
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("CharacterOrientation")));
+        .any(|item| item.contains("Rust injectable execution boundary")));
 
     assert!(normalize_auto_track_path_file("log/way/way2.json").is_ok());
     assert!(normalize_auto_track_path_file("../way2.json").is_err());
@@ -4670,7 +5072,7 @@ fn auto_boss_plan_preserves_legacy_boss_data_routes_resin_combat_and_reward_rule
     assert_eq!(plan.param.revive_retry_count, 4);
     assert!(plan.param.return_to_statue_after_each_round);
     assert!(plan.param.reward_recognition_enabled);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert!(plan.boss_data.selected_boss_supported);
     assert_eq!(
@@ -4931,7 +5333,7 @@ fn auto_music_game_plan_preserves_legacy_lane_pixels_album_and_skip_main_ui_rule
     assert_eq!(plan.config_rule.normalized_music_level, "所有");
     assert_eq!(plan.config_rule.empty_music_level_defaults_to, "传说");
     assert_eq!(plan.config_rule.all_music_level_value, "所有");
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert!(plan.startup_rule.checks_game_resolution);
     assert!(plan.startup_rule.logs_close_task_reminder);
@@ -5646,7 +6048,7 @@ fn auto_track_plan_preserves_legacy_mission_distance_teleport_and_blue_point_rul
     assert_eq!(plan.display_name, "自动追踪");
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
     assert_eq!(plan.asset_scale, 1.25);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert!(plan.config_rule.coupled_to_auto_skip_config_section);
     assert!(
@@ -5779,7 +6181,7 @@ fn auto_track_plan_preserves_legacy_mission_distance_teleport_and_blue_point_rul
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("QuickTeleport")));
+        .any(|item| item.contains("injectable Rust AutoTrack executor boundary")));
 
     let common_asset_root = task_asset_root()
         .join("GameTask")
@@ -5893,7 +6295,7 @@ fn auto_ley_line_outcrop_plan_preserves_legacy_route_resin_reward_and_handbook_r
     assert_eq!(plan.display_name, "自动地脉花");
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
     assert_eq!(plan.asset_scale, 1.25);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert_eq!(plan.validation_rule.normalized_count, 1);
     assert_eq!(plan.validation_rule.normalized_timeout_seconds, 45);
     assert_eq!(
@@ -6027,7 +6429,7 @@ fn auto_fish_plan_preserves_legacy_trigger_templates_bite_and_bar_rules() {
 
     assert_eq!(plan.task_key, AUTO_FISH_TASK_KEY);
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert!(plan.config_rule.enabled);
     assert!(plan.config_rule.auto_throw_rod_enabled);
     assert_eq!(plan.config_rule.auto_throw_rod_timeout_seconds, 22);
@@ -6253,11 +6655,11 @@ fn auto_fish_plan_preserves_legacy_trigger_templates_bite_and_bar_rules() {
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("OpenCV")));
+        .any(|item| item.contains("capture/template/text/contour/input/overlay")));
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("mouse left-button")));
+        .any(|item| item.contains("BgiFish YOLO predictor")));
     assert!(plan
         .pending_native
         .iter()
@@ -6325,7 +6727,7 @@ fn auto_fishing_task_plan_preserves_legacy_full_task_behavior_tree_models_and_ti
     assert_eq!(plan.task_key, AUTO_FISHING_TASK_KEY);
     assert_eq!(plan.display_name, "Auto Fishing Task");
     assert_eq!(plan.capture_size, Size::new(1280, 720));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
     assert_eq!(plan.config_rule.whole_process_timeout_seconds, 444);
     assert_eq!(plan.config_rule.throw_rod_timeout_seconds, 22);
     assert_eq!(
@@ -6640,7 +7042,7 @@ fn auto_fishing_task_plan_preserves_legacy_full_task_behavior_tree_models_and_ti
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("Blackboard reset/state contract")));
+        .any(|item| item.contains("injectable executor boundary")));
     assert!(plan
         .pending_native
         .iter()
@@ -6652,7 +7054,7 @@ fn auto_fishing_task_plan_preserves_legacy_full_task_behavior_tree_models_and_ti
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("pure retry/timeout/crop")));
+        .any(|item| item.contains("EnterFishingMode")));
     assert!(plan
         .pending_native
         .iter()
@@ -9498,6 +9900,30 @@ fn map_mask_plan_preserves_legacy_big_map_mini_map_provider_and_overlay_rules() 
         MAP_MASK_TEYVAT_256_SIFT_MAT
     );
     assert_eq!(plan.big_map_rule.layer_256_to_2048_scale, 8);
+    let sift_rule = &plan.big_map_rule.sift_recognition_rule;
+    assert_eq!(
+        plan.big_map_rule.feature_keypoints_asset,
+        sift_rule.feature_keypoints_asset
+    );
+    assert_eq!(
+        plan.big_map_rule.feature_mat_asset,
+        sift_rule.feature_mat_asset
+    );
+    assert_eq!(
+        plan.big_map_rule.layer_256_to_2048_scale,
+        sift_rule.feature_layer.image_to_2048_scale
+    );
+    assert_eq!(sift_rule.matching_method, "SIFT");
+    assert_eq!(sift_rule.feature_detector, "SIFT");
+    assert_eq!(sift_rule.matcher, "FlannBased");
+    assert_eq!(sift_rule.query_downscale, 0.25);
+    assert_eq!(sift_rule.feature_layer.map, "Teyvat");
+    assert_eq!(sift_rule.feature_layer.floor, 0);
+    assert_eq!(sift_rule.feature_layer.source_tile_size, 256);
+    assert_eq!(sift_rule.feature_split_rows, 60);
+    assert_eq!(sift_rule.feature_split_cols, 88);
+    assert_eq!(sift_rule.prev_rect_expand_blocks, 1);
+    assert!(sift_rule.fallback_full_search);
     assert_eq!(
         plan.big_map_rule.reject_when_width_lt_and_height_lt.width,
         50
@@ -12723,7 +13149,7 @@ fn realtime_auto_eat_invocation_exposes_executor_ready_rust_tick_plan() {
 }
 
 #[test]
-fn realtime_auto_fish_invocation_exposes_rust_tick_plan_without_executor_ready() {
+fn realtime_auto_fish_invocation_exposes_executor_ready_rust_tick_plan() {
     let plan = TaskInvocationPlan::from_script_dispatcher_command(
         ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
             name: "AutoFish".to_string(),
@@ -12768,7 +13194,237 @@ fn realtime_auto_fish_invocation_exposes_rust_tick_plan_without_executor_ready()
             height: 100
         }
     );
-    assert!(!auto_fish.executor_ready);
+    assert!(auto_fish.executor_ready);
+}
+
+#[test]
+fn independent_task_invocation_context_expands_auto_pathing_plan() {
+    let root = unique_test_root("task-invocation-context-auto-pathing");
+    write_test_file(
+        &root
+            .join("User")
+            .join("AutoPathing")
+            .join("liyue")
+            .join("route.json"),
+        r#"{
+                "info": { "name": "context route", "type": "mining", "map_name": "Teyvat" },
+                "config": { "realtime_triggers": { "AutoPick": true } },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "target", "action": "fight" }
+                ]
+            }"#,
+    );
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: "AutoPathing".to_string(),
+            config: serde_json::json!({
+                "route": "liyue/route.json"
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+
+    let default_context =
+        evaluate_task_invocation_plan(plan.clone(), TaskInvocationExecutionMode::ExecuteReady);
+    assert_eq!(
+        default_context.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(default_context.independent_task_execution_plan.is_none());
+
+    let with_context = evaluate_task_invocation_plan_with_context(
+        plan,
+        TaskInvocationExecutionMode::ExecuteReady,
+        &TaskInvocationPlanningContext::with_working_directory(&root),
+    );
+
+    assert_eq!(
+        with_context.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(independent_plan) = with_context.independent_task_execution_plan.as_deref() else {
+        panic!("expected AutoPathing independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::AutoPathingPlan(auto_pathing_plan) = independent_plan else {
+        panic!("expected AutoPathing plan");
+    };
+    assert_eq!(auto_pathing_plan.summary.name, "context route");
+    assert_eq!(
+        auto_pathing_plan.normalized_path,
+        PathBuf::from("liyue").join("route.json")
+    );
+    assert_eq!(auto_pathing_plan.execution_plan.segment_count, 1);
+    assert_eq!(auto_pathing_plan.execution_plan.waypoint_count, 2);
+    assert_eq!(auto_pathing_plan.execution_plan.expected_fight_count, 1);
+    assert!(
+        auto_pathing_plan
+            .execution_plan
+            .autopick_realtime_trigger_enabled
+    );
+    assert!(!with_context.executed);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn independent_task_invocation_context_expands_auto_boss_plan() {
+    let root = unique_test_root("task-invocation-context-auto-boss");
+    write_test_file(
+        &root.join("User").join("AutoFight").join("boss.txt"),
+        "香菱 q, wait(0.2)",
+    );
+    write_test_file(
+        &root
+            .join("GameTask")
+            .join("AutoBoss")
+            .join("Assets")
+            .join("Pathing")
+            .join("爆炎树前往.json"),
+        r#"{"positions":[]}"#,
+    );
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: AUTO_BOSS_TASK_KEY.to_string(),
+            config: serde_json::json!({
+                "bossName": "爆炎树",
+                "strategyName": "boss"
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+
+    let default_context =
+        evaluate_task_invocation_plan(plan.clone(), TaskInvocationExecutionMode::ExecuteReady);
+    assert_eq!(
+        default_context.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(default_context.independent_task_execution_plan.is_none());
+    assert!(default_context
+        .message
+        .contains("pass a working-directory planning context"));
+    assert!(default_context
+        .message
+        .contains("desktop live adapter remains pending"));
+
+    let with_context = evaluate_task_invocation_plan_with_context(
+        plan,
+        TaskInvocationExecutionMode::ExecuteReady,
+        &TaskInvocationPlanningContext::with_working_directory(&root),
+    );
+
+    assert_eq!(
+        with_context.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(with_context
+        .message
+        .contains("executor-ready Rust independent-task boundary"));
+    assert!(with_context
+        .message
+        .contains("desktop live adapter remains pending"));
+    let Some(independent_plan) = with_context.independent_task_execution_plan.as_deref() else {
+        panic!("expected AutoBoss independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::AutoBossPlan(auto_boss_plan) = independent_plan else {
+        panic!("expected AutoBoss plan");
+    };
+    assert_eq!(auto_boss_plan.task_key, AUTO_BOSS_TASK_KEY);
+    assert_eq!(auto_boss_plan.param.boss_name, "爆炎树");
+    assert_eq!(
+        auto_boss_plan.pathing_rule.first_navigation_files,
+        vec!["爆炎树前往.json"]
+    );
+    assert!(auto_boss_plan.executor_ready);
+    assert!(auto_boss_plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop live adapters remain pending")));
+    assert!(!with_context.executed);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn independent_task_invocation_context_expands_auto_ley_line_outcrop_plan() {
+    let root = unique_test_root("task-invocation-context-auto-ley-line");
+    write_test_ley_line_static_data(&root);
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: AUTO_LEY_LINE_OUTCROP_TASK_KEY.to_string(),
+            config: serde_json::json!({
+                "country": "蒙德",
+                "leyLineOutcropType": "启示之花",
+                "count": 2
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+
+    let default_context =
+        evaluate_task_invocation_plan(plan.clone(), TaskInvocationExecutionMode::ExecuteReady);
+    assert_eq!(
+        default_context.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(default_context.independent_task_execution_plan.is_none());
+    assert!(default_context
+        .message
+        .contains("pass a working-directory planning context"));
+    assert!(default_context
+        .message
+        .contains("desktop live adapter remains pending"));
+
+    let with_context = evaluate_task_invocation_plan_with_context(
+        plan,
+        TaskInvocationExecutionMode::ExecuteReady,
+        &TaskInvocationPlanningContext::with_working_directory(&root),
+    );
+
+    assert_eq!(
+        with_context.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(with_context
+        .message
+        .contains("executor-ready Rust independent-task boundary"));
+    assert!(with_context
+        .message
+        .contains("desktop live adapter remains pending"));
+    let Some(independent_plan) = with_context.independent_task_execution_plan.as_deref() else {
+        panic!("expected AutoLeyLineOutcrop independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::AutoLeyLineOutcropPlan(ley_line_plan) = independent_plan
+    else {
+        panic!("expected AutoLeyLineOutcrop plan");
+    };
+    assert_eq!(ley_line_plan.task_key, AUTO_LEY_LINE_OUTCROP_TASK_KEY);
+    assert_eq!(ley_line_plan.param.count, 2);
+    assert_eq!(
+        ley_line_plan.data_rule.selected_country_ley_line_positions,
+        1
+    );
+    assert_eq!(
+        ley_line_plan
+            .pathing_rule
+            .selected_position_plan
+            .as_ref()
+            .unwrap()
+            .target_route,
+        "assets/pathing/target/蒙德-test-1.json"
+    );
+    assert!(ley_line_plan.executor_ready);
+    assert!(ley_line_plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop live adapters are not wired yet")));
+    assert!(!with_context.executed);
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -12853,7 +13509,7 @@ fn script_dispatcher_auto_eat_builtin_maps_to_food_plan_without_breaking_realtim
     assert_eq!(auto_eat_food.script_task_name, AUTO_EAT_SCRIPT_TASK_NAME);
     assert_eq!(auto_eat_food.capture_size, Size::new(1280, 720));
     assert_eq!(auto_eat_food.food_name.as_deref(), Some("甜甜花酿鸡"));
-    assert!(!auto_eat_food.executor_ready);
+    assert!(auto_eat_food.executor_ready);
 
     let realtime = TaskInvocationPlan::from_script_dispatcher_command(
         ScriptDispatcherCommandInput::AddRealtimeTimer(DispatcherTimerInput {
@@ -12869,7 +13525,7 @@ fn script_dispatcher_auto_eat_builtin_maps_to_food_plan_without_breaking_realtim
 }
 
 #[test]
-fn script_dispatcher_auto_fishing_invocation_exposes_rust_task_plan_without_executor_ready() {
+fn script_dispatcher_auto_fishing_invocation_exposes_executor_ready_rust_task_plan() {
     let plan = TaskInvocationPlan::from_script_dispatcher_command(
         ScriptDispatcherCommandInput::RunBuiltinTask {
             name: "AutoFishing".to_string(),
@@ -12921,7 +13577,7 @@ fn script_dispatcher_auto_fishing_invocation_exposes_rust_task_plan_without_exec
     );
     assert_eq!(auto_fishing.fish_model_rule.fish_types.len(), 21);
     assert_eq!(auto_fishing.rod_net_rule.label_count, 11);
-    assert!(!auto_fishing.executor_ready);
+    assert!(auto_fishing.executor_ready);
 }
 
 #[test]
@@ -12952,6 +13608,10 @@ fn realtime_skill_cd_invocation_exposes_executor_ready_rust_tick_plan() {
         result.status,
         TaskInvocationExecutionStatus::RustExecutionPlanReady
     );
+    assert!(result.message.contains("tick executor boundary"));
+    assert!(result
+        .message
+        .contains("desktop live adapter remains pending"));
     let Some(RealtimeTriggerExecutionPlan::SkillCd(skill_cd)) =
         result.realtime_trigger_execution_plan
     else {
@@ -12972,6 +13632,10 @@ fn realtime_skill_cd_invocation_exposes_executor_ready_rust_tick_plan() {
     );
     assert_eq!(skill_cd.cooldown_rule.ocr_rule.compensation_seconds, 0.15);
     assert!(skill_cd.executor_ready);
+    assert!(skill_cd
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop adapters")));
 }
 
 #[test]
@@ -12999,6 +13663,10 @@ fn realtime_map_mask_invocation_exposes_executor_ready_rust_tick_plan() {
         result.status,
         TaskInvocationExecutionStatus::RustExecutionPlanReady
     );
+    assert!(result.message.contains("tick executor boundary"));
+    assert!(result
+        .message
+        .contains("desktop live adapter remains pending"));
     let Some(RealtimeTriggerExecutionPlan::MapMask(map_mask)) =
         result.realtime_trigger_execution_plan
     else {
@@ -13021,6 +13689,10 @@ fn realtime_map_mask_invocation_exposes_executor_ready_rust_tick_plan() {
         }
     );
     assert!(map_mask.executor_ready);
+    assert!(map_mask
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop adapters")));
 }
 
 #[test]
@@ -13770,7 +14442,7 @@ fn get_grid_icons_plan_preserves_legacy_inventory_grid_capture_and_output_rules(
     assert_eq!(plan.display_name, "获取Grid界面物品图标");
     assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert_eq!(plan.config_rule.grid_screen_name, GridScreenName::Weapons);
     assert_eq!(plan.config_rule.grid_screen_description, "武器");
@@ -13975,7 +14647,7 @@ fn auto_artifact_salvage_plan_preserves_legacy_quick_salvage_and_five_star_rules
     assert_eq!(plan.display_name, "圣遗物分解独立任务");
     assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert_eq!(plan.config_rule.star, 4);
     assert_eq!(
@@ -14097,7 +14769,11 @@ fn auto_artifact_salvage_plan_preserves_legacy_quick_salvage_and_five_star_rules
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("destructive 1-4 star quick salvage")));
+        .any(|item| item.contains("executor-ready Rust orchestration")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("confirm dialog handling")));
 }
 
 #[test]
@@ -14196,7 +14872,7 @@ fn auto_stygian_onslaught_plan_preserves_legacy_state_machine_and_default_rules(
     assert_eq!(plan.display_name, "自动幽境危战");
     assert_eq!(plan.port_state, TaskPortState::RuntimeScaffolded);
     assert_eq!(plan.capture_size, Size::new(1920, 1080));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     assert_eq!(plan.param.boss_num, 1);
     assert_eq!(plan.param_rule.selected_boss_num, 1);
@@ -14313,7 +14989,7 @@ fn auto_stygian_onslaught_plan_preserves_legacy_state_machine_and_default_rules(
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("StateMachineBase runtime")));
+        .any(|item| item.contains("AutoStygianOnslaughtRuntime")));
 }
 
 #[test]
@@ -14613,11 +15289,14 @@ fn linnea_mining_common_job_plan_preserves_legacy_rules_and_catalog() {
     assert_eq!(default_plan.mine_rule.after_attack_wait_ms, 2_000);
     assert!(default_plan.cleanup_rule.middle_button_up);
     assert!(default_plan.cleanup_rule.clear_vision_drawings);
-    assert!(!default_plan.executor_ready);
-    assert!(default_plan.steps.iter().any(|step| matches!(
+    assert!(default_plan.executor_ready);
+    assert!(!default_plan.steps.iter().any(|step| matches!(
         step.action,
         LinneaMiningStepAction::MarkNativePending { .. }
     )));
+    assert!(default_plan
+        .notes
+        .contains("injectable Rust executor boundary"));
 
     let Some(CommonJobExecutionPlan::LinneaMining(configured)) = plan_common_job(
         LINNEA_MINING_TASK_KEY,
@@ -14678,8 +15357,162 @@ fn task_invocation_evaluation_reports_runtime_and_native_boundaries() {
         TaskInvocationExecutionStatus::RustExecutionPlanReady
     );
     assert!(auto_fight.message.contains("AutoFight"));
-    assert!(auto_fight.message.contains("Rust execution plan"));
+    assert!(auto_fight.message.contains("executor-ready"));
+    assert!(auto_fight.message.contains("working-directory"));
+    assert!(auto_fight.independent_task_execution_plan.is_none());
     assert!(!auto_fight.executed);
+
+    let auto_wood = evaluate_task_invocation_plan(
+        TaskInvocationPlan::from_script_dispatcher_command(
+            ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: AUTO_WOOD_TASK_KEY.to_string(),
+                config: serde_json::json!({
+                    "woodRoundNum": 3,
+                    "woodDailyMaxCount": 100
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap(),
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        auto_wood.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(independent_plan) = auto_wood.independent_task_execution_plan.as_deref() else {
+        panic!("expected AutoWood independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::AutoWoodPlan(auto_wood_plan) = independent_plan else {
+        panic!("expected AutoWood plan");
+    };
+    assert_eq!(auto_wood_plan.task_key, AUTO_WOOD_TASK_KEY);
+    assert_eq!(auto_wood_plan.param_rule.normalized_round_num, 3);
+    assert_eq!(auto_wood_plan.param_rule.normalized_daily_max_count, 100);
+    assert!(auto_wood_plan.executor_ready);
+    assert!(!auto_wood.executed);
+
+    let auto_eat_food_entry = find_task_catalog_entry(AUTO_EAT_FOOD_TASK_KEY).unwrap();
+    let auto_eat_food = evaluate_task_invocation_plan(
+        TaskInvocationPlan {
+            kind: TaskInvocationKind::RunIndependentTask,
+            task_key: Some(AUTO_EAT_FOOD_TASK_KEY.to_string()),
+            catalog_entry: Some(auto_eat_food_entry),
+            interval_ms: None,
+            clears_existing_triggers: false,
+            config: Some(serde_json::json!({
+                "foodName": "甜甜花酿鸡"
+            })),
+            uses_linked_cancellation: true,
+        },
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        auto_eat_food.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    let Some(independent_plan) = auto_eat_food.independent_task_execution_plan.as_deref() else {
+        panic!("expected AutoEatFood independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::AutoEatFoodPlan(auto_eat_food_plan) = independent_plan else {
+        panic!("expected AutoEatFood plan");
+    };
+    assert_eq!(auto_eat_food_plan.task_key, AUTO_EAT_FOOD_TASK_KEY);
+    assert_eq!(
+        auto_eat_food_plan.script_task_name,
+        AUTO_EAT_SCRIPT_TASK_NAME
+    );
+    assert_eq!(auto_eat_food_plan.food_name.as_deref(), Some("甜甜花酿鸡"));
+    assert!(auto_eat_food_plan.executor_ready);
+    assert!(!auto_eat_food.executed);
+
+    let auto_artifact_salvage_entry =
+        find_task_catalog_entry(AUTO_ARTIFACT_SALVAGE_TASK_KEY).unwrap();
+    let auto_artifact_salvage = evaluate_task_invocation_plan(
+        TaskInvocationPlan {
+            kind: TaskInvocationKind::RunIndependentTask,
+            task_key: Some(AUTO_ARTIFACT_SALVAGE_TASK_KEY.to_string()),
+            catalog_entry: Some(auto_artifact_salvage_entry),
+            interval_ms: None,
+            clears_existing_triggers: false,
+            config: Some(serde_json::json!({
+                "star": 3,
+                "javaScript": null,
+                "artifactSetFilter": null
+            })),
+            uses_linked_cancellation: true,
+        },
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        auto_artifact_salvage.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(auto_artifact_salvage
+        .message
+        .contains("executor-ready Rust independent-task boundary"));
+    assert!(auto_artifact_salvage
+        .message
+        .contains("desktop live adapter remains pending"));
+    let Some(independent_plan) = auto_artifact_salvage
+        .independent_task_execution_plan
+        .as_deref()
+    else {
+        panic!("expected AutoArtifactSalvage independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::AutoArtifactSalvagePlan(auto_artifact_salvage_plan) =
+        independent_plan
+    else {
+        panic!("expected AutoArtifactSalvage plan");
+    };
+    assert_eq!(
+        auto_artifact_salvage_plan.task_key,
+        AUTO_ARTIFACT_SALVAGE_TASK_KEY
+    );
+    assert!(auto_artifact_salvage_plan.executor_ready);
+    assert!(auto_artifact_salvage_plan.five_star_rule.is_none());
+    assert!(!auto_artifact_salvage.executed);
+
+    let get_grid_icons_entry = find_task_catalog_entry(GET_GRID_ICONS_TASK_KEY).unwrap();
+    let get_grid_icons = evaluate_task_invocation_plan(
+        TaskInvocationPlan {
+            kind: TaskInvocationKind::RunIndependentTask,
+            task_key: Some(GET_GRID_ICONS_TASK_KEY.to_string()),
+            catalog_entry: Some(get_grid_icons_entry),
+            interval_ms: None,
+            clears_existing_triggers: false,
+            config: Some(serde_json::json!({
+                "gridName": "ArtifactSetFilter",
+                "maxNumToGet": 2
+            })),
+            uses_linked_cancellation: true,
+        },
+        TaskInvocationExecutionMode::ExecuteReady,
+    );
+    assert_eq!(
+        get_grid_icons.status,
+        TaskInvocationExecutionStatus::RustExecutionPlanReady
+    );
+    assert!(get_grid_icons
+        .message
+        .contains("executor-ready Rust independent-task boundary"));
+    assert!(get_grid_icons
+        .message
+        .contains("desktop live adapter remains pending"));
+    let Some(independent_plan) = get_grid_icons.independent_task_execution_plan.as_deref() else {
+        panic!("expected GetGridIcons independent execution plan");
+    };
+    let IndependentTaskExecutionPlan::GetGridIconsPlan(get_grid_icons_plan) = independent_plan
+    else {
+        panic!("expected GetGridIcons plan");
+    };
+    assert_eq!(get_grid_icons_plan.task_key, GET_GRID_ICONS_TASK_KEY);
+    assert!(get_grid_icons_plan.executor_ready);
+    assert_eq!(
+        get_grid_icons_plan.config_rule.grid_screen_name,
+        GridScreenName::ArtifactSetFilter
+    );
+    assert!(!get_grid_icons.executed);
 
     let token = evaluate_task_invocation_plan(
         TaskInvocationPlan::from_script_dispatcher_command(
@@ -15343,7 +16176,7 @@ fn task_invocation_evaluation_reports_runtime_and_native_boundaries() {
     assert_eq!(linnea_plan.mine_count, 2);
     assert_eq!(linnea_plan.scan_rounds, 3);
     assert!(linnea_plan.prefer_right);
-    assert!(!linnea_plan.executor_ready);
+    assert!(linnea_plan.executor_ready);
     let bridge = linnea_mining
         .common_job_executor_bridge_plan
         .as_ref()
@@ -15729,6 +16562,253 @@ fn task_invocation_execution_with_live_executors_runs_auto_cook_script_dispatche
     assert_eq!(report.status, AutoCookExecutionStatus::RuntimeEnded);
     assert_eq!(report.state.space_press_count, 1);
     assert_eq!(report.state.white_confirm_click_count, 2);
+}
+
+#[test]
+fn task_invocation_execution_with_live_executors_runs_auto_fishing_script_dispatcher_plan() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: AUTO_FISHING_TASK_KEY.to_string(),
+            config: serde_json::json!({
+                "captureSize": { "width": 1280, "height": 720 },
+                "autoFishingConfig": {
+                    "enabled": true
+                }
+            }),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    let mut common_job_calls = 0;
+    let mut script_dispatcher_calls = 0;
+
+    let result = execute_task_invocation_plan_with_live_executors(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| {
+            common_job_calls += 1;
+            Ok(None)
+        },
+        &mut |plan| {
+            script_dispatcher_calls += 1;
+            let ScriptDispatcherExecutionPlan::AutoFishing(plan) = plan else {
+                panic!("expected AutoFishing script-dispatcher plan");
+            };
+            Ok(Some(ScriptDispatcherLiveExecutionReport::AutoFishing(
+                AutoFishingTaskExecutionReport {
+                    task_key: plan.task_key.clone(),
+                    completed: true,
+                    status: AutoFishingTaskExecutionStatus::Completed,
+                    state: AutoFishingTaskExecutorState {
+                        startup_completed: true,
+                        enabled: true,
+                        active_genshin_window: true,
+                        is_multiplayer: false,
+                        current_round: 2,
+                        target_rounds: 2,
+                        time_policy_rounds: Vec::new(),
+                        applied_time_policy_rounds: 2,
+                        blackboard: AutoFishingBlackboardState::default(),
+                        fishponds_found: 2,
+                        enter_mode_completed: true,
+                        bait_selections: 2,
+                        throw_rod_attempts: 2,
+                        throw_rod_successes: 2,
+                        bite_successes: 2,
+                        fish_box_detections: 2,
+                        pull_bar_successes: 2,
+                        quit_completed: true,
+                        cleanup_completed: true,
+                        cancelled: false,
+                        last_skip_reason: None,
+                    },
+                    executed_actions: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        },
+    );
+
+    assert_eq!(common_job_calls, 0);
+    assert_eq!(script_dispatcher_calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result
+        .message
+        .contains("AutoFishing live execution completed"));
+    assert!(result.message.contains("pull_bar_successes=2"));
+    let Some(ScriptDispatcherLiveExecutionReport::AutoFishing(report)) =
+        result.script_dispatcher_live_execution
+    else {
+        panic!("expected AutoFishing script-dispatcher live report");
+    };
+    assert!(report.completed);
+    assert_eq!(report.state.pull_bar_successes, 2);
+}
+
+#[test]
+fn task_invocation_execution_with_all_live_executors_runs_independent_task_plan() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: QUICK_BUY_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    let mut common_job_calls = 0;
+    let mut script_dispatcher_calls = 0;
+    let mut independent_task_calls = 0;
+
+    let result = execute_task_invocation_plan_with_all_live_executors(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| {
+            common_job_calls += 1;
+            Ok(None)
+        },
+        &mut |_plan| {
+            script_dispatcher_calls += 1;
+            Ok(None)
+        },
+        &mut |plan| {
+            independent_task_calls += 1;
+            assert_eq!(plan.task_key.as_deref(), Some(QUICK_BUY_TASK_KEY));
+            Ok(Some(IndependentTaskLiveExecutionReport::QuickBuy(
+                QuickBuyExecutionReport {
+                    task_key: QUICK_BUY_TASK_KEY.to_string(),
+                    completed: true,
+                    state: QuickBuyExecutorState {
+                        result: Some(QuickBuyExecutionResult::Completed),
+                        ..QuickBuyExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                    skipped_steps: Vec::new(),
+                },
+            )))
+        },
+    );
+
+    assert_eq!(common_job_calls, 0);
+    assert_eq!(script_dispatcher_calls, 0);
+    assert_eq!(independent_task_calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("QuickBuy live execution completed"));
+    assert!(result.message.contains("completed=true"));
+    let Some(IndependentTaskLiveExecutionReport::QuickBuy(report)) =
+        result.independent_task_live_execution
+    else {
+        panic!("expected QuickBuy independent live report");
+    };
+    assert_eq!(
+        report.state.result,
+        Some(QuickBuyExecutionResult::Completed)
+    );
+}
+
+#[test]
+fn task_invocation_execution_with_all_live_executors_runs_auto_wood_independent_task_plan() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: AUTO_WOOD_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    let mut common_job_calls = 0;
+    let mut script_dispatcher_calls = 0;
+    let mut independent_task_calls = 0;
+
+    let result = execute_task_invocation_plan_with_all_live_executors(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| {
+            common_job_calls += 1;
+            Ok(None)
+        },
+        &mut |_plan| {
+            script_dispatcher_calls += 1;
+            Ok(None)
+        },
+        &mut |plan| {
+            independent_task_calls += 1;
+            assert_eq!(plan.task_key.as_deref(), Some(AUTO_WOOD_TASK_KEY));
+            Ok(Some(IndependentTaskLiveExecutionReport::AutoWood(
+                AutoWoodExecutionReport {
+                    task_key: AUTO_WOOD_TASK_KEY.to_string(),
+                    completed: true,
+                    status: AutoWoodExecutionStatus::Completed,
+                    state: AutoWoodExecutorState {
+                        rounds_completed: 3,
+                        cleanup_completed: true,
+                        ..AutoWoodExecutorState::default()
+                    },
+                    executed_actions: Vec::new(),
+                    skipped_steps: vec![AutoWoodSkippedStep {
+                        action_kind: AutoWoodRuntimeActionKind::WonderlandRefresh,
+                        round_index: Some(3),
+                        reason: AutoWoodSkipReason::RefreshSkippedOnLastRound,
+                    }],
+                },
+            )))
+        },
+    );
+
+    assert_eq!(common_job_calls, 0);
+    assert_eq!(script_dispatcher_calls, 0);
+    assert_eq!(independent_task_calls, 1);
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert!(result.message.contains("AutoWood live execution completed"));
+    assert!(result.message.contains("completed=true"));
+    assert!(result.message.contains("skipped_steps=1"));
+    let Some(IndependentTaskLiveExecutionReport::AutoWood(report)) =
+        result.independent_task_live_execution
+    else {
+        panic!("expected AutoWood independent live report");
+    };
+    assert!(report.completed);
+    assert_eq!(report.state.rounds_completed, 3);
+    assert_eq!(report.skipped_steps.len(), 1);
+}
+
+#[test]
+fn task_invocation_execution_with_all_live_executors_reports_independent_task_failure() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan::from_script_dispatcher_command(
+        ScriptDispatcherCommandInput::RunBuiltinTask {
+            name: AUTO_OPEN_CHEST_TASK_KEY.to_string(),
+            config: serde_json::json!({}),
+            uses_linked_cancellation: true,
+        },
+    )
+    .unwrap();
+    let mut independent_task_calls = 0;
+
+    let result = execute_task_invocation_plan_with_all_live_executors(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| Ok(None),
+        &mut |_plan| Ok(None),
+        &mut |_plan| {
+            independent_task_calls += 1;
+            Err(TaskError::CommonJobExecution(
+                "capture unavailable".to_string(),
+            ))
+        },
+    );
+
+    assert_eq!(independent_task_calls, 1);
+    assert!(!result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Invalid);
+    assert!(result.message.contains(AUTO_OPEN_CHEST_TASK_KEY));
+    assert!(result.message.contains("capture unavailable"));
+    assert!(result.independent_task_live_execution.is_none());
 }
 
 #[test]
@@ -16781,6 +17861,12 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
         auto_track_catalog.rust_execution_surface(),
         TaskRustExecutionSurface::ExecutionPlanOnly
     );
+    assert!(auto_track_catalog
+        .notes
+        .contains("desktop live phase 1 now wires BitBlt capture"));
+    assert!(auto_track_catalog
+        .notes
+        .contains("legacy teleport candidate ranking parity"));
 
     let auto_track_path = tasks
         .iter()
@@ -16916,7 +18002,7 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     assert!(!auto_artifact_salvage.ported);
     assert_eq!(
         auto_artifact_salvage.rust_execution_surface,
-        TaskRustExecutionSurface::ExecutionPlanOnly
+        TaskRustExecutionSurface::InjectableExecutor
     );
     assert_eq!(auto_artifact_salvage.requires_main_ui_wait, true);
     assert!(auto_artifact_salvage
@@ -16940,7 +18026,7 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     );
     assert_eq!(
         auto_artifact_salvage_catalog.rust_execution_surface(),
-        TaskRustExecutionSurface::ExecutionPlanOnly
+        TaskRustExecutionSurface::InjectableExecutor
     );
 
     let auto_ley_line = tasks
@@ -16984,7 +18070,7 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     assert!(!get_grid_icons.ported);
     assert_eq!(
         get_grid_icons.rust_execution_surface,
-        TaskRustExecutionSurface::ExecutionPlanOnly
+        TaskRustExecutionSurface::InjectableExecutor
     );
     assert_eq!(get_grid_icons.requires_main_ui_wait, true);
     assert!(get_grid_icons
@@ -17002,7 +18088,7 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     );
     assert_eq!(
         get_grid_icons_catalog.rust_execution_surface(),
-        TaskRustExecutionSurface::ExecutionPlanOnly
+        TaskRustExecutionSurface::InjectableExecutor
     );
 
     let auto_wood = tasks
@@ -17183,7 +18269,7 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     assert_eq!(get_grid_icons.port_state, TaskPortState::RuntimeScaffolded);
     assert_eq!(
         get_grid_icons.rust_execution_surface(),
-        TaskRustExecutionSurface::ExecutionPlanOnly
+        TaskRustExecutionSurface::InjectableExecutor
     );
 
     let count_inventory = find_task_catalog_entry(COUNT_INVENTORY_ITEM_TASK_KEY).unwrap();
@@ -17516,6 +18602,38 @@ fn independent_auto_open_chest_returns_execution_plan() {
         panic!("expected auto-open-chest execution plan");
     };
     assert_eq!(plan.task_key, AUTO_OPEN_CHEST_TASK_KEY);
+    assert!(plan.executor_ready);
+}
+
+#[test]
+fn independent_auto_eat_food_returns_execution_plan() {
+    let request = IndependentTaskExecutionRequest::auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "captureSize": { "width": 1280, "height": 720 },
+            "foodName": "甜甜花酿鸡"
+        })))
+        .unwrap(),
+        ".",
+    );
+
+    let result = execute_independent_task_with_cancel(&request, || false).unwrap();
+
+    assert_eq!(result.task_key, AUTO_EAT_FOOD_TASK_KEY);
+    let IndependentTaskExecution::AutoEatFoodPlan(plan) = result.execution else {
+        panic!("expected auto-eat-food execution plan");
+    };
+    assert_eq!(plan.task_key, AUTO_EAT_FOOD_TASK_KEY);
+    assert_eq!(plan.script_task_name, AUTO_EAT_SCRIPT_TASK_NAME);
+    assert_eq!(plan.capture_size, Size::new(1280, 720));
+    assert_eq!(plan.food_name.as_deref(), Some("甜甜花酿鸡"));
+    assert!(matches!(
+        plan.mode,
+        AutoEatFoodPlanMode::InventoryFood {
+            source: AutoEatFoodNameSource::FoodNameConfig,
+            ..
+        }
+    ));
+    assert!(plan.inventory_plan.is_some());
     assert!(plan.executor_ready);
 }
 
@@ -17858,7 +18976,10 @@ fn auto_open_chest_executor_runs_flower_post_loop_after_cleanup() {
     let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
 
     assert!(report.completed);
-    assert_eq!(report.status, AutoOpenChestExecutionStatus::FlowerInteracted);
+    assert_eq!(
+        report.status,
+        AutoOpenChestExecutionStatus::FlowerInteracted
+    );
     assert!(report.state.flower_detected);
     assert_eq!(
         report.post_loop_actions,
@@ -17886,8 +19007,8 @@ fn auto_open_chest_executor_runs_flower_post_loop_after_cleanup() {
 #[test]
 fn auto_open_chest_executor_times_out_and_releases_forward() {
     let plan = plan_auto_open_chest(AutoOpenChestExecutionConfig::default()).unwrap();
-    let mut runtime =
-        FakeAutoOpenChestRuntime::new([]).with_elapsed([plan.search_rule.time_limit_seconds * 1000]);
+    let mut runtime = FakeAutoOpenChestRuntime::new([])
+        .with_elapsed([plan.search_rule.time_limit_seconds * 1000]);
 
     let report = execute_auto_open_chest_plan(&plan, &mut runtime).unwrap();
 
@@ -17972,7 +19093,19 @@ fn quick_buy_plan_preserves_legacy_hotkey_branches_and_catalog() {
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("GameCaptureRegion")));
+        .any(|item| item.contains("TaskContext initialization preflight")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("foreground process preflight")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop explicit command and generic independent-task route")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("desktop no-op")));
 
     let locator = &plan.serenitea_pot_coin_rule.locator;
     assert_eq!(locator.operation, BvLocatorOperation::IsExist);
@@ -18075,6 +19208,16 @@ fn quick_buy_plan_preserves_legacy_hotkey_branches_and_catalog() {
         TaskRustExecutionSurface::ExecutionPlanOnly
     );
     assert!(entry.asset_roots.contains(&"GameTask/QuickBuy/Assets"));
+    assert!(entry
+        .notes
+        .contains("desktop explicit command and generic independent task route"));
+    assert!(entry
+        .notes
+        .contains("overlay cleanup is a no-op parity step"));
+    assert!(entry.notes.contains("foreground process preflight"));
+    assert!(entry
+        .notes
+        .contains("TaskContext initialization Toast remains pending"));
 }
 
 #[derive(Debug)]
@@ -18892,6 +20035,9 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
         TaskRustExecutionSurface::ExecutionPlanOnly
     );
     assert_eq!(turn_entry.hotkey_fields, &["turnAroundHotkey"]);
+    assert!(turn_entry
+        .notes
+        .contains("WPF hotkey bridge still needs to consume this Rust plan"));
 
     let enhance_entry = find_task_catalog_entry(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY).unwrap();
     assert_eq!(enhance_entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);
@@ -18900,6 +20046,9 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
         TaskRustExecutionSurface::ExecutionPlanOnly
     );
     assert_eq!(enhance_entry.hotkey_fields, &["enhanceArtifactHotkey"]);
+    assert!(enhance_entry
+        .notes
+        .contains("WPF hotkey bridge and toast/preflight adapter still need"));
 
     let descriptors = independent_tasks();
     assert!(descriptors.iter().any(|task| {
@@ -19049,6 +20198,30 @@ fn shell_task_can_be_cancelled() {
 
     assert_eq!(result.status, ShellExecutionStatus::Cancelled);
     assert!(result.waited_for_exit);
+}
+
+#[test]
+fn independent_shell_task_planning_does_not_execute_command() {
+    let root = unique_test_root("independent-shell-plan");
+    fs::create_dir_all(&root).unwrap();
+    let marker = root.join("planned-shell-marker.txt");
+    let request = IndependentTaskExecutionRequest::shell(
+        shell_write_marker_command(&marker),
+        ShellConfig::default(),
+        ".",
+    );
+
+    let result = plan_independent_task_execution(&request).unwrap();
+
+    assert_eq!(result.task_key, "Shell");
+    assert!(!marker.exists(), "planning must not execute shell commands");
+    let IndependentTaskExecution::NativePending(native) = result.execution else {
+        panic!("expected shell planning to stay native-pending");
+    };
+    assert_eq!(native.plan.task_key.as_deref(), Some("Shell"));
+    assert!(!native.executed);
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -19812,7 +20985,7 @@ fn independent_auto_wood_returns_execution_plan() {
         plan.refresh_rule.default_strategy,
         AutoWoodRefreshStrategy::WonderlandCycle
     );
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -19841,7 +21014,7 @@ fn independent_auto_domain_returns_execution_plan() {
     assert_eq!(plan.param_rule.normalized_domain_round_num, 9999);
     assert_eq!(plan.param.combat_strategy_path, "User/AutoFight/daily.txt");
     assert_eq!(plan.param.domain_name, "太山府");
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -19868,7 +21041,7 @@ fn independent_auto_genius_invokation_returns_execution_plan() {
     assert!(plan.strategy_source.inline_strategy);
     assert_eq!(plan.strategy.characters.len(), 3);
     assert_eq!(plan.strategy.action_commands[0].all_cost, Some(2));
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -19895,7 +21068,7 @@ fn independent_auto_track_path_returns_execution_plan() {
     assert_eq!(plan.task_key, AUTO_TRACK_PATH_TASK_KEY);
     assert_eq!(plan.path_summary.waypoint_count, 2);
     assert_eq!(plan.path_summary.key_point_indices, vec![1]);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -19930,7 +21103,7 @@ fn independent_auto_boss_returns_execution_plan() {
         plan.pathing_rule.first_navigation_files,
         vec!["爆炎树前往.json"]
     );
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -19959,7 +21132,7 @@ fn independent_auto_music_game_returns_execution_plan() {
     assert_eq!(plan.album_rule.selected_music_level, "困难");
     assert_eq!(plan.album_rule.selected_difficulties.len(), 1);
     assert_eq!(plan.album_rule.selected_difficulties[0].name, "困难");
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -19975,7 +21148,7 @@ fn independent_auto_track_returns_execution_plan() {
     assert_eq!(plan.task_key, AUTO_TRACK_TASK_KEY);
     assert_eq!(plan.mission_text_rule.long_distance_threshold_meters, 150);
     assert_eq!(plan.tracking_rule.arrival_distance_meters, 3);
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -20008,7 +21181,7 @@ fn independent_auto_ley_line_outcrop_returns_execution_plan() {
             .target_route,
         "assets/pathing/target/蒙德-test-1.json"
     );
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -20032,7 +21205,7 @@ fn independent_auto_artifact_salvage_returns_execution_plan() {
     assert_eq!(plan.task_key, AUTO_ARTIFACT_SALVAGE_TASK_KEY);
     assert!(plan.quick_salvage_rule.destructive_native_action);
     assert!(plan.five_star_rule.is_none());
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -20058,7 +21231,7 @@ fn independent_get_grid_icons_returns_execution_plan() {
     );
     assert!(plan.open_rule.requires_manual_open);
     assert!(plan.artifact_set_filter_rule.is_some());
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[test]
@@ -20099,7 +21272,7 @@ fn independent_auto_stygian_onslaught_returns_execution_plan() {
         plan.param_rule.combat_script_bag_path,
         "User/AutoFight/stygian.txt"
     );
-    assert!(!plan.executor_ready);
+    assert!(plan.executor_ready);
 }
 
 #[cfg(windows)]
@@ -20120,6 +21293,16 @@ fn shell_sleep_command(seconds: u64) -> String {
 #[cfg(not(windows))]
 fn shell_sleep_command(seconds: u64) -> String {
     format!("sleep {seconds}; exit")
+}
+
+#[cfg(windows)]
+fn shell_write_marker_command(path: &Path) -> String {
+    format!("echo planned>\"{}\" & exit", path.display())
+}
+
+#[cfg(not(windows))]
+fn shell_write_marker_command(path: &Path) -> String {
+    format!("printf planned > \"{}\"; exit", path.display())
 }
 
 fn test_team_avatar(index: usize, name: &str) -> CombatTeamAvatarPlan {
@@ -25189,6 +26372,42 @@ fn teleport_plan_preserves_script_host_payloads_with_injectable_executor() {
         plan.map_rule.tp_json_asset,
         "GameTask/AutoTrackPath/Assets/tp.json"
     );
+    assert_eq!(
+        plan.map_rule.feature_keypoints_asset,
+        "Assets/Map/Teyvat/Teyvat_0_256_SIFT.kp.bin"
+    );
+    assert_eq!(
+        plan.map_rule.feature_mat_asset,
+        "Assets/Map/Teyvat/Teyvat_0_256_SIFT.mat.png"
+    );
+    assert_eq!(plan.map_rule.layer_256_to_2048_scale, 8);
+    let sift_rule = &plan.map_rule.sift_recognition_rule;
+    assert_eq!(
+        plan.map_rule.feature_keypoints_asset,
+        sift_rule.feature_keypoints_asset
+    );
+    assert_eq!(plan.map_rule.feature_mat_asset, sift_rule.feature_mat_asset);
+    assert_eq!(
+        plan.map_rule.layer_256_to_2048_scale,
+        sift_rule.feature_layer.image_to_2048_scale
+    );
+    assert_eq!(sift_rule.matching_method, "SIFT");
+    assert_eq!(sift_rule.feature_detector, "SIFT");
+    assert_eq!(sift_rule.matcher, "FlannBased");
+    assert!(sift_rule.descriptor_format.contains("CV_32FC1"));
+    assert_eq!(sift_rule.query_downscale, 0.25);
+    assert_eq!(sift_rule.feature_layer.map, "Teyvat");
+    assert_eq!(sift_rule.feature_layer.floor, 0);
+    assert_eq!(sift_rule.feature_layer.source_tile_size, 256);
+    assert_eq!(sift_rule.feature_split_rows, 60);
+    assert_eq!(sift_rule.feature_split_cols, 88);
+    assert_eq!(sift_rule.prev_rect_expand_blocks, 1);
+    assert!(sift_rule.fallback_full_search);
+    assert_eq!(sift_rule.center_match_rule.operation, "Match");
+    assert_eq!(sift_rule.rect_match_rule.operation, "KnnMatchRect");
+    assert_eq!(sift_rule.center_match_rule.ratio, 0.75);
+    assert_eq!(sift_rule.rect_match_rule.min_good_matches, 7);
+    assert_eq!(sift_rule.rect_match_rule.ransac_reprojection_threshold, 3.0);
     assert!(plan.map_rule.uses_map_matching);
     assert!(plan.map_rule.uses_coordinate_conversion);
     assert_eq!(
@@ -25260,7 +26479,8 @@ fn teleport_plan_preserves_script_host_payloads_with_injectable_executor() {
         "x": 1.0,
         "y": 2.0,
         "mapName": "Teyvat",
-        "forceCountry": "璃月"
+        "forceCountry": "璃月",
+        "finalZoomLevel": 3.0
     });
     let Some(CommonJobExecutionPlan::Teleport(move_map)) =
         plan_common_job(TELEPORT_TASK_KEY, Some(&move_map_config)).unwrap()
@@ -25272,18 +26492,96 @@ fn teleport_plan_preserves_script_host_payloads_with_injectable_executor() {
     let move_target = move_map.target.as_ref().unwrap();
     assert_eq!((move_target.x, move_target.y), (1.0, 2.0));
     assert_eq!(move_target.map_name.as_deref(), Some("Teyvat"));
+    assert!(move_map.move_map_rule.map_zoom_enabled);
+    assert_eq!(move_map.move_map_rule.display_tp_point_zoom_level, 4.4);
+    assert_eq!(move_map.move_map_rule.min_zoom_level, 2.0);
+    assert_eq!(move_map.move_map_rule.max_zoom_level, 5.0);
+    assert_eq!(move_map.move_map_rule.default_final_zoom_level, 2.0);
+    assert_eq!(move_map.move_map_rule.zoom_precision_threshold, 0.05);
+    assert_eq!(move_map.move_map_rule.zoom_recovery_threshold, 0.3);
+    assert_eq!(move_map.move_map_rule.map_zoom_out_distance, 1000.0);
+    assert_eq!(move_map.move_map_rule.map_zoom_in_distance, 400.0);
+    assert_eq!(move_map.move_map_rule.map_scale_factor, 2.361);
+    assert_eq!(move_map.move_map_rule.move_tolerance, 200.0);
+    assert_eq!(move_map.move_map_rule.max_iterations, 30);
+    assert_eq!(move_map.move_map_rule.max_mouse_move, 300.0);
+    assert_eq!(move_map.move_map_rule.step_interval_ms, 20);
+    assert_eq!(move_map.move_map_rule.max_prediction_failures, 5);
+    assert_eq!(move_map.move_map_rule.false_positive_min_jump, 200.0);
+    assert_eq!(
+        move_map.move_map_rule.false_positive_expected_move_factor,
+        2.0
+    );
+    assert_eq!(move_map.move_map_rule.target_window_max_retries, 5);
+    assert_eq!(move_map.move_map_rule.post_force_jump_delay_ms, 300);
+    assert_eq!(
+        move_map
+            .move_map_rule
+            .target_near_current_center_skip_distance,
+        50.0
+    );
+    assert!(move_map
+        .move_map_rule
+        .country_positions
+        .iter()
+        .any(|country| country.name == "纳塔" && country.x == 8973.5 && country.y == -1879.1));
+    assert!(move_map.steps.iter().any(|step| {
+        match &step.action {
+            TeleportStepAction::SwitchCountryOrMap {
+                target,
+                map_name,
+                force_country,
+            } => {
+                target.x == 1.0
+                    && target.y == 2.0
+                    && map_name.as_deref() == Some("Teyvat")
+                    && force_country.as_deref() == Some("璃月")
+            }
+            _ => false,
+        }
+    }));
     assert!(move_map.steps.iter().any(|step| {
         match &step.action {
             TeleportStepAction::MoveMapTo {
                 target,
                 force_country,
-            } => target.x == 1.0 && target.y == 2.0 && force_country.as_deref() == Some("璃月"),
+                final_zoom_level,
+            } => {
+                target.x == 1.0
+                    && target.y == 2.0
+                    && force_country.as_deref() == Some("璃月")
+                    && *final_zoom_level == 3.0
+            }
             _ => false,
         }
     }));
+    assert_eq!(
+        move_map
+            .steps
+            .iter()
+            .filter(|step| matches!(&step.action, TeleportStepAction::MoveMapTo { .. }))
+            .count(),
+        1
+    );
+    assert!(!move_map
+        .steps
+        .iter()
+        .any(|step| matches!(&step.action, TeleportStepAction::DragBigMapToTarget { .. })));
+    assert!(!move_map
+        .steps
+        .iter()
+        .any(|step| matches!(&step.action, TeleportStepAction::ClickMapTeleportPoint)));
+    assert!(!move_map.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::ClickTeleportPanelOrCandidate { .. }
+    )));
     assert!(!move_map.steps.iter().any(|step| matches!(
         &step.action,
         TeleportStepAction::WaitForTeleportCompletion { .. }
+    )));
+    assert!(!move_map.steps.iter().any(|step| matches!(
+        &step.action,
+        TeleportStepAction::SeedNavigationPreviousPositionAfterTeleport { .. }
     )));
 
     let statue_config = serde_json::json!({ "kind": "statueOfTheSeven" });
@@ -25323,6 +26621,7 @@ struct FakeTeleportRuntime {
     input_batches: Vec<Vec<InputEvent>>,
     page_commands: Vec<BvPageCommand>,
     locator_calls: Vec<BvLocatorPlan>,
+    navigation_seed_target: Option<TeleportTargetPlan>,
 }
 
 impl FakeTeleportRuntime {
@@ -25335,6 +26634,11 @@ impl FakeTeleportRuntime {
             .into_iter()
             .map(CommonJobRuntimeOutcome::Matched)
             .collect();
+        self
+    }
+
+    fn with_navigation_seed_target(mut self, target: TeleportTargetPlan) -> Self {
+        self.navigation_seed_target = Some(target);
         self
     }
 }
@@ -25377,6 +26681,47 @@ impl TeleportRuntime for FakeTeleportRuntime {
             .pop_front()
             .unwrap_or(CommonJobRuntimeOutcome::Matched(true)))
     }
+
+    fn teleport_navigation_seed_target(&self) -> Option<TeleportTargetPlan> {
+        self.navigation_seed_target.clone()
+    }
+}
+
+fn fake_teleport_failed_panel_attempt_outcomes(plan: &TeleportExecutionPlan) -> Vec<bool> {
+    let mut outcomes = Vec::new();
+    for step in &plan.steps {
+        match step.action {
+            TeleportStepAction::Log { .. } | TeleportStepAction::ReturnResult { .. } => {}
+            TeleportStepAction::ClickTeleportPanelOrCandidate { .. } => outcomes.push(false),
+            TeleportStepAction::HandlePointNotActivated { .. } => {
+                outcomes.push(true);
+                break;
+            }
+            _ => outcomes.push(true),
+        }
+    }
+    outcomes
+}
+
+fn fake_teleport_success_attempt_outcomes(plan: &TeleportExecutionPlan) -> Vec<bool> {
+    plan.steps
+        .iter()
+        .filter_map(|step| match step.action {
+            TeleportStepAction::Log { .. } | TeleportStepAction::ReturnResult { .. } => None,
+            _ => Some(true),
+        })
+        .collect()
+}
+
+fn fake_teleport_failed_move_map_outcomes(plan: &TeleportExecutionPlan) -> Vec<bool> {
+    plan.steps
+        .iter()
+        .filter_map(|step| match step.action {
+            TeleportStepAction::Log { .. } | TeleportStepAction::ReturnResult { .. } => None,
+            TeleportStepAction::MoveMapTo { .. } => Some(false),
+            _ => Some(true),
+        })
+        .collect()
 }
 
 #[test]
@@ -25416,11 +26761,146 @@ fn teleport_executor_runs_coordinate_teleport_state_machine() {
     assert!(report.state.point_not_activated_handled);
     assert!(report.state.teleport_completion_waited);
     assert!(report.state.navigation_previous_position_seeded);
+    assert_eq!(
+        report.state.navigation_previous_position_seed,
+        Some(TeleportTargetPlan {
+            x: 100.5,
+            y: 200.25,
+            map_name: None
+        })
+    );
     assert!(runtime
         .actions
         .iter()
         .any(|action| matches!(action, TeleportStepAction::WaitForTeleportCompletion { .. })));
     assert_eq!(report.executed_steps.len(), plan.steps.len());
+}
+
+#[test]
+fn teleport_executor_retries_point_not_activated_attempts_before_failing() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({
+            "x": 100.5,
+            "y": 200.25
+        })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let failed_attempt = fake_teleport_failed_panel_attempt_outcomes(&plan);
+    let outcomes = failed_attempt
+        .iter()
+        .copied()
+        .cycle()
+        .take(failed_attempt.len() * usize::from(plan.retry_rule.max_attempts));
+    let mut runtime = FakeTeleportRuntime::new().with_matches(outcomes);
+
+    let error = execute_teleport_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message) if message == "传送失败"
+    ));
+    assert_eq!(
+        runtime
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action,
+                TeleportStepAction::ClickTeleportPanelOrCandidate { .. }
+            ))
+            .count(),
+        3
+    );
+    assert_eq!(
+        runtime
+            .actions
+            .iter()
+            .filter(|action| matches!(action, TeleportStepAction::HandlePointNotActivated { .. }))
+            .count(),
+        3
+    );
+    assert!(!runtime
+        .actions
+        .iter()
+        .any(|action| matches!(action, TeleportStepAction::WaitForTeleportCompletion { .. })));
+    assert!(!runtime.actions.iter().any(|action| matches!(
+        action,
+        TeleportStepAction::SeedNavigationPreviousPositionAfterTeleport { .. }
+    )));
+}
+
+#[test]
+fn teleport_executor_retries_point_not_activated_then_completes_on_success() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({
+            "x": 100.5,
+            "y": 200.25
+        })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let mut outcomes = fake_teleport_failed_panel_attempt_outcomes(&plan);
+    outcomes.extend(fake_teleport_success_attempt_outcomes(&plan));
+    let mut runtime = FakeTeleportRuntime::new().with_matches(outcomes);
+
+    let report = execute_teleport_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert!(report.state.teleport_panel_clicked);
+    assert!(report.state.point_not_activated_handled);
+    assert!(report.state.teleport_completion_waited);
+    assert!(report.state.navigation_previous_position_seeded);
+    assert_eq!(
+        runtime
+            .actions
+            .iter()
+            .filter(|action| matches!(
+                action,
+                TeleportStepAction::ClickTeleportPanelOrCandidate { .. }
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(
+        runtime
+            .actions
+            .iter()
+            .filter(|action| matches!(action, TeleportStepAction::WaitForTeleportCompletion { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn teleport_executor_uses_runtime_navigation_seed_target_when_available() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({
+            "x": 100.5,
+            "y": 200.25
+        })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let runtime_seed = TeleportTargetPlan {
+        x: -10.0,
+        y: 200.0,
+        map_name: Some("Teyvat".to_string()),
+    };
+    let mut runtime = FakeTeleportRuntime::new().with_navigation_seed_target(runtime_seed.clone());
+
+    let report = execute_teleport_plan(&plan, &mut runtime).unwrap();
+
+    assert!(report.state.navigation_previous_position_seeded);
+    assert_eq!(
+        report.state.navigation_previous_position_seed,
+        Some(runtime_seed)
+    );
 }
 
 #[test]
@@ -25446,14 +26926,49 @@ fn teleport_executor_runs_move_map_without_completion_wait() {
     assert!(report.state.move_map_completed);
     assert!(!report.state.teleport_completion_waited);
     assert!(!report.state.navigation_previous_position_seeded);
-    assert!(runtime
+    assert_eq!(report.state.navigation_previous_position_seed, None);
+    assert_eq!(
+        runtime
+            .actions
+            .iter()
+            .filter(|action| matches!(action, TeleportStepAction::MoveMapTo { .. }))
+            .count(),
+        1
+    );
+    assert!(!runtime
         .actions
         .iter()
-        .any(|action| matches!(action, TeleportStepAction::MoveMapTo { .. })));
+        .any(|action| matches!(action, TeleportStepAction::DragBigMapToTarget { .. })));
     assert!(!runtime
         .actions
         .iter()
         .any(|action| matches!(action, TeleportStepAction::ClickMapTeleportPoint)));
+}
+
+#[test]
+fn teleport_executor_fails_when_move_map_does_not_complete() {
+    let Some(CommonJobExecutionPlan::Teleport(plan)) = plan_common_job(
+        TELEPORT_TASK_KEY,
+        Some(&serde_json::json!({
+            "kind": "moveMapTo",
+            "x": 1.0,
+            "y": 2.0,
+            "mapName": "Teyvat"
+        })),
+    )
+    .unwrap() else {
+        unreachable!()
+    };
+    let outcomes = fake_teleport_failed_move_map_outcomes(&plan);
+    let mut runtime = FakeTeleportRuntime::new().with_matches(outcomes);
+
+    let error = execute_teleport_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message)
+            if message.contains("MoveMapTo did not converge")
+    ));
 }
 
 #[test]
@@ -25475,6 +26990,8 @@ fn teleport_executor_runs_statue_of_the_seven_flow() {
     assert!(report.state.statue_selected);
     assert!(report.state.teleport_panel_clicked);
     assert!(report.state.teleport_completion_waited);
+    assert!(report.state.navigation_previous_position_seeded);
+    assert_eq!(report.state.navigation_previous_position_seed, None);
     assert!(!report.state.map_teleport_point_clicked);
     assert!(!report.state.nearest_teleport_point_resolved);
 }

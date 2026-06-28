@@ -412,11 +412,10 @@ pub fn plan_quick_buy(config: QuickBuyExecutionConfig) -> Result<QuickBuyExecuti
         serenitea_pot_purchase_rule,
         steps,
         pending_native: vec![
-            "live TaskContext/SystemControl preflight and Toast warning dispatch".to_string(),
-            "live capture and Serenitea Pot coin template matching adapter".to_string(),
-            "live GameCaptureRegion desktop coordinate mapping and SendInput mouse dispatch adapter"
+            "TaskContext initialization preflight and Toast warning dispatch remain pending; desktop live execution gates on detected foreground game-window process plus cancellation"
                 .to_string(),
-            "live Vision overlay cleanup adapter".to_string(),
+            "desktop explicit command and generic independent-task route cover BitBlt capture, foreground process preflight, PureRust template matching, SendInput movement/clicks, wait commands, and capture-coordinate scaling".to_string(),
+            "Vision overlay cleanup is a desktop no-op because Rust QuickBuy template matching does not draw WPF VisionContext overlays; the injectable cleanup step remains for legacy parity".to_string(),
         ],
     })
 }

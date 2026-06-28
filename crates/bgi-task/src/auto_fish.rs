@@ -3,6 +3,8 @@ use bgi_vision::{Rect, RgbPixel, Size, TemplateMatchMode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Result;
+
 pub const AUTO_FISH_TASK_KEY: &str = "AutoFish";
 pub const AUTO_FISH_DEFAULT_CAPTURE_WIDTH: u32 = 1920;
 pub const AUTO_FISH_DEFAULT_CAPTURE_HEIGHT: u32 = 1080;
@@ -11,6 +13,9 @@ pub const AUTO_FISH_BAIT_BUTTON: &str = "AutoFishing:switch_bait.png";
 pub const AUTO_FISH_WAIT_BITE_BUTTON: &str = "AutoFishing:wait_bite.png";
 pub const AUTO_FISH_LIFT_ROD_BUTTON: &str = "AutoFishing:lift_rod.png";
 pub const AUTO_FISH_EXIT_FISHING_BUTTON: &str = "AutoFishing:exit_fishing.png";
+pub const AUTO_FISH_BITE_TIPS_OVERLAY: &str = "FishBiteTips";
+pub const AUTO_FISH_BOX_OVERLAY: &str = "FishBox";
+pub const AUTO_FISH_BAR_OVERLAY: &str = "FishingBarAll";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AutoFishExecutionPlan {
@@ -238,7 +243,7 @@ pub struct AutoFishInputRule {
     pub completion_action: AutoFishInputAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishInputAction {
     LeftButtonClick,
     LeftButtonDown,
@@ -298,6 +303,180 @@ pub enum AutoFishTickAction {
     HoldLeftButton,
     ReleaseLeftButton,
     ClearFishingOverlays,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishTickStage {
+    #[default]
+    WaitingForBite,
+    WaitingForFishBox,
+    Fishing,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishTriggerState {
+    pub prev_execute_ms: Option<u64>,
+    pub exclusive: bool,
+    pub stage: AutoFishTickStage,
+    pub fish_box_rect: Option<Rect>,
+    pub left_button_down: bool,
+    pub no_bar_since_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishTickObservation {
+    pub now_ms: u64,
+    pub exit_fishing_button_detected: bool,
+    pub bite_text_block_detected: bool,
+    pub lift_rod_button_detected: bool,
+    pub bite_ocr_text: Option<String>,
+    pub fish_box_rects: Vec<Rect>,
+    pub fishing_bar_rects: Vec<Rect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishTickDecisionReport {
+    pub processed: bool,
+    pub skip_reason: Option<AutoFishTickSkipReason>,
+    pub exclusive_before: bool,
+    pub exclusive_after: bool,
+    pub stage_before: AutoFishTickStage,
+    pub stage_after: AutoFishTickStage,
+    pub bite_method: Option<AutoFishBiteDetectionMethod>,
+    pub fish_box: Option<AutoFishFishBoxDecisionReport>,
+    pub bar: Option<AutoFishBarDecisionReport>,
+    pub actions: Vec<AutoFishRuntimeAction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishTickSkipReason {
+    Disabled,
+    TickThrottle,
+    NotExclusive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishBiteDetectionMethod {
+    WordBlock,
+    LiftRodButton,
+    Ocr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishFishBoxDecisionReport {
+    pub decision: AutoFishFishBoxDecisionKind,
+    pub fish_box_rect: Option<Rect>,
+    pub cursor_rect: Option<Rect>,
+    pub target_rect: Option<Rect>,
+    pub considered_rects: Vec<Rect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishFishBoxDecisionKind {
+    WaitingForTwoRects,
+    HeightMismatch,
+    InvalidGeometry,
+    Detected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishBarDecisionReport {
+    pub decision: AutoFishBarDecisionKind,
+    pub relation: Option<AutoFishBarTargetRelation>,
+    pub considered_rects: Vec<Rect>,
+    pub no_bar_since_ms: Option<u64>,
+    pub no_bar_grace_elapsed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishBarDecisionKind {
+    PressLeftButton,
+    ReleaseLeftButton,
+    KeepLeftButtonDown,
+    KeepLeftButtonUp,
+    InvalidTwoRectTarget,
+    IgnoreUnexpectedRectCount,
+    ArmNoBarGrace,
+    WaitNoBarGrace,
+    CompleteNoBarGrace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishBarTargetRelation {
+    CursorBeforeTarget,
+    CursorPastTarget,
+    CenterBias,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoFishRuntimeAction {
+    Input {
+        action: AutoFishInputAction,
+        reason: AutoFishRuntimeActionReason,
+    },
+    Overlay {
+        action: AutoFishOverlayAction,
+        reason: AutoFishRuntimeActionReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishRuntimeActionReason {
+    RaiseRod,
+    FishBoxDetected,
+    FishingBarDetected,
+    CursorBeforeTarget,
+    CursorPastTarget,
+    NoBarGrace,
+    CompletionCleanup,
+    ExclusiveLost,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoFishOverlayAction {
+    Clear { key: String },
+    DrawFishBox { key: String, rect: Rect },
+    DrawFishingBar { key: String, rects: Vec<Rect> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishRuntimeActionReport {
+    pub action: AutoFishRuntimeAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoFishTickExecutionReport {
+    pub task_key: String,
+    pub observation: AutoFishTickObservation,
+    pub decision: AutoFishTickDecisionReport,
+    pub runtime_actions: Vec<AutoFishRuntimeActionReport>,
+}
+
+pub trait AutoFishRuntime {
+    fn auto_fish_now_ms(&mut self, plan: &AutoFishExecutionPlan) -> Result<u64>;
+
+    fn detect_auto_fish_template(&mut self, locator: &AutoFishTemplateLocator) -> Result<bool>;
+
+    fn detect_auto_fish_bite_text_block(&mut self, rule: &AutoFishBiteRule) -> Result<bool>;
+
+    fn ocr_auto_fish_bite_text(&mut self, rule: &AutoFishBiteRule) -> Result<Option<String>>;
+
+    fn detect_auto_fish_fish_box_rects(
+        &mut self,
+        plan: &AutoFishExecutionPlan,
+    ) -> Result<Vec<Rect>>;
+
+    fn detect_auto_fish_fishing_bar_rects(
+        &mut self,
+        plan: &AutoFishExecutionPlan,
+        fish_box_rect: Rect,
+    ) -> Result<Vec<Rect>>;
+
+    fn dispatch_auto_fish_input(&mut self, action: AutoFishInputAction) -> Result<()>;
+
+    fn update_auto_fish_overlay(&mut self, action: &AutoFishOverlayAction) -> Result<()>;
 }
 
 pub fn plan_auto_fish(config: AutoFishExecutionConfig) -> AutoFishExecutionPlan {
@@ -450,17 +629,618 @@ pub fn plan_auto_fish(config: AutoFishExecutionConfig) -> AutoFishExecutionPlan 
             completion_action: AutoFishInputAction::LeftButtonUp,
         },
         steps: auto_fish_steps(),
-        executor_ready: false,
+        executor_ready: true,
         pending_native: vec![
-            "live capture template matching for AutoFishing UI buttons".to_string(),
-            "BehaviourTree execution with trigger-local exclusive state".to_string(),
-            "OpenCV fish-bite word block and fish-bar contour recognition".to_string(),
-            "Paddle OCR for localized bite text".to_string(),
-            "mouse left-button click/down/up dispatch during fishing".to_string(),
-            "DrawContent overlays for FishBiteTips, FishBox, and FishingBarAll".to_string(),
-            "BgiFish YOLO predictor construction, RodNet inference, bait selection, and full AutoFishingTask throw-rod branch".to_string(),
+            "desktop live adapters for capture/template/text/contour/input/overlay injection"
+                .to_string(),
+            "BgiFish YOLO predictor construction and bait selection remain in full AutoFishingTask"
+                .to_string(),
+            "RodNet inference and full AutoFishingTask throw-rod branch remain native-pending"
+                .to_string(),
         ],
     }
+}
+
+pub fn execute_auto_fish_tick_plan<R>(
+    plan: &AutoFishExecutionPlan,
+    state: &mut AutoFishTriggerState,
+    runtime: &mut R,
+) -> Result<AutoFishTickExecutionReport>
+where
+    R: AutoFishRuntime,
+{
+    let observation = observe_auto_fish_tick(plan, state, runtime)?;
+    let decision = decide_auto_fish_tick(plan, state, observation.clone());
+    let mut runtime_actions = Vec::new();
+    for action in &decision.actions {
+        dispatch_auto_fish_runtime_action(runtime, action)?;
+        runtime_actions.push(AutoFishRuntimeActionReport {
+            action: action.clone(),
+        });
+    }
+
+    Ok(AutoFishTickExecutionReport {
+        task_key: plan.task_key.clone(),
+        observation,
+        decision,
+        runtime_actions,
+    })
+}
+
+pub fn observe_auto_fish_tick<R>(
+    plan: &AutoFishExecutionPlan,
+    state: &AutoFishTriggerState,
+    runtime: &mut R,
+) -> Result<AutoFishTickObservation>
+where
+    R: AutoFishRuntime,
+{
+    let now_ms = runtime.auto_fish_now_ms(plan)?;
+    let exit_fishing_button_detected =
+        runtime.detect_auto_fish_template(&plan.locators.exit_fishing_button)?;
+
+    if !plan.config_rule.enabled
+        || tick_elapsed_ms(state.prev_execute_ms, now_ms) <= plan.trigger_rule.tick_throttle_ms
+    {
+        return Ok(AutoFishTickObservation {
+            now_ms,
+            exit_fishing_button_detected,
+            ..AutoFishTickObservation::default()
+        });
+    }
+
+    if !exit_fishing_button_detected {
+        return Ok(AutoFishTickObservation {
+            now_ms,
+            exit_fishing_button_detected,
+            ..AutoFishTickObservation::default()
+        });
+    }
+
+    let bite_text_block_detected = matches!(state.stage, AutoFishTickStage::WaitingForBite)
+        && runtime.detect_auto_fish_bite_text_block(&plan.bite_rule)?;
+    let lift_rod_button_detected = matches!(state.stage, AutoFishTickStage::WaitingForBite)
+        && runtime.detect_auto_fish_template(&plan.locators.lift_rod_button)?;
+    let bite_ocr_text = if matches!(state.stage, AutoFishTickStage::WaitingForBite)
+        && !bite_text_block_detected
+        && !lift_rod_button_detected
+    {
+        runtime.ocr_auto_fish_bite_text(&plan.bite_rule)?
+    } else {
+        None
+    };
+
+    let fish_box_rects = if matches!(state.stage, AutoFishTickStage::WaitingForFishBox) {
+        runtime.detect_auto_fish_fish_box_rects(plan)?
+    } else {
+        Vec::new()
+    };
+    let fishing_bar_rects = if matches!(state.stage, AutoFishTickStage::Fishing) {
+        if let Some(fish_box_rect) = state.fish_box_rect {
+            runtime.detect_auto_fish_fishing_bar_rects(plan, fish_box_rect)?
+        } else {
+            runtime.detect_auto_fish_fish_box_rects(plan)?
+        }
+    } else {
+        Vec::new()
+    };
+
+    Ok(AutoFishTickObservation {
+        now_ms,
+        exit_fishing_button_detected,
+        bite_text_block_detected,
+        lift_rod_button_detected,
+        bite_ocr_text,
+        fish_box_rects,
+        fishing_bar_rects,
+    })
+}
+
+pub fn decide_auto_fish_tick(
+    plan: &AutoFishExecutionPlan,
+    state: &mut AutoFishTriggerState,
+    observation: AutoFishTickObservation,
+) -> AutoFishTickDecisionReport {
+    let exclusive_before = state.exclusive;
+    let stage_before = state.stage;
+
+    if !plan.config_rule.enabled {
+        return auto_fish_skip_report(
+            AutoFishTickSkipReason::Disabled,
+            exclusive_before,
+            stage_before,
+            state,
+        );
+    }
+
+    if tick_elapsed_ms(state.prev_execute_ms, observation.now_ms)
+        <= plan.trigger_rule.tick_throttle_ms
+    {
+        return auto_fish_skip_report(
+            AutoFishTickSkipReason::TickThrottle,
+            exclusive_before,
+            stage_before,
+            state,
+        );
+    }
+
+    state.prev_execute_ms = Some(observation.now_ms);
+    state.exclusive = observation.exit_fishing_button_detected;
+
+    if !state.exclusive {
+        let mut actions = Vec::new();
+        if state.left_button_down {
+            actions.push(AutoFishRuntimeAction::Input {
+                action: plan.fishing_input_rule.completion_action,
+                reason: AutoFishRuntimeActionReason::ExclusiveLost,
+            });
+        }
+        actions.extend(auto_fish_completion_overlay_actions(
+            &plan.fish_bar_rule.overlay_keys,
+            AutoFishRuntimeActionReason::ExclusiveLost,
+        ));
+        state.stage = AutoFishTickStage::WaitingForBite;
+        state.fish_box_rect = None;
+        state.left_button_down = false;
+        state.no_bar_since_ms = None;
+
+        return AutoFishTickDecisionReport {
+            processed: false,
+            skip_reason: Some(AutoFishTickSkipReason::NotExclusive),
+            exclusive_before,
+            exclusive_after: state.exclusive,
+            stage_before,
+            stage_after: state.stage,
+            bite_method: None,
+            fish_box: None,
+            bar: None,
+            actions,
+        };
+    }
+
+    match state.stage {
+        AutoFishTickStage::WaitingForBite => {
+            let Some(method) = detect_auto_fish_bite_method(&observation, &plan.bite_rule) else {
+                return AutoFishTickDecisionReport {
+                    processed: true,
+                    skip_reason: None,
+                    exclusive_before,
+                    exclusive_after: state.exclusive,
+                    stage_before,
+                    stage_after: state.stage,
+                    bite_method: None,
+                    fish_box: None,
+                    bar: None,
+                    actions: Vec::new(),
+                };
+            };
+
+            state.stage = AutoFishTickStage::WaitingForFishBox;
+            state.fish_box_rect = None;
+            state.no_bar_since_ms = None;
+            state.left_button_down = false;
+            AutoFishTickDecisionReport {
+                processed: true,
+                skip_reason: None,
+                exclusive_before,
+                exclusive_after: state.exclusive,
+                stage_before,
+                stage_after: state.stage,
+                bite_method: Some(method),
+                fish_box: None,
+                bar: None,
+                actions: vec![
+                    AutoFishRuntimeAction::Overlay {
+                        action: AutoFishOverlayAction::Clear {
+                            key: AUTO_FISH_BITE_TIPS_OVERLAY.to_string(),
+                        },
+                        reason: AutoFishRuntimeActionReason::RaiseRod,
+                    },
+                    AutoFishRuntimeAction::Input {
+                        action: plan.fishing_input_rule.raise_rod_action,
+                        reason: AutoFishRuntimeActionReason::RaiseRod,
+                    },
+                ],
+            }
+        }
+        AutoFishTickStage::WaitingForFishBox => {
+            let fish_box = resolve_auto_fish_fish_box(
+                observation.fish_box_rects.clone(),
+                plan.capture_size,
+                &plan.fish_bar_rule,
+            );
+            let mut actions = Vec::new();
+            if let Some(rect) = fish_box.fish_box_rect {
+                state.stage = AutoFishTickStage::Fishing;
+                state.fish_box_rect = Some(rect);
+                state.no_bar_since_ms = None;
+                actions.push(AutoFishRuntimeAction::Overlay {
+                    action: AutoFishOverlayAction::DrawFishBox {
+                        key: AUTO_FISH_BOX_OVERLAY.to_string(),
+                        rect,
+                    },
+                    reason: AutoFishRuntimeActionReason::FishBoxDetected,
+                });
+            }
+
+            AutoFishTickDecisionReport {
+                processed: true,
+                skip_reason: None,
+                exclusive_before,
+                exclusive_after: state.exclusive,
+                stage_before,
+                stage_after: state.stage,
+                bite_method: None,
+                fish_box: Some(fish_box),
+                bar: None,
+                actions,
+            }
+        }
+        AutoFishTickStage::Fishing => {
+            let bar = resolve_auto_fish_bar(
+                observation.fishing_bar_rects.clone(),
+                state.left_button_down,
+                state.no_bar_since_ms,
+                observation.now_ms,
+                &plan.fish_bar_rule,
+            );
+
+            state.left_button_down = match bar.decision {
+                AutoFishBarDecisionKind::PressLeftButton
+                | AutoFishBarDecisionKind::KeepLeftButtonDown => true,
+                AutoFishBarDecisionKind::ReleaseLeftButton
+                | AutoFishBarDecisionKind::KeepLeftButtonUp
+                | AutoFishBarDecisionKind::CompleteNoBarGrace => false,
+                AutoFishBarDecisionKind::InvalidTwoRectTarget
+                | AutoFishBarDecisionKind::IgnoreUnexpectedRectCount
+                | AutoFishBarDecisionKind::ArmNoBarGrace
+                | AutoFishBarDecisionKind::WaitNoBarGrace => state.left_button_down,
+            };
+            state.no_bar_since_ms = bar.no_bar_since_ms;
+
+            let mut actions = auto_fish_bar_actions(plan, &bar);
+            if matches!(bar.decision, AutoFishBarDecisionKind::CompleteNoBarGrace) {
+                state.stage = AutoFishTickStage::WaitingForBite;
+                state.fish_box_rect = None;
+                state.no_bar_since_ms = None;
+                actions.extend(auto_fish_completion_overlay_actions(
+                    &plan.fish_bar_rule.overlay_keys,
+                    AutoFishRuntimeActionReason::CompletionCleanup,
+                ));
+            }
+
+            AutoFishTickDecisionReport {
+                processed: true,
+                skip_reason: None,
+                exclusive_before,
+                exclusive_after: state.exclusive,
+                stage_before,
+                stage_after: state.stage,
+                bite_method: None,
+                fish_box: None,
+                bar: Some(bar),
+                actions,
+            }
+        }
+    }
+}
+
+fn auto_fish_skip_report(
+    reason: AutoFishTickSkipReason,
+    exclusive_before: bool,
+    stage_before: AutoFishTickStage,
+    state: &AutoFishTriggerState,
+) -> AutoFishTickDecisionReport {
+    AutoFishTickDecisionReport {
+        processed: false,
+        skip_reason: Some(reason),
+        exclusive_before,
+        exclusive_after: state.exclusive,
+        stage_before,
+        stage_after: state.stage,
+        bite_method: None,
+        fish_box: None,
+        bar: None,
+        actions: Vec::new(),
+    }
+}
+
+fn detect_auto_fish_bite_method(
+    observation: &AutoFishTickObservation,
+    rule: &AutoFishBiteRule,
+) -> Option<AutoFishBiteDetectionMethod> {
+    if observation.bite_text_block_detected {
+        return Some(AutoFishBiteDetectionMethod::WordBlock);
+    }
+    if observation.lift_rod_button_detected {
+        return Some(AutoFishBiteDetectionMethod::LiftRodButton);
+    }
+    if observation
+        .bite_ocr_text
+        .as_deref()
+        .is_some_and(|text| text.contains(&rule.localized_bite_text_default))
+    {
+        return Some(AutoFishBiteDetectionMethod::Ocr);
+    }
+    None
+}
+
+fn resolve_auto_fish_fish_box(
+    rects: Vec<Rect>,
+    capture_size: Size,
+    rule: &AutoFishBarRule,
+) -> AutoFishFishBoxDecisionReport {
+    if rects.len() != 2 {
+        return AutoFishFishBoxDecisionReport {
+            decision: AutoFishFishBoxDecisionKind::WaitingForTwoRects,
+            fish_box_rect: None,
+            cursor_rect: None,
+            target_rect: None,
+            considered_rects: rects,
+        };
+    }
+
+    let left = rects[0];
+    let right = rects[1];
+    if (left.height - right.height).abs() > rule.initial_rect_height_diff_max {
+        return AutoFishFishBoxDecisionReport {
+            decision: AutoFishFishBoxDecisionKind::HeightMismatch,
+            fish_box_rect: None,
+            cursor_rect: None,
+            target_rect: None,
+            considered_rects: rects,
+        };
+    }
+
+    let (cursor, target) = if left.width < right.width {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let top_width = capture_size.width as i32;
+    let top_mid_x = top_width / 2;
+    let cursor_right = cursor.x + cursor.width;
+    let invalid = target.x < cursor.x
+        || cursor.width > target.width
+        || cursor_right > top_mid_x
+        || cursor_right > target.x - target.width / 2
+        || cursor_right > top_mid_x - target.width;
+    if invalid {
+        return AutoFishFishBoxDecisionReport {
+            decision: AutoFishFishBoxDecisionKind::InvalidGeometry,
+            fish_box_rect: None,
+            cursor_rect: Some(cursor),
+            target_rect: Some(target),
+            considered_rects: rects,
+        };
+    }
+
+    let h_extra = cursor.height;
+    let v_extra = cursor.height / 4;
+    let raw = Rect {
+        x: cursor.x - h_extra,
+        y: cursor.y - v_extra,
+        width: (top_mid_x - cursor.x) * 2 + h_extra * 2,
+        height: cursor.height + v_extra * 2,
+    };
+
+    match raw.clamp_to(capture_size).ok() {
+        Some(fish_box_rect) => AutoFishFishBoxDecisionReport {
+            decision: AutoFishFishBoxDecisionKind::Detected,
+            fish_box_rect: Some(fish_box_rect),
+            cursor_rect: Some(cursor),
+            target_rect: Some(target),
+            considered_rects: rects,
+        },
+        None => AutoFishFishBoxDecisionReport {
+            decision: AutoFishFishBoxDecisionKind::InvalidGeometry,
+            fish_box_rect: None,
+            cursor_rect: Some(cursor),
+            target_rect: Some(target),
+            considered_rects: rects,
+        },
+    }
+}
+
+fn resolve_auto_fish_bar(
+    mut rects: Vec<Rect>,
+    left_button_down: bool,
+    no_bar_since_ms: Option<u64>,
+    now_ms: u64,
+    rule: &AutoFishBarRule,
+) -> AutoFishBarDecisionReport {
+    if rects.is_empty() {
+        let Some(armed_since_ms) = no_bar_since_ms else {
+            return AutoFishBarDecisionReport {
+                decision: AutoFishBarDecisionKind::ArmNoBarGrace,
+                relation: None,
+                considered_rects: Vec::new(),
+                no_bar_since_ms: Some(now_ms),
+                no_bar_grace_elapsed: false,
+            };
+        };
+
+        let grace_elapsed =
+            now_ms.saturating_sub(armed_since_ms) >= rule.no_detection_finish_grace_seconds * 1_000;
+        if !grace_elapsed {
+            return AutoFishBarDecisionReport {
+                decision: AutoFishBarDecisionKind::WaitNoBarGrace,
+                relation: None,
+                considered_rects: Vec::new(),
+                no_bar_since_ms: Some(armed_since_ms),
+                no_bar_grace_elapsed: false,
+            };
+        }
+
+        return AutoFishBarDecisionReport {
+            decision: AutoFishBarDecisionKind::CompleteNoBarGrace,
+            relation: None,
+            considered_rects: Vec::new(),
+            no_bar_since_ms: None,
+            no_bar_grace_elapsed: true,
+        };
+    }
+
+    if rects.len() > rule.max_rect_count_before_taking_highest_three {
+        rects.sort_by_key(|rect| std::cmp::Reverse(rect.height));
+        rects.truncate(rule.max_rect_count_before_taking_highest_three);
+    }
+
+    if rects.len() == 2 {
+        let (cursor, target) = if rects[0].width < rects[1].width {
+            (rects[0], rects[1])
+        } else {
+            (rects[1], rects[0])
+        };
+        if (target.width as f64)
+            < cursor.width as f64 * rule.two_rect_target_min_cursor_width_multiplier
+        {
+            return AutoFishBarDecisionReport {
+                decision: AutoFishBarDecisionKind::InvalidTwoRectTarget,
+                relation: None,
+                considered_rects: vec![target, cursor],
+                no_bar_since_ms: None,
+                no_bar_grace_elapsed: false,
+            };
+        }
+
+        let relation = if cursor.x < target.x {
+            AutoFishBarTargetRelation::CursorBeforeTarget
+        } else {
+            AutoFishBarTargetRelation::CursorPastTarget
+        };
+        return auto_fish_bar_button_report(left_button_down, vec![target, cursor], relation);
+    }
+
+    if rects.len() == 3 {
+        rects.sort_by_key(|rect| rect.x);
+        let left = rects[0];
+        let cursor = rects[1];
+        let right = rects[2];
+        let right_remaining = right.x + right.width - (cursor.x + cursor.width);
+        let left_distance = cursor.x - left.x;
+        let relation = if right_remaining > left_distance {
+            AutoFishBarTargetRelation::CursorBeforeTarget
+        } else {
+            AutoFishBarTargetRelation::CursorPastTarget
+        };
+        return auto_fish_bar_button_report(left_button_down, vec![left, cursor, right], relation);
+    }
+
+    AutoFishBarDecisionReport {
+        decision: AutoFishBarDecisionKind::IgnoreUnexpectedRectCount,
+        relation: None,
+        considered_rects: Vec::new(),
+        no_bar_since_ms: None,
+        no_bar_grace_elapsed: false,
+    }
+}
+
+fn auto_fish_bar_button_report(
+    left_button_down: bool,
+    considered_rects: Vec<Rect>,
+    relation: AutoFishBarTargetRelation,
+) -> AutoFishBarDecisionReport {
+    let should_press = matches!(relation, AutoFishBarTargetRelation::CursorBeforeTarget);
+    let decision = if should_press {
+        if left_button_down {
+            AutoFishBarDecisionKind::KeepLeftButtonDown
+        } else {
+            AutoFishBarDecisionKind::PressLeftButton
+        }
+    } else if left_button_down {
+        AutoFishBarDecisionKind::ReleaseLeftButton
+    } else {
+        AutoFishBarDecisionKind::KeepLeftButtonUp
+    };
+
+    AutoFishBarDecisionReport {
+        decision,
+        relation: Some(relation),
+        considered_rects,
+        no_bar_since_ms: None,
+        no_bar_grace_elapsed: false,
+    }
+}
+
+fn auto_fish_bar_actions(
+    plan: &AutoFishExecutionPlan,
+    bar: &AutoFishBarDecisionReport,
+) -> Vec<AutoFishRuntimeAction> {
+    let mut actions = Vec::new();
+    if !bar.considered_rects.is_empty() {
+        actions.push(AutoFishRuntimeAction::Overlay {
+            action: AutoFishOverlayAction::DrawFishingBar {
+                key: AUTO_FISH_BAR_OVERLAY.to_string(),
+                rects: bar.considered_rects.clone(),
+            },
+            reason: AutoFishRuntimeActionReason::FishingBarDetected,
+        });
+    }
+
+    match bar.decision {
+        AutoFishBarDecisionKind::PressLeftButton => actions.push(AutoFishRuntimeAction::Input {
+            action: plan.fishing_input_rule.fishing_left_of_target_action,
+            reason: AutoFishRuntimeActionReason::CursorBeforeTarget,
+        }),
+        AutoFishBarDecisionKind::ReleaseLeftButton => {
+            actions.push(AutoFishRuntimeAction::Input {
+                action: plan.fishing_input_rule.fishing_past_target_action,
+                reason: AutoFishRuntimeActionReason::CursorPastTarget,
+            });
+        }
+        AutoFishBarDecisionKind::CompleteNoBarGrace => {
+            actions.push(AutoFishRuntimeAction::Input {
+                action: plan.fishing_input_rule.completion_action,
+                reason: AutoFishRuntimeActionReason::NoBarGrace,
+            });
+        }
+        AutoFishBarDecisionKind::ArmNoBarGrace | AutoFishBarDecisionKind::WaitNoBarGrace => actions
+            .push(AutoFishRuntimeAction::Overlay {
+                action: AutoFishOverlayAction::Clear {
+                    key: AUTO_FISH_BAR_OVERLAY.to_string(),
+                },
+                reason: AutoFishRuntimeActionReason::NoBarGrace,
+            }),
+        AutoFishBarDecisionKind::KeepLeftButtonDown
+        | AutoFishBarDecisionKind::KeepLeftButtonUp
+        | AutoFishBarDecisionKind::InvalidTwoRectTarget
+        | AutoFishBarDecisionKind::IgnoreUnexpectedRectCount => {}
+    }
+
+    actions
+}
+
+fn auto_fish_completion_overlay_actions(
+    overlay_keys: &[String],
+    reason: AutoFishRuntimeActionReason,
+) -> Vec<AutoFishRuntimeAction> {
+    overlay_keys
+        .iter()
+        .map(|key| AutoFishRuntimeAction::Overlay {
+            action: AutoFishOverlayAction::Clear { key: key.clone() },
+            reason,
+        })
+        .collect()
+}
+
+fn dispatch_auto_fish_runtime_action<R>(
+    runtime: &mut R,
+    action: &AutoFishRuntimeAction,
+) -> Result<()>
+where
+    R: AutoFishRuntime,
+{
+    match action {
+        AutoFishRuntimeAction::Input { action, .. } => runtime.dispatch_auto_fish_input(*action),
+        AutoFishRuntimeAction::Overlay { action, .. } => runtime.update_auto_fish_overlay(action),
+    }
+}
+
+fn tick_elapsed_ms(previous_ms: Option<u64>, now_ms: u64) -> u64 {
+    previous_ms
+        .map(|previous| now_ms.saturating_sub(previous))
+        .unwrap_or(u64::MAX)
 }
 
 fn auto_fish_steps() -> Vec<AutoFishTickStep> {
@@ -613,4 +1393,294 @@ fn u32_member<const N: usize>(value: &Value, keys: [&str; N]) -> Option<u32> {
     keys.into_iter()
         .filter_map(|key| value.get(key))
         .find_map(|value| value.as_u64().and_then(|value| u32::try_from(value).ok()))
+}
+
+#[cfg(test)]
+mod auto_fish_tests {
+    use super::*;
+    use crate::TaskError;
+    use std::collections::VecDeque;
+
+    #[derive(Debug, Default)]
+    struct FakeAutoFishRuntime {
+        now_ms: u64,
+        exit_fishing_button_detected: bool,
+        lift_rod_button_detected: bool,
+        bite_text_block_detected: bool,
+        bite_ocr_text: Option<String>,
+        fish_box_rects: VecDeque<Vec<Rect>>,
+        fishing_bar_rects: VecDeque<Vec<Rect>>,
+        inputs: Vec<AutoFishInputAction>,
+        overlays: Vec<AutoFishOverlayAction>,
+    }
+
+    impl AutoFishRuntime for FakeAutoFishRuntime {
+        fn auto_fish_now_ms(&mut self, _plan: &AutoFishExecutionPlan) -> Result<u64> {
+            Ok(self.now_ms)
+        }
+
+        fn detect_auto_fish_template(&mut self, locator: &AutoFishTemplateLocator) -> Result<bool> {
+            match locator.asset.as_str() {
+                AUTO_FISH_EXIT_FISHING_BUTTON => Ok(self.exit_fishing_button_detected),
+                AUTO_FISH_LIFT_ROD_BUTTON => Ok(self.lift_rod_button_detected),
+                asset => Err(TaskError::VisionPlan(format!(
+                    "unexpected template {asset}"
+                ))),
+            }
+        }
+
+        fn detect_auto_fish_bite_text_block(&mut self, _rule: &AutoFishBiteRule) -> Result<bool> {
+            Ok(self.bite_text_block_detected)
+        }
+
+        fn ocr_auto_fish_bite_text(&mut self, _rule: &AutoFishBiteRule) -> Result<Option<String>> {
+            Ok(self.bite_ocr_text.clone())
+        }
+
+        fn detect_auto_fish_fish_box_rects(
+            &mut self,
+            _plan: &AutoFishExecutionPlan,
+        ) -> Result<Vec<Rect>> {
+            Ok(self.fish_box_rects.pop_front().unwrap_or_default())
+        }
+
+        fn detect_auto_fish_fishing_bar_rects(
+            &mut self,
+            _plan: &AutoFishExecutionPlan,
+            _fish_box_rect: Rect,
+        ) -> Result<Vec<Rect>> {
+            Ok(self.fishing_bar_rects.pop_front().unwrap_or_default())
+        }
+
+        fn dispatch_auto_fish_input(&mut self, action: AutoFishInputAction) -> Result<()> {
+            self.inputs.push(action);
+            Ok(())
+        }
+
+        fn update_auto_fish_overlay(&mut self, action: &AutoFishOverlayAction) -> Result<()> {
+            self.overlays.push(action.clone());
+            Ok(())
+        }
+    }
+
+    fn enabled_plan() -> AutoFishExecutionPlan {
+        let mut config = AutoFishExecutionConfig::default();
+        config.auto_fishing_config.enabled = true;
+        plan_auto_fish(config)
+    }
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn detected_fish_box_rects() -> Vec<Rect> {
+        vec![rect(700, 100, 20, 40), rect(850, 100, 200, 38)]
+    }
+
+    #[test]
+    fn auto_fish_tick_disabled_skips_without_mutating_state() {
+        let plan = plan_auto_fish(AutoFishExecutionConfig::default());
+        assert!(plan.executor_ready);
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("desktop live adapters")));
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("RodNet")));
+
+        let mut state = AutoFishTriggerState {
+            prev_execute_ms: Some(10),
+            exclusive: true,
+            stage: AutoFishTickStage::Fishing,
+            fish_box_rect: Some(rect(1, 2, 3, 4)),
+            left_button_down: true,
+            no_bar_since_ms: Some(20),
+        };
+        let original = state.clone();
+        let mut runtime = FakeAutoFishRuntime {
+            now_ms: 100,
+            exit_fishing_button_detected: true,
+            ..FakeAutoFishRuntime::default()
+        };
+
+        let report = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.decision.skip_reason,
+            Some(AutoFishTickSkipReason::Disabled)
+        );
+        assert!(!report.decision.processed);
+        assert_eq!(state, original);
+        assert!(runtime.inputs.is_empty());
+        assert!(runtime.overlays.is_empty());
+    }
+
+    #[test]
+    fn auto_fish_tick_throttle_skips_when_elapsed_is_less_or_equal_67ms() {
+        let plan = enabled_plan();
+        let mut state = AutoFishTriggerState {
+            prev_execute_ms: Some(1_000),
+            exclusive: true,
+            ..AutoFishTriggerState::default()
+        };
+        let mut runtime = FakeAutoFishRuntime {
+            now_ms: 1_067,
+            exit_fishing_button_detected: true,
+            bite_text_block_detected: true,
+            ..FakeAutoFishRuntime::default()
+        };
+
+        let report = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.decision.skip_reason,
+            Some(AutoFishTickSkipReason::TickThrottle)
+        );
+        assert_eq!(state.prev_execute_ms, Some(1_000));
+        assert_eq!(state.stage, AutoFishTickStage::WaitingForBite);
+        assert!(runtime.inputs.is_empty());
+    }
+
+    #[test]
+    fn auto_fish_tick_bite_detected_clicks_raise_rod_and_waits_for_box() {
+        let plan = enabled_plan();
+        let mut state = AutoFishTriggerState::default();
+        let mut runtime = FakeAutoFishRuntime {
+            now_ms: 1_000,
+            exit_fishing_button_detected: true,
+            bite_text_block_detected: true,
+            ..FakeAutoFishRuntime::default()
+        };
+
+        let report = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert!(report.decision.processed);
+        assert_eq!(
+            report.decision.bite_method,
+            Some(AutoFishBiteDetectionMethod::WordBlock)
+        );
+        assert!(state.exclusive);
+        assert_eq!(state.stage, AutoFishTickStage::WaitingForFishBox);
+        assert_eq!(runtime.inputs, vec![AutoFishInputAction::LeftButtonClick]);
+        assert_eq!(
+            runtime.overlays,
+            vec![AutoFishOverlayAction::Clear {
+                key: AUTO_FISH_BITE_TIPS_OVERLAY.to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn auto_fish_tick_fish_box_then_bar_holds_and_releases_left_button() {
+        let plan = enabled_plan();
+        let mut state = AutoFishTriggerState {
+            prev_execute_ms: Some(900),
+            exclusive: true,
+            stage: AutoFishTickStage::WaitingForFishBox,
+            ..AutoFishTriggerState::default()
+        };
+        let mut runtime = FakeAutoFishRuntime {
+            now_ms: 1_000,
+            exit_fishing_button_detected: true,
+            fish_box_rects: VecDeque::from([detected_fish_box_rects()]),
+            ..FakeAutoFishRuntime::default()
+        };
+
+        let fish_box = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert_eq!(state.stage, AutoFishTickStage::Fishing);
+        assert!(state.fish_box_rect.is_some());
+        assert_eq!(
+            fish_box
+                .decision
+                .fish_box
+                .as_ref()
+                .map(|report| report.decision),
+            Some(AutoFishFishBoxDecisionKind::Detected)
+        );
+        assert!(runtime
+            .overlays
+            .iter()
+            .any(|action| matches!(action, AutoFishOverlayAction::DrawFishBox { .. })));
+
+        runtime.now_ms = 1_100;
+        runtime.fishing_bar_rects =
+            VecDeque::from([vec![rect(610, 300, 20, 20), rect(700, 300, 260, 20)]]);
+        let hold = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert_eq!(
+            hold.decision.bar.as_ref().map(|report| report.decision),
+            Some(AutoFishBarDecisionKind::PressLeftButton)
+        );
+        assert!(state.left_button_down);
+        assert_eq!(
+            runtime.inputs.last(),
+            Some(&AutoFishInputAction::LeftButtonDown)
+        );
+
+        runtime.now_ms = 1_200;
+        runtime.fishing_bar_rects =
+            VecDeque::from([vec![rect(980, 300, 20, 20), rect(700, 300, 260, 20)]]);
+        let release = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert_eq!(
+            release.decision.bar.as_ref().map(|report| report.decision),
+            Some(AutoFishBarDecisionKind::ReleaseLeftButton)
+        );
+        assert!(!state.left_button_down);
+        assert_eq!(
+            runtime.inputs,
+            vec![
+                AutoFishInputAction::LeftButtonDown,
+                AutoFishInputAction::LeftButtonUp
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_fish_tick_completion_cleanup_after_no_bar_grace() {
+        let plan = enabled_plan();
+        let mut state = AutoFishTriggerState {
+            prev_execute_ms: Some(900),
+            exclusive: true,
+            stage: AutoFishTickStage::Fishing,
+            fish_box_rect: Some(rect(660, 90, 620, 60)),
+            left_button_down: true,
+            no_bar_since_ms: Some(1_000),
+        };
+        let mut runtime = FakeAutoFishRuntime {
+            now_ms: 2_000,
+            exit_fishing_button_detected: true,
+            fishing_bar_rects: VecDeque::from([Vec::new()]),
+            ..FakeAutoFishRuntime::default()
+        };
+
+        let report = execute_auto_fish_tick_plan(&plan, &mut state, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.decision.bar.as_ref().map(|bar| bar.decision),
+            Some(AutoFishBarDecisionKind::CompleteNoBarGrace)
+        );
+        assert_eq!(state.stage, AutoFishTickStage::WaitingForBite);
+        assert_eq!(state.fish_box_rect, None);
+        assert!(!state.left_button_down);
+        assert_eq!(state.no_bar_since_ms, None);
+        assert_eq!(runtime.inputs, vec![AutoFishInputAction::LeftButtonUp]);
+        for key in [
+            AUTO_FISH_BITE_TIPS_OVERLAY,
+            AUTO_FISH_BOX_OVERLAY,
+            AUTO_FISH_BAR_OVERLAY,
+        ] {
+            assert!(runtime.overlays.contains(&AutoFishOverlayAction::Clear {
+                key: key.to_string()
+            }));
+        }
+    }
 }

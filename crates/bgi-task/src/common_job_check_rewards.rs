@@ -290,7 +290,7 @@ pub fn plan_check_rewards(
             "OCR adventurer handbook left panel",
             CheckRewardsStepAction::Ocr {
                 command: BvPageCommand::Ocr {
-                    locator: locators.commissions_ocr.clone(),
+                    locator: Box::new(locators.commissions_ocr.clone()),
                 },
             },
         ),

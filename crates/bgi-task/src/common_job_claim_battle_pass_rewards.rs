@@ -228,71 +228,71 @@ pub fn plan_claim_battle_pass_rewards(
     };
     let claim_all_ocr = page.ocr(Some(claim_all_rule.ocr_roi));
     let escape_events = InputSequence::new().key_press(VK_ESCAPE).events().to_vec();
-    let mut steps = Vec::new();
-
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::Setup,
-        BattlePassRewardStepCondition::Always,
-        None,
-        "log battle pass reward claim start",
-        BattlePassRewardStepAction::Log {
-            message: "start ClaimBattlePassRewards common job plan".to_string(),
-        },
-    ));
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::Setup,
-        BattlePassRewardStepCondition::Always,
-        None,
-        "return to main UI before opening battle pass",
-        BattlePassRewardStepAction::CommonJob {
-            task_key: RETURN_MAIN_UI_TASK_KEY.to_string(),
-        },
-    ));
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::Setup,
-        BattlePassRewardStepCondition::Always,
-        None,
-        "wait before opening battle pass",
-        BattlePassRewardStepAction::Page {
-            command: task_vision_result(page.wait(BEFORE_OPEN_DELAY_MS))?,
-        },
-    ));
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::Setup,
-        BattlePassRewardStepCondition::Always,
-        None,
-        "open battle pass screen",
-        BattlePassRewardStepAction::GenshinAction {
-            action: GenshinAction::OpenBattlePassScreen,
-        },
-    ));
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::Setup,
-        BattlePassRewardStepCondition::Always,
-        None,
-        "wait after opening battle pass",
-        BattlePassRewardStepAction::Page {
-            command: task_vision_result(page.wait(AFTER_OPEN_DELAY_MS))?,
-        },
-    ));
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::PointsClaim,
-        BattlePassRewardStepCondition::Always,
-        Some(BattlePassClaimScope::Points),
-        "click battle pass points tab",
-        BattlePassRewardStepAction::Page {
-            command: page.click_1080p(POINTS_TAB_X_1080P, POINTS_TAB_Y_1080P),
-        },
-    ));
-    steps.push(BattlePassRewardStep::new(
-        BattlePassRewardStepPhase::PointsClaim,
-        BattlePassRewardStepCondition::Always,
-        Some(BattlePassClaimScope::Points),
-        "wait before claiming battle pass points",
-        BattlePassRewardStepAction::Page {
-            command: task_vision_result(page.wait(BEFORE_POINTS_CLAIM_DELAY_MS))?,
-        },
-    ));
+    let mut steps = vec![
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::Setup,
+            BattlePassRewardStepCondition::Always,
+            None,
+            "log battle pass reward claim start",
+            BattlePassRewardStepAction::Log {
+                message: "start ClaimBattlePassRewards common job plan".to_string(),
+            },
+        ),
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::Setup,
+            BattlePassRewardStepCondition::Always,
+            None,
+            "return to main UI before opening battle pass",
+            BattlePassRewardStepAction::CommonJob {
+                task_key: RETURN_MAIN_UI_TASK_KEY.to_string(),
+            },
+        ),
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::Setup,
+            BattlePassRewardStepCondition::Always,
+            None,
+            "wait before opening battle pass",
+            BattlePassRewardStepAction::Page {
+                command: task_vision_result(page.wait(BEFORE_OPEN_DELAY_MS))?,
+            },
+        ),
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::Setup,
+            BattlePassRewardStepCondition::Always,
+            None,
+            "open battle pass screen",
+            BattlePassRewardStepAction::GenshinAction {
+                action: GenshinAction::OpenBattlePassScreen,
+            },
+        ),
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::Setup,
+            BattlePassRewardStepCondition::Always,
+            None,
+            "wait after opening battle pass",
+            BattlePassRewardStepAction::Page {
+                command: task_vision_result(page.wait(AFTER_OPEN_DELAY_MS))?,
+            },
+        ),
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::PointsClaim,
+            BattlePassRewardStepCondition::Always,
+            Some(BattlePassClaimScope::Points),
+            "click battle pass points tab",
+            BattlePassRewardStepAction::Page {
+                command: page.click_1080p(POINTS_TAB_X_1080P, POINTS_TAB_Y_1080P),
+            },
+        ),
+        BattlePassRewardStep::new(
+            BattlePassRewardStepPhase::PointsClaim,
+            BattlePassRewardStepCondition::Always,
+            Some(BattlePassClaimScope::Points),
+            "wait before claiming battle pass points",
+            BattlePassRewardStepAction::Page {
+                command: task_vision_result(page.wait(BEFORE_POINTS_CLAIM_DELAY_MS))?,
+            },
+        ),
+    ];
     append_claim_all_steps(
         &mut steps,
         BattlePassRewardStepPhase::PointsClaim,

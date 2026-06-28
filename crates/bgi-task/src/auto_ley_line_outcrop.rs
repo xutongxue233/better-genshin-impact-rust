@@ -446,6 +446,298 @@ pub enum AutoLeyLineTaskAction {
     RestoreMarksOverlayAndInputs,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoLeyLineOutcropExecutionStatus {
+    Completed,
+    StartupFailed,
+    NoLeyLineFound,
+    NavigationPreparationFailed,
+    PathingFailed,
+    FightFailedStopped,
+    MaxConsecutiveFightFailures,
+    ResinExhausted,
+    RewardNavigationFailed,
+    RewardSkipped,
+    RuntimeError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoLeyLineOutcropRuntimeActionKind {
+    PrepareStartup,
+    CountResin,
+    DiscoverLeyLine,
+    PrepareNavigation,
+    RunPathing,
+    ExecuteFight,
+    NavigateRewardFlower,
+    ClaimReward,
+    ScanDropsAfterReward,
+    SwitchNextLeyLine,
+    Cleanup,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoLeyLinePathingRunKind {
+    Initial,
+    Rerun,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoLeyLineResinKind {
+    Condensed,
+    Transient,
+    Original,
+    Fragile,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineResinInventory {
+    pub original_resin: i32,
+    pub condensed_resin: i32,
+    pub transient_resin: i32,
+    pub fragile_resin: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineRewardClaimPlan {
+    pub resin_kind: AutoLeyLineResinKind,
+    pub priority_label: String,
+    pub expected_original_resin_cost: i32,
+    pub uses_double_reward: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLinePathingExecutionRequest {
+    pub run_index: u32,
+    pub run_kind: AutoLeyLinePathingRunKind,
+    pub routes: Vec<String>,
+    pub selected_start_node_id: Option<i32>,
+    pub selected_target_node_id: Option<i32>,
+    pub selected_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineStartupOutcome {
+    pub prepared: bool,
+    pub returned_main_ui: bool,
+    pub combat_team_switched: bool,
+    pub custom_marks_closed: bool,
+    pub mask_overlay_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoLeyLineRuntimeDiscoveryOutcome {
+    pub found: bool,
+    pub position: Option<AutoLeyLineNodePosition>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineNavigationPreparationOutcome {
+    pub prepared: bool,
+    pub teleported: bool,
+    pub route_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLinePathingOutcome {
+    pub completed: bool,
+    pub executed_routes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoLeyLineFightOutcome {
+    Succeeded { duration_ms: u64 },
+    Failed { reason: String, stop: bool },
+    TimedOut { timeout_seconds: i32, stop: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineRewardNavigationOutcome {
+    pub reached: bool,
+    pub attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoLeyLineRewardSkipReason {
+    InsufficientResin,
+    ClaimDisabled,
+    RewardPromptMissing,
+    RuntimeSkipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoLeyLineRewardClaimOutcome {
+    Claimed {
+        resin_kind: AutoLeyLineResinKind,
+        consumed_original_resin: i32,
+    },
+    Skipped {
+        reason: AutoLeyLineRewardSkipReason,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineDropScanOutcome {
+    pub enabled: bool,
+    pub scanned: bool,
+    pub picked_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineSwitchNextOutcome {
+    pub switched: bool,
+    pub exhausted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineCleanupOutcome {
+    pub completed: bool,
+    pub returned_main_ui: bool,
+    pub custom_marks_restored: bool,
+    pub mask_overlay_restored: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoLeyLineSkipReason {
+    NoSelectedPath,
+    ResinUnavailable(AutoLeyLineRewardSkipReason),
+    RewardClaimSkipped(AutoLeyLineRewardSkipReason),
+    FightFailed { reason: String },
+    DropScanDisabled,
+    NextLeyLineUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoLeyLineOutcropRuntimeActionOutcome {
+    Startup(AutoLeyLineStartupOutcome),
+    Resin(AutoLeyLineResinInventory),
+    Discovery(AutoLeyLineRuntimeDiscoveryOutcome),
+    NavigationPreparation(AutoLeyLineNavigationPreparationOutcome),
+    Pathing(AutoLeyLinePathingOutcome),
+    Fight(AutoLeyLineFightOutcome),
+    RewardNavigation(AutoLeyLineRewardNavigationOutcome),
+    RewardClaim(AutoLeyLineRewardClaimOutcome),
+    DropScan(AutoLeyLineDropScanOutcome),
+    SwitchNext(AutoLeyLineSwitchNextOutcome),
+    Cleanup(AutoLeyLineCleanupOutcome),
+    Skipped(AutoLeyLineSkipReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoLeyLineOutcropRuntimeActionReport {
+    pub action_kind: AutoLeyLineOutcropRuntimeActionKind,
+    pub outcome: AutoLeyLineOutcropRuntimeActionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoLeyLineOutcropSkippedStep {
+    pub action_kind: AutoLeyLineOutcropRuntimeActionKind,
+    pub reason: AutoLeyLineSkipReason,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AutoLeyLineOutcropExecutorState {
+    pub target_runs: u32,
+    pub attempted_runs: u32,
+    pub fights_completed: u32,
+    pub fight_failures: u32,
+    pub consecutive_fight_failures: u32,
+    pub reward_claims_completed: u32,
+    pub reward_skipped_count: u32,
+    pub resin_checks: u32,
+    pub next_ley_line_switches: u32,
+    pub drop_scans: u32,
+    pub startup_prepared: bool,
+    pub cleanup_completed: bool,
+    pub last_routes: Vec<String>,
+    pub last_resin_inventory: Option<AutoLeyLineResinInventory>,
+    pub last_reward_claim_plan: Option<AutoLeyLineRewardClaimPlan>,
+    pub last_reward_claim_outcome: Option<AutoLeyLineRewardClaimOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutoLeyLineOutcropExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub status: AutoLeyLineOutcropExecutionStatus,
+    pub state: AutoLeyLineOutcropExecutorState,
+    pub executed_actions: Vec<AutoLeyLineOutcropRuntimeActionReport>,
+    pub skipped_steps: Vec<AutoLeyLineOutcropSkippedStep>,
+}
+
+pub trait AutoLeyLineOutcropRuntime {
+    fn prepare_auto_ley_line_outcrop(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+    ) -> Result<AutoLeyLineStartupOutcome>;
+
+    fn count_auto_ley_line_outcrop_resin(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        run_index: u32,
+    ) -> Result<AutoLeyLineResinInventory>;
+
+    fn discover_auto_ley_line_outcrop(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        run_index: u32,
+    ) -> Result<AutoLeyLineRuntimeDiscoveryOutcome>;
+
+    fn prepare_auto_ley_line_outcrop_navigation(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        request: &AutoLeyLinePathingExecutionRequest,
+    ) -> Result<AutoLeyLineNavigationPreparationOutcome>;
+
+    fn execute_auto_ley_line_outcrop_pathing(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        request: &AutoLeyLinePathingExecutionRequest,
+    ) -> Result<AutoLeyLinePathingOutcome>;
+
+    fn execute_auto_ley_line_outcrop_fight(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        run_index: u32,
+    ) -> Result<AutoLeyLineFightOutcome>;
+
+    fn navigate_auto_ley_line_outcrop_reward(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        run_index: u32,
+    ) -> Result<AutoLeyLineRewardNavigationOutcome>;
+
+    fn claim_auto_ley_line_outcrop_reward(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        claim_plan: &AutoLeyLineRewardClaimPlan,
+    ) -> Result<AutoLeyLineRewardClaimOutcome>;
+
+    fn scan_auto_ley_line_outcrop_drops(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        run_index: u32,
+    ) -> Result<AutoLeyLineDropScanOutcome>;
+
+    fn switch_auto_ley_line_outcrop_next(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        completed_runs: u32,
+    ) -> Result<AutoLeyLineSwitchNextOutcome>;
+
+    fn cleanup_auto_ley_line_outcrop(
+        &mut self,
+        plan: &AutoLeyLineOutcropExecutionPlan,
+        status: AutoLeyLineOutcropExecutionStatus,
+    ) -> Result<AutoLeyLineCleanupOutcome>;
+}
+
 pub fn plan_auto_ley_line_outcrop(
     working_directory: impl AsRef<Path>,
     config: AutoLeyLineOutcropExecutionConfig,
@@ -649,18 +941,539 @@ pub fn plan_auto_ley_line_outcrop(
         locators: ley_line_locators(),
         steps: ley_line_steps(),
         param,
-        executor_ready: false,
+        executor_ready: true,
         pending_native: vec![
-            "TaskSemaphore/ISoloTask cancellation lifecycle".to_string(),
-            "GameCaptureRegion live 1080p capture and ROI derivation".to_string(),
-            "Paddle OCR, Bv.FindF, and OpenCV template matching".to_string(),
-            "TpTask big-map movement, zoom, teleport, and map-center APIs".to_string(),
-            "PathExecutor pathing execution with key/mouse dispatch".to_string(),
-            "AutoFightTask, CombatScenes, AutoFightSeek, and avatar skill cooldown state".to_string(),
-            "SwitchPartyTask, ReturnMainUiTask, ScanPickTask, AutoPick trigger dispatcher".to_string(),
-            "Mask overlay drawing/window topmost refresh and notification dispatch".to_string(),
+            "executor-ready Rust orchestration is available behind AutoLeyLineOutcropRuntime; desktop live adapters are not wired yet".to_string(),
+            "desktop live capture/OCR/template/input adapters still need wiring for reward, resin, custom-mark, overlay, notification, and cleanup flows".to_string(),
+            "full TpTask/PathExecutor pathing adapters and AutoFightTask/CombatScenes fight adapters remain pending native integration".to_string(),
         ],
     })
+}
+
+pub fn execute_auto_ley_line_outcrop_plan<R>(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoLeyLineOutcropExecutionReport>
+where
+    R: AutoLeyLineOutcropRuntime,
+{
+    let mut state = AutoLeyLineOutcropExecutorState {
+        target_runs: u32::try_from(plan.param.count.max(1)).unwrap_or(u32::MAX),
+        ..AutoLeyLineOutcropExecutorState::default()
+    };
+    let mut executed_actions = Vec::new();
+    let mut skipped_steps = Vec::new();
+
+    let execution_result = execute_auto_ley_line_outcrop_steps(
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+        &mut skipped_steps,
+    );
+    let status = match execution_result {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = execute_auto_ley_line_outcrop_cleanup(
+                plan,
+                runtime,
+                AutoLeyLineOutcropExecutionStatus::RuntimeError,
+                &mut state,
+                &mut executed_actions,
+            );
+            return Err(error);
+        }
+    };
+
+    execute_auto_ley_line_outcrop_cleanup(
+        plan,
+        runtime,
+        status,
+        &mut state,
+        &mut executed_actions,
+    )?;
+
+    Ok(auto_ley_line_execution_report(
+        plan,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    ))
+}
+
+pub fn select_auto_ley_line_reward_claim_plan(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    inventory: &AutoLeyLineResinInventory,
+) -> std::result::Result<AutoLeyLineRewardClaimPlan, AutoLeyLineRewardSkipReason> {
+    let priority = if inventory.original_resin > 0 {
+        &plan.resin_rule.reward_priority_with_original_resin
+    } else {
+        &plan.resin_rule.reward_priority_when_original_resin_empty
+    };
+
+    for label in priority {
+        match label.as_str() {
+            "浓缩树脂" if inventory.condensed_resin > 0 => {
+                return Ok(auto_ley_line_claim_plan(
+                    AutoLeyLineResinKind::Condensed,
+                    label,
+                    0,
+                    true,
+                ));
+            }
+            "须臾树脂"
+                if plan.resin_rule.transient_resin_enabled && inventory.transient_resin > 0 =>
+            {
+                return Ok(auto_ley_line_claim_plan(
+                    AutoLeyLineResinKind::Transient,
+                    label,
+                    0,
+                    false,
+                ));
+            }
+            "原粹树脂" => {
+                let original_cost = if plan.reward_rule.switch_double_reward_20_to_40
+                    && inventory.original_resin >= plan.resin_rule.original_resin_cost
+                {
+                    plan.resin_rule.original_resin_cost
+                } else if inventory.original_resin >= plan.resin_rule.half_original_resin_cost {
+                    plan.resin_rule.half_original_resin_cost
+                } else {
+                    continue;
+                };
+                return Ok(auto_ley_line_claim_plan(
+                    AutoLeyLineResinKind::Original,
+                    label,
+                    original_cost,
+                    original_cost == plan.resin_rule.original_resin_cost,
+                ));
+            }
+            "脆弱树脂" if plan.resin_rule.fragile_resin_enabled && inventory.fragile_resin > 0 =>
+            {
+                return Ok(auto_ley_line_claim_plan(
+                    AutoLeyLineResinKind::Fragile,
+                    label,
+                    0,
+                    false,
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Err(AutoLeyLineRewardSkipReason::InsufficientResin)
+}
+
+fn execute_auto_ley_line_outcrop_steps<R>(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoLeyLineOutcropExecutorState,
+    executed_actions: &mut Vec<AutoLeyLineOutcropRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoLeyLineOutcropSkippedStep>,
+) -> Result<AutoLeyLineOutcropExecutionStatus>
+where
+    R: AutoLeyLineOutcropRuntime,
+{
+    let startup = runtime.prepare_auto_ley_line_outcrop(plan)?;
+    state.startup_prepared = startup.prepared;
+    executed_actions.push(auto_ley_line_action_report(
+        AutoLeyLineOutcropRuntimeActionKind::PrepareStartup,
+        AutoLeyLineOutcropRuntimeActionOutcome::Startup(startup.clone()),
+    ));
+    if !startup.prepared {
+        return Ok(AutoLeyLineOutcropExecutionStatus::StartupFailed);
+    }
+
+    while state.reward_claims_completed < state.target_runs {
+        let run_index = state.attempted_runs;
+        state.attempted_runs += 1;
+
+        let mut reward_claim_plan = None;
+        if plan.resin_rule.resin_exhaustion_mode {
+            let inventory = execute_auto_ley_line_resin_count(
+                plan,
+                runtime,
+                run_index,
+                state,
+                executed_actions,
+            )?;
+            match select_auto_ley_line_reward_claim_plan(plan, &inventory) {
+                Ok(plan) => reward_claim_plan = Some(plan),
+                Err(reason) => {
+                    state.reward_skipped_count += 1;
+                    auto_ley_line_skip(
+                        skipped_steps,
+                        executed_actions,
+                        AutoLeyLineOutcropRuntimeActionKind::ClaimReward,
+                        AutoLeyLineSkipReason::ResinUnavailable(reason),
+                    );
+                    return Ok(AutoLeyLineOutcropExecutionStatus::ResinExhausted);
+                }
+            }
+        }
+
+        let discovery = runtime.discover_auto_ley_line_outcrop(plan, run_index)?;
+        executed_actions.push(auto_ley_line_action_report(
+            AutoLeyLineOutcropRuntimeActionKind::DiscoverLeyLine,
+            AutoLeyLineOutcropRuntimeActionOutcome::Discovery(discovery.clone()),
+        ));
+        if !discovery.found {
+            return Ok(AutoLeyLineOutcropExecutionStatus::NoLeyLineFound);
+        }
+
+        let Some(pathing_request) = auto_ley_line_pathing_request(plan, run_index) else {
+            auto_ley_line_skip(
+                skipped_steps,
+                executed_actions,
+                AutoLeyLineOutcropRuntimeActionKind::RunPathing,
+                AutoLeyLineSkipReason::NoSelectedPath,
+            );
+            return Ok(AutoLeyLineOutcropExecutionStatus::PathingFailed);
+        };
+        state.last_routes = pathing_request.routes.clone();
+
+        let navigation =
+            runtime.prepare_auto_ley_line_outcrop_navigation(plan, &pathing_request)?;
+        executed_actions.push(auto_ley_line_action_report(
+            AutoLeyLineOutcropRuntimeActionKind::PrepareNavigation,
+            AutoLeyLineOutcropRuntimeActionOutcome::NavigationPreparation(navigation.clone()),
+        ));
+        if !navigation.prepared {
+            return Ok(AutoLeyLineOutcropExecutionStatus::NavigationPreparationFailed);
+        }
+
+        let pathing = runtime.execute_auto_ley_line_outcrop_pathing(plan, &pathing_request)?;
+        executed_actions.push(auto_ley_line_action_report(
+            AutoLeyLineOutcropRuntimeActionKind::RunPathing,
+            AutoLeyLineOutcropRuntimeActionOutcome::Pathing(pathing.clone()),
+        ));
+        if !pathing.completed {
+            return Ok(AutoLeyLineOutcropExecutionStatus::PathingFailed);
+        }
+
+        let fight = runtime.execute_auto_ley_line_outcrop_fight(plan, run_index)?;
+        executed_actions.push(auto_ley_line_action_report(
+            AutoLeyLineOutcropRuntimeActionKind::ExecuteFight,
+            AutoLeyLineOutcropRuntimeActionOutcome::Fight(fight.clone()),
+        ));
+        if !auto_ley_line_fight_succeeded(&fight) {
+            state.fight_failures += 1;
+            state.consecutive_fight_failures += 1;
+            let reason = auto_ley_line_fight_failure_reason(&fight);
+            auto_ley_line_skip(
+                skipped_steps,
+                executed_actions,
+                AutoLeyLineOutcropRuntimeActionKind::ExecuteFight,
+                AutoLeyLineSkipReason::FightFailed { reason },
+            );
+            if u64::from(state.consecutive_fight_failures)
+                >= plan.pathing_rule.max_consecutive_fight_failures.max(1)
+            {
+                return Ok(AutoLeyLineOutcropExecutionStatus::MaxConsecutiveFightFailures);
+            }
+            if auto_ley_line_fight_should_stop(&fight) {
+                return Ok(AutoLeyLineOutcropExecutionStatus::FightFailedStopped);
+            }
+            if !execute_auto_ley_line_switch_next(
+                plan,
+                runtime,
+                state,
+                executed_actions,
+                skipped_steps,
+            )? {
+                return Ok(AutoLeyLineOutcropExecutionStatus::NoLeyLineFound);
+            }
+            continue;
+        }
+        state.fights_completed += 1;
+        state.consecutive_fight_failures = 0;
+
+        let claim_plan = match reward_claim_plan {
+            Some(plan) => plan,
+            None => {
+                let inventory = execute_auto_ley_line_resin_count(
+                    plan,
+                    runtime,
+                    run_index,
+                    state,
+                    executed_actions,
+                )?;
+                match select_auto_ley_line_reward_claim_plan(plan, &inventory) {
+                    Ok(plan) => plan,
+                    Err(reason) => {
+                        state.reward_skipped_count += 1;
+                        auto_ley_line_skip(
+                            skipped_steps,
+                            executed_actions,
+                            AutoLeyLineOutcropRuntimeActionKind::ClaimReward,
+                            AutoLeyLineSkipReason::ResinUnavailable(reason),
+                        );
+                        return Ok(AutoLeyLineOutcropExecutionStatus::RewardSkipped);
+                    }
+                }
+            }
+        };
+        state.last_reward_claim_plan = Some(claim_plan.clone());
+
+        let reward_navigation = runtime.navigate_auto_ley_line_outcrop_reward(plan, run_index)?;
+        executed_actions.push(auto_ley_line_action_report(
+            AutoLeyLineOutcropRuntimeActionKind::NavigateRewardFlower,
+            AutoLeyLineOutcropRuntimeActionOutcome::RewardNavigation(reward_navigation.clone()),
+        ));
+        if !reward_navigation.reached {
+            return Ok(AutoLeyLineOutcropExecutionStatus::RewardNavigationFailed);
+        }
+
+        let claim_outcome = runtime.claim_auto_ley_line_outcrop_reward(plan, &claim_plan)?;
+        state.last_reward_claim_outcome = Some(claim_outcome.clone());
+        executed_actions.push(auto_ley_line_action_report(
+            AutoLeyLineOutcropRuntimeActionKind::ClaimReward,
+            AutoLeyLineOutcropRuntimeActionOutcome::RewardClaim(claim_outcome.clone()),
+        ));
+        match claim_outcome {
+            AutoLeyLineRewardClaimOutcome::Claimed { .. } => {
+                state.reward_claims_completed += 1;
+            }
+            AutoLeyLineRewardClaimOutcome::Skipped { reason } => {
+                state.reward_skipped_count += 1;
+                auto_ley_line_skip(
+                    skipped_steps,
+                    executed_actions,
+                    AutoLeyLineOutcropRuntimeActionKind::ClaimReward,
+                    AutoLeyLineSkipReason::RewardClaimSkipped(reason),
+                );
+                return Ok(
+                    if reason == AutoLeyLineRewardSkipReason::InsufficientResin {
+                        AutoLeyLineOutcropExecutionStatus::ResinExhausted
+                    } else {
+                        AutoLeyLineOutcropExecutionStatus::RewardSkipped
+                    },
+                );
+            }
+        }
+
+        if plan.reward_rule.scan_drops_after_reward_enabled {
+            let scan = runtime.scan_auto_ley_line_outcrop_drops(plan, run_index)?;
+            state.drop_scans += 1;
+            executed_actions.push(auto_ley_line_action_report(
+                AutoLeyLineOutcropRuntimeActionKind::ScanDropsAfterReward,
+                AutoLeyLineOutcropRuntimeActionOutcome::DropScan(scan),
+            ));
+        } else {
+            auto_ley_line_skip(
+                skipped_steps,
+                executed_actions,
+                AutoLeyLineOutcropRuntimeActionKind::ScanDropsAfterReward,
+                AutoLeyLineSkipReason::DropScanDisabled,
+            );
+        }
+
+        if state.reward_claims_completed >= state.target_runs {
+            break;
+        }
+
+        if !execute_auto_ley_line_switch_next(
+            plan,
+            runtime,
+            state,
+            executed_actions,
+            skipped_steps,
+        )? {
+            return Ok(AutoLeyLineOutcropExecutionStatus::NoLeyLineFound);
+        }
+    }
+
+    Ok(AutoLeyLineOutcropExecutionStatus::Completed)
+}
+
+fn execute_auto_ley_line_resin_count<R>(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    runtime: &mut R,
+    run_index: u32,
+    state: &mut AutoLeyLineOutcropExecutorState,
+    executed_actions: &mut Vec<AutoLeyLineOutcropRuntimeActionReport>,
+) -> Result<AutoLeyLineResinInventory>
+where
+    R: AutoLeyLineOutcropRuntime,
+{
+    let inventory = runtime.count_auto_ley_line_outcrop_resin(plan, run_index)?;
+    state.resin_checks += 1;
+    state.last_resin_inventory = Some(inventory.clone());
+    executed_actions.push(auto_ley_line_action_report(
+        AutoLeyLineOutcropRuntimeActionKind::CountResin,
+        AutoLeyLineOutcropRuntimeActionOutcome::Resin(inventory.clone()),
+    ));
+    Ok(inventory)
+}
+
+fn execute_auto_ley_line_switch_next<R>(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoLeyLineOutcropExecutorState,
+    executed_actions: &mut Vec<AutoLeyLineOutcropRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoLeyLineOutcropSkippedStep>,
+) -> Result<bool>
+where
+    R: AutoLeyLineOutcropRuntime,
+{
+    let switch = runtime.switch_auto_ley_line_outcrop_next(plan, state.reward_claims_completed)?;
+    if switch.switched {
+        state.next_ley_line_switches += 1;
+    }
+    executed_actions.push(auto_ley_line_action_report(
+        AutoLeyLineOutcropRuntimeActionKind::SwitchNextLeyLine,
+        AutoLeyLineOutcropRuntimeActionOutcome::SwitchNext(switch.clone()),
+    ));
+    if !switch.switched || switch.exhausted {
+        auto_ley_line_skip(
+            skipped_steps,
+            executed_actions,
+            AutoLeyLineOutcropRuntimeActionKind::SwitchNextLeyLine,
+            AutoLeyLineSkipReason::NextLeyLineUnavailable,
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn execute_auto_ley_line_outcrop_cleanup<R>(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    runtime: &mut R,
+    status: AutoLeyLineOutcropExecutionStatus,
+    state: &mut AutoLeyLineOutcropExecutorState,
+    executed_actions: &mut Vec<AutoLeyLineOutcropRuntimeActionReport>,
+) -> Result<()>
+where
+    R: AutoLeyLineOutcropRuntime,
+{
+    let cleanup = runtime.cleanup_auto_ley_line_outcrop(plan, status)?;
+    state.cleanup_completed = cleanup.completed;
+    executed_actions.push(auto_ley_line_action_report(
+        AutoLeyLineOutcropRuntimeActionKind::Cleanup,
+        AutoLeyLineOutcropRuntimeActionOutcome::Cleanup(cleanup),
+    ));
+    Ok(())
+}
+
+fn auto_ley_line_execution_report(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    status: AutoLeyLineOutcropExecutionStatus,
+    state: AutoLeyLineOutcropExecutorState,
+    executed_actions: Vec<AutoLeyLineOutcropRuntimeActionReport>,
+    skipped_steps: Vec<AutoLeyLineOutcropSkippedStep>,
+) -> AutoLeyLineOutcropExecutionReport {
+    AutoLeyLineOutcropExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: matches!(
+            status,
+            AutoLeyLineOutcropExecutionStatus::Completed
+                | AutoLeyLineOutcropExecutionStatus::ResinExhausted
+        ),
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    }
+}
+
+fn auto_ley_line_action_report(
+    action_kind: AutoLeyLineOutcropRuntimeActionKind,
+    outcome: AutoLeyLineOutcropRuntimeActionOutcome,
+) -> AutoLeyLineOutcropRuntimeActionReport {
+    AutoLeyLineOutcropRuntimeActionReport {
+        action_kind,
+        outcome,
+    }
+}
+
+fn auto_ley_line_skip(
+    skipped_steps: &mut Vec<AutoLeyLineOutcropSkippedStep>,
+    executed_actions: &mut Vec<AutoLeyLineOutcropRuntimeActionReport>,
+    action_kind: AutoLeyLineOutcropRuntimeActionKind,
+    reason: AutoLeyLineSkipReason,
+) {
+    skipped_steps.push(AutoLeyLineOutcropSkippedStep {
+        action_kind,
+        reason: reason.clone(),
+    });
+    executed_actions.push(auto_ley_line_action_report(
+        AutoLeyLineOutcropRuntimeActionKind::Skip,
+        AutoLeyLineOutcropRuntimeActionOutcome::Skipped(reason),
+    ));
+}
+
+fn auto_ley_line_claim_plan(
+    resin_kind: AutoLeyLineResinKind,
+    priority_label: &str,
+    expected_original_resin_cost: i32,
+    uses_double_reward: bool,
+) -> AutoLeyLineRewardClaimPlan {
+    AutoLeyLineRewardClaimPlan {
+        resin_kind,
+        priority_label: priority_label.to_string(),
+        expected_original_resin_cost,
+        uses_double_reward,
+    }
+}
+
+fn auto_ley_line_pathing_request(
+    plan: &AutoLeyLineOutcropExecutionPlan,
+    run_index: u32,
+) -> Option<AutoLeyLinePathingExecutionRequest> {
+    let selected = plan.pathing_rule.selected_position_plan.as_ref()?;
+    let run_kind = if run_index == 0 {
+        AutoLeyLinePathingRunKind::Initial
+    } else {
+        AutoLeyLinePathingRunKind::Rerun
+    };
+    let mut routes = if run_kind == AutoLeyLinePathingRunKind::Initial {
+        selected.routes.clone()
+    } else {
+        Vec::new()
+    };
+    let terminal_route = if run_kind == AutoLeyLinePathingRunKind::Initial {
+        &selected.target_route
+    } else {
+        &selected.rerun_route
+    };
+    if !terminal_route.trim().is_empty() && !routes.contains(terminal_route) {
+        routes.push(terminal_route.clone());
+    }
+    if routes.is_empty() {
+        return None;
+    }
+
+    Some(AutoLeyLinePathingExecutionRequest {
+        run_index,
+        run_kind,
+        routes,
+        selected_start_node_id: Some(selected.start_node_id),
+        selected_target_node_id: Some(selected.target_node_id),
+        selected_strategy: Some(selected.strategy.clone()),
+    })
+}
+
+fn auto_ley_line_fight_succeeded(outcome: &AutoLeyLineFightOutcome) -> bool {
+    matches!(outcome, AutoLeyLineFightOutcome::Succeeded { .. })
+}
+
+fn auto_ley_line_fight_should_stop(outcome: &AutoLeyLineFightOutcome) -> bool {
+    match outcome {
+        AutoLeyLineFightOutcome::Succeeded { .. } => false,
+        AutoLeyLineFightOutcome::Failed { stop, .. }
+        | AutoLeyLineFightOutcome::TimedOut { stop, .. } => *stop,
+    }
+}
+
+fn auto_ley_line_fight_failure_reason(outcome: &AutoLeyLineFightOutcome) -> String {
+    match outcome {
+        AutoLeyLineFightOutcome::Succeeded { .. } => String::new(),
+        AutoLeyLineFightOutcome::Failed { reason, .. } => reason.clone(),
+        AutoLeyLineFightOutcome::TimedOut {
+            timeout_seconds, ..
+        } => format!("fight timed out after {timeout_seconds} seconds"),
+    }
 }
 
 fn handbook_rule() -> AutoLeyLineHandbookRule {
@@ -1689,4 +2502,698 @@ struct PathInfo {
     start_node: Node,
     target_node: Node,
     routes: Vec<String>,
+}
+
+#[cfg(test)]
+mod auto_ley_line_outcrop_executor_tests {
+    use super::*;
+
+    fn test_plan(count: i32) -> AutoLeyLineOutcropExecutionPlan {
+        let mut param = AutoLeyLineOutcropParam::new(count, "蒙德", "启示之花");
+        param.scan_drops_after_reward_enabled = true;
+        let selected_position_plan = AutoLeyLineSelectedPositionPlan {
+            strategy: "测试策略".to_string(),
+            order: 1,
+            steps: 1,
+            ley_line_position: AutoLeyLineNodePosition { x: 10.0, y: 20.0 },
+            start_node_id: 1,
+            start_region: "蒙德".to_string(),
+            target_node_id: 1000,
+            target_region: "蒙德".to_string(),
+            from_teleport_start: true,
+            route_count: 1,
+            routes: vec!["assets/pathing/蒙德-test-1.json".to_string()],
+            target_route: "assets/pathing/target/蒙德-test-1.json".to_string(),
+            rerun_route: "assets/pathing/rerun/蒙德-test-1-rerun.json".to_string(),
+        };
+
+        AutoLeyLineOutcropExecutionPlan {
+            task_key: AUTO_LEY_LINE_OUTCROP_TASK_KEY.to_string(),
+            display_name: AUTO_LEY_LINE_OUTCROP_DISPLAY_NAME.to_string(),
+            capture_size: Size::new(1920, 1080),
+            asset_scale: 1.0,
+            param,
+            data_rule: AutoLeyLineDataRule {
+                task_directory: "GameTask/AutoLeyLineOutcrop".to_string(),
+                config_json: AUTO_LEY_LINE_OUTCROP_CONFIG_JSON.to_string(),
+                node_json: AUTO_LEY_LINE_OUTCROP_NODE_JSON.to_string(),
+                error_threshold: 40.0,
+                supported_countries: vec!["蒙德".to_string()],
+                map_position_count: 1,
+                ley_line_position_count: 1,
+                teleport_count: 1,
+                blossom_count: 1,
+                edge_count: 1,
+                node_index_groups: vec!["edgesBySource".to_string()],
+                selected_country_supported: true,
+                selected_country_map_positions: 1,
+                selected_country_ley_line_positions: 1,
+            },
+            validation_rule: AutoLeyLineValidationRule {
+                valid_ley_line_types: strings(AUTO_LEY_LINE_VALID_TYPES),
+                selected_type_valid: true,
+                requires_non_empty_country: true,
+                selected_country_supported_by_config: true,
+                normalized_count: count,
+                normalized_timeout_seconds: 120,
+                friendship_team_requires_combat_team: false,
+                combat_strategy_path: None,
+                combat_strategy_file_required: false,
+                static_config_files_required: vec![
+                    AUTO_LEY_LINE_OUTCROP_CONFIG_JSON.to_string(),
+                    AUTO_LEY_LINE_OUTCROP_NODE_JSON.to_string(),
+                ],
+                requires_16_to_9_resolution: true,
+                warns_below_1920x1080: true,
+            },
+            startup_rule: AutoLeyLineStartupRule {
+                enables_mask_overlay_during_task: true,
+                restores_mask_overlay_on_finish: true,
+                ensures_exit_reward_page_before_start: true,
+                returns_main_ui_before_start: true,
+                teleports_to_statue_unless_one_dragon_mode: true,
+                switches_combat_team_when_configured: false,
+                use_adventurer_handbook_flag_means_manual_big_map_search: true,
+                closes_custom_marks_when_manual_big_map_search: false,
+                reopens_custom_marks_on_finish_if_closed: true,
+                registers_auto_pick_trigger: true,
+                sends_notification_when_enabled: false,
+            },
+            discovery_rule: AutoLeyLineDiscoveryRule {
+                handbook_flow_when_use_adventurer_handbook_false: handbook_rule(),
+                manual_map_flow_when_use_adventurer_handbook_true: AutoLeyLineManualMapRule {
+                    moves_big_map_to_country_scan_positions: true,
+                    adjusts_zoom_to: 3.0,
+                    blossom_icon_center_offset_pixels: 25,
+                    coordinate_formula: "test".to_string(),
+                    map_positions_for_selected_country: vec![AutoLeyLineMapPosition {
+                        x: 0.0,
+                        y: 0.0,
+                        name: Some("蒙德测试点".to_string()),
+                    }],
+                },
+                selected_manual_flow: false,
+                selected_country: "蒙德".to_string(),
+                selected_type: "启示之花".to_string(),
+                selected_blossom_asset: AUTO_LEY_LINE_REVELATION_ASSET.to_string(),
+            },
+            pathing_rule: AutoLeyLinePathingRule {
+                selected_position_plan: Some(selected_position_plan),
+                uses_bfs_from_teleport_nodes: true,
+                uses_reverse_two_hop_fallback_when_no_forward_path: true,
+                branch_route_uses_nearest_detected_ley_line_node: true,
+                pathing_party_skip_party_switch: true,
+                target_route_derivation: "test target".to_string(),
+                rerun_route_derivation: "test rerun".to_string(),
+                process_max_retries: AUTO_LEY_LINE_PROCESS_MAX_RETRIES,
+                max_consecutive_fight_failures: AUTO_LEY_LINE_MAX_CONSECUTIVE_FAILURES,
+                required_route_files: vec![
+                    "assets/pathing/蒙德-test-1.json".to_string(),
+                    "assets/pathing/target/蒙德-test-1.json".to_string(),
+                    "assets/pathing/rerun/蒙德-test-1-rerun.json".to_string(),
+                ],
+                missing_route_files: Vec::new(),
+            },
+            combat_rule: AutoLeyLineCombatRule {
+                timeout_seconds: 120,
+                strategy_name: String::new(),
+                strategy_path: None,
+                blank_strategy_copies_global_auto_fight_config_at_runtime: true,
+                auto_fight_runs_without_finish_detect: true,
+                finish_detect_disabled_for_auto_fight_task: true,
+                ocr_finish_success_keywords: strings(AUTO_LEY_LINE_SUCCESS_KEYWORDS),
+                ocr_finish_failure_keywords: strings(AUTO_LEY_LINE_FAILURE_KEYWORDS),
+                fight_text_keywords: strings(AUTO_LEY_LINE_FIGHT_KEYWORDS),
+                no_fight_text_count_before_failure: 10,
+                poll_interval_ms: 1_000,
+                seek_enemy_enabled: false,
+                seek_enemy_initial_delay_seconds: AUTO_LEY_LINE_FIGHT_SEEK_INITIAL_DELAY_SECONDS,
+                seek_enemy_interval_seconds: 3,
+                seek_enemy_rotary_factor: 6,
+                resurrect_prompt_keyword: "复苏".to_string(),
+                post_fight_collect_rule: AutoLeyLinePostFightCollectRule {
+                    kazuha_pickup_enabled: true,
+                    kazuha_hold_elemental_skill_ms: 1_000,
+                    kazuha_post_skill_wait_ms: AUTO_LEY_LINE_KAZUHA_PICKUP_POST_SKILL_WAIT_MS,
+                    qin_double_pickup_enabled: false,
+                    disables_auto_fight_builtin_pickup: true,
+                    only_pick_elite_drops_mode: "DisableAutoPickupForNonElite".to_string(),
+                },
+            },
+            reward_navigation_rule: reward_navigation_rule(),
+            reward_rule: AutoLeyLineRewardRule {
+                interact_action: "PickUpOrInteract".to_string(),
+                interact_wait_ms: 800,
+                verify_reward_prompt_before_resin: true,
+                reward_prompt_title_roi: AutoLeyLineRelativeRect {
+                    x_ratio: 0.25,
+                    y_ratio: 0.15,
+                    width_ratio: 0.5,
+                    height_ratio: 0.25,
+                },
+                reward_prompt_content_roi: AutoLeyLineRelativeRect {
+                    x_ratio: 0.25,
+                    y_ratio: 0.2,
+                    width_ratio: 0.5,
+                    height_ratio: 0.6,
+                },
+                title_keywords: strings(&["激活地脉之花", "选择激活方式", "地脉之花"]),
+                content_keywords: strings(&[
+                    "原粹树脂",
+                    "浓缩树脂",
+                    "须臾树脂",
+                    "脆弱树脂",
+                    "激活地脉之花",
+                    "选择激活方式",
+                    "补充",
+                ]),
+                action_keywords: strings(&["使用"]),
+                activation_clicks_title_before_use: true,
+                switch_double_reward_20_to_40: true,
+                reward_retry_count: AUTO_LEY_LINE_REWARD_MAX_RETRIES,
+                reward_use_attempts: AUTO_LEY_LINE_REWARD_USE_ATTEMPTS,
+                switches_back_to_combat_team_after_reward: false,
+                scan_drops_after_reward_enabled: true,
+                scan_drops_after_reward_seconds: 10,
+            },
+            resin_rule: AutoLeyLineResinRule {
+                resin_exhaustion_mode: false,
+                open_mode_count_min: false,
+                original_resin_cost: AUTO_LEY_LINE_ORIGINAL_RESIN_COST,
+                half_original_resin_cost: AUTO_LEY_LINE_HALF_ORIGINAL_RESIN_COST,
+                condensed_resin_counts_as_one_run: true,
+                transient_resin_enabled: true,
+                fragile_resin_enabled: true,
+                recheck_after_run_when_resin_exhaustion_mode: false,
+                max_recheck_count: AUTO_LEY_LINE_MAX_RECHECK_COUNT,
+                recheck_ignores_counts_above: 50,
+                reward_priority_with_original_resin: strings(
+                    AUTO_LEY_LINE_REWARD_RESIN_PRIORITY_WITH_ORIGINAL,
+                ),
+                reward_priority_when_original_resin_empty: strings(
+                    AUTO_LEY_LINE_REWARD_RESIN_PRIORITY_EMPTY_ORIGINAL,
+                ),
+                double_reward_prefers_original_resin: true,
+                synthesizer_flag_configured: false,
+                synthesizer_flow_invoked_by_legacy_task: false,
+            },
+            locators: ley_line_locators(),
+            steps: ley_line_steps(),
+            executor_ready: true,
+            pending_native: vec![
+                "executor-ready Rust orchestration is available behind AutoLeyLineOutcropRuntime; desktop live adapters are not wired yet".to_string(),
+                "full TpTask/PathExecutor pathing adapters and AutoFightTask/CombatScenes fight adapters remain pending native integration".to_string(),
+            ],
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeAutoLeyLineOutcropRuntime {
+        calls: Vec<AutoLeyLineOutcropRuntimeActionKind>,
+        resin: VecDeque<AutoLeyLineResinInventory>,
+        fight: VecDeque<AutoLeyLineFightOutcome>,
+        claim: VecDeque<AutoLeyLineRewardClaimOutcome>,
+        switch_next: VecDeque<AutoLeyLineSwitchNextOutcome>,
+        cleanup_statuses: Vec<AutoLeyLineOutcropExecutionStatus>,
+    }
+
+    impl Default for FakeAutoLeyLineOutcropRuntime {
+        fn default() -> Self {
+            Self {
+                calls: Vec::new(),
+                resin: VecDeque::from([AutoLeyLineResinInventory {
+                    original_resin: 40,
+                    condensed_resin: 0,
+                    transient_resin: 0,
+                    fragile_resin: 0,
+                }]),
+                fight: VecDeque::from([AutoLeyLineFightOutcome::Succeeded { duration_ms: 1000 }]),
+                claim: VecDeque::new(),
+                switch_next: VecDeque::from([AutoLeyLineSwitchNextOutcome {
+                    switched: true,
+                    exhausted: false,
+                }]),
+                cleanup_statuses: Vec::new(),
+            }
+        }
+    }
+
+    impl FakeAutoLeyLineOutcropRuntime {
+        fn with_resin(
+            mut self,
+            resin: impl IntoIterator<Item = AutoLeyLineResinInventory>,
+        ) -> Self {
+            self.resin = resin.into_iter().collect();
+            self
+        }
+
+        fn with_fights(
+            mut self,
+            fights: impl IntoIterator<Item = AutoLeyLineFightOutcome>,
+        ) -> Self {
+            self.fight = fights.into_iter().collect();
+            self
+        }
+
+        fn with_claims(
+            mut self,
+            claims: impl IntoIterator<Item = AutoLeyLineRewardClaimOutcome>,
+        ) -> Self {
+            self.claim = claims.into_iter().collect();
+            self
+        }
+    }
+
+    impl AutoLeyLineOutcropRuntime for FakeAutoLeyLineOutcropRuntime {
+        fn prepare_auto_ley_line_outcrop(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+        ) -> Result<AutoLeyLineStartupOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::PrepareStartup);
+            Ok(AutoLeyLineStartupOutcome {
+                prepared: true,
+                returned_main_ui: true,
+                combat_team_switched: true,
+                custom_marks_closed: false,
+                mask_overlay_enabled: true,
+            })
+        }
+
+        fn count_auto_ley_line_outcrop_resin(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            _run_index: u32,
+        ) -> Result<AutoLeyLineResinInventory> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::CountResin);
+            Ok(self.resin.pop_front().unwrap_or_default())
+        }
+
+        fn discover_auto_ley_line_outcrop(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            _run_index: u32,
+        ) -> Result<AutoLeyLineRuntimeDiscoveryOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::DiscoverLeyLine);
+            Ok(AutoLeyLineRuntimeDiscoveryOutcome {
+                found: true,
+                position: Some(AutoLeyLineNodePosition { x: 10.0, y: 20.0 }),
+                source: "fake".to_string(),
+            })
+        }
+
+        fn prepare_auto_ley_line_outcrop_navigation(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            request: &AutoLeyLinePathingExecutionRequest,
+        ) -> Result<AutoLeyLineNavigationPreparationOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::PrepareNavigation);
+            Ok(AutoLeyLineNavigationPreparationOutcome {
+                prepared: true,
+                teleported: request.run_kind == AutoLeyLinePathingRunKind::Initial,
+                route_count: request.routes.len() as u32,
+            })
+        }
+
+        fn execute_auto_ley_line_outcrop_pathing(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            request: &AutoLeyLinePathingExecutionRequest,
+        ) -> Result<AutoLeyLinePathingOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::RunPathing);
+            Ok(AutoLeyLinePathingOutcome {
+                completed: true,
+                executed_routes: request.routes.clone(),
+            })
+        }
+
+        fn execute_auto_ley_line_outcrop_fight(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            _run_index: u32,
+        ) -> Result<AutoLeyLineFightOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::ExecuteFight);
+            Ok(self
+                .fight
+                .pop_front()
+                .unwrap_or(AutoLeyLineFightOutcome::Succeeded { duration_ms: 1000 }))
+        }
+
+        fn navigate_auto_ley_line_outcrop_reward(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            _run_index: u32,
+        ) -> Result<AutoLeyLineRewardNavigationOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::NavigateRewardFlower);
+            Ok(AutoLeyLineRewardNavigationOutcome {
+                reached: true,
+                attempts: 1,
+            })
+        }
+
+        fn claim_auto_ley_line_outcrop_reward(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            claim_plan: &AutoLeyLineRewardClaimPlan,
+        ) -> Result<AutoLeyLineRewardClaimOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::ClaimReward);
+            Ok(self
+                .claim
+                .pop_front()
+                .unwrap_or(AutoLeyLineRewardClaimOutcome::Claimed {
+                    resin_kind: claim_plan.resin_kind,
+                    consumed_original_resin: claim_plan.expected_original_resin_cost,
+                }))
+        }
+
+        fn scan_auto_ley_line_outcrop_drops(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            _run_index: u32,
+        ) -> Result<AutoLeyLineDropScanOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::ScanDropsAfterReward);
+            Ok(AutoLeyLineDropScanOutcome {
+                enabled: true,
+                scanned: true,
+                picked_count: 1,
+            })
+        }
+
+        fn switch_auto_ley_line_outcrop_next(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            _completed_runs: u32,
+        ) -> Result<AutoLeyLineSwitchNextOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::SwitchNextLeyLine);
+            Ok(self
+                .switch_next
+                .pop_front()
+                .unwrap_or(AutoLeyLineSwitchNextOutcome {
+                    switched: true,
+                    exhausted: false,
+                }))
+        }
+
+        fn cleanup_auto_ley_line_outcrop(
+            &mut self,
+            _plan: &AutoLeyLineOutcropExecutionPlan,
+            status: AutoLeyLineOutcropExecutionStatus,
+        ) -> Result<AutoLeyLineCleanupOutcome> {
+            self.calls
+                .push(AutoLeyLineOutcropRuntimeActionKind::Cleanup);
+            self.cleanup_statuses.push(status);
+            Ok(AutoLeyLineCleanupOutcome {
+                completed: true,
+                returned_main_ui: true,
+                custom_marks_restored: true,
+                mask_overlay_restored: true,
+            })
+        }
+    }
+
+    #[test]
+    fn auto_ley_line_outcrop_executor_single_round_success() {
+        let plan = test_plan(1);
+        let mut runtime = FakeAutoLeyLineOutcropRuntime::default();
+
+        let report = execute_auto_ley_line_outcrop_plan(&plan, &mut runtime).unwrap();
+
+        assert!(plan.executor_ready);
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("desktop live adapters are not wired yet")));
+        assert_eq!(report.status, AutoLeyLineOutcropExecutionStatus::Completed);
+        assert!(report.completed);
+        assert_eq!(report.state.fights_completed, 1);
+        assert_eq!(report.state.reward_claims_completed, 1);
+        assert_eq!(report.state.drop_scans, 1);
+        assert_eq!(
+            report
+                .state
+                .last_reward_claim_plan
+                .as_ref()
+                .unwrap()
+                .resin_kind,
+            AutoLeyLineResinKind::Original
+        );
+        assert!(runtime
+            .calls
+            .contains(&AutoLeyLineOutcropRuntimeActionKind::Cleanup));
+    }
+
+    #[test]
+    fn auto_ley_line_outcrop_executor_skips_when_resin_is_insufficient() {
+        let mut plan = test_plan(1);
+        plan.reward_rule.scan_drops_after_reward_enabled = false;
+        let mut runtime = FakeAutoLeyLineOutcropRuntime::default()
+            .with_resin([AutoLeyLineResinInventory::default()]);
+
+        let report = execute_auto_ley_line_outcrop_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.status,
+            AutoLeyLineOutcropExecutionStatus::RewardSkipped
+        );
+        assert!(!report.completed);
+        assert_eq!(report.state.reward_claims_completed, 0);
+        assert_eq!(report.state.reward_skipped_count, 1);
+        assert!(report.skipped_steps.iter().any(|step| matches!(
+            step.reason,
+            AutoLeyLineSkipReason::ResinUnavailable(AutoLeyLineRewardSkipReason::InsufficientResin)
+        )));
+        assert!(!runtime
+            .calls
+            .contains(&AutoLeyLineOutcropRuntimeActionKind::ClaimReward));
+        assert_eq!(
+            runtime.cleanup_statuses,
+            vec![AutoLeyLineOutcropExecutionStatus::RewardSkipped]
+        );
+    }
+
+    #[test]
+    fn auto_ley_line_outcrop_executor_records_reward_not_claimed_skip() {
+        let plan = test_plan(1);
+        let mut runtime = FakeAutoLeyLineOutcropRuntime::default().with_claims([
+            AutoLeyLineRewardClaimOutcome::Skipped {
+                reason: AutoLeyLineRewardSkipReason::ClaimDisabled,
+            },
+        ]);
+
+        let report = execute_auto_ley_line_outcrop_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.status,
+            AutoLeyLineOutcropExecutionStatus::RewardSkipped
+        );
+        assert_eq!(
+            report.state.last_reward_claim_outcome,
+            Some(AutoLeyLineRewardClaimOutcome::Skipped {
+                reason: AutoLeyLineRewardSkipReason::ClaimDisabled,
+            })
+        );
+        assert!(report.skipped_steps.iter().any(|step| matches!(
+            step.reason,
+            AutoLeyLineSkipReason::RewardClaimSkipped(AutoLeyLineRewardSkipReason::ClaimDisabled)
+        )));
+        assert!(runtime
+            .calls
+            .contains(&AutoLeyLineOutcropRuntimeActionKind::Cleanup));
+    }
+
+    #[test]
+    fn auto_ley_line_outcrop_executor_stops_on_fight_failure_when_requested() {
+        let plan = test_plan(1);
+        let mut runtime = FakeAutoLeyLineOutcropRuntime::default().with_fights([
+            AutoLeyLineFightOutcome::Failed {
+                reason: "no fight text".to_string(),
+                stop: true,
+            },
+        ]);
+
+        let report = execute_auto_ley_line_outcrop_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(
+            report.status,
+            AutoLeyLineOutcropExecutionStatus::FightFailedStopped
+        );
+        assert_eq!(report.state.fight_failures, 1);
+        assert_eq!(report.state.reward_claims_completed, 0);
+        assert!(report.skipped_steps.iter().any(|step| matches!(
+            &step.reason,
+            AutoLeyLineSkipReason::FightFailed { reason } if reason == "no fight text"
+        )));
+        assert!(!runtime
+            .calls
+            .contains(&AutoLeyLineOutcropRuntimeActionKind::NavigateRewardFlower));
+        assert_eq!(
+            runtime.cleanup_statuses,
+            vec![AutoLeyLineOutcropExecutionStatus::FightFailedStopped]
+        );
+    }
+
+    #[test]
+    fn auto_ley_line_outcrop_executor_skips_failed_fight_and_runs_next_ley_line() {
+        let plan = test_plan(1);
+        let mut runtime = FakeAutoLeyLineOutcropRuntime::default().with_fights([
+            AutoLeyLineFightOutcome::Failed {
+                reason: "temporary failure".to_string(),
+                stop: false,
+            },
+            AutoLeyLineFightOutcome::Succeeded { duration_ms: 900 },
+        ]);
+
+        let report = execute_auto_ley_line_outcrop_plan(&plan, &mut runtime).unwrap();
+
+        assert_eq!(report.status, AutoLeyLineOutcropExecutionStatus::Completed);
+        assert_eq!(report.state.fight_failures, 1);
+        assert_eq!(report.state.fights_completed, 1);
+        assert_eq!(report.state.next_ley_line_switches, 1);
+        assert_eq!(report.state.reward_claims_completed, 1);
+        assert_eq!(
+            runtime
+                .calls
+                .iter()
+                .filter(|kind| **kind == AutoLeyLineOutcropRuntimeActionKind::ExecuteFight)
+                .count(),
+            2
+        );
+        assert!(runtime
+            .calls
+            .contains(&AutoLeyLineOutcropRuntimeActionKind::Cleanup));
+    }
+
+    #[test]
+    fn auto_ley_line_outcrop_executor_cleanup_runs_after_runtime_error() {
+        #[derive(Debug, Default)]
+        struct ErrorRuntime {
+            cleanup_called: bool,
+        }
+
+        impl AutoLeyLineOutcropRuntime for ErrorRuntime {
+            fn prepare_auto_ley_line_outcrop(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+            ) -> Result<AutoLeyLineStartupOutcome> {
+                Ok(AutoLeyLineStartupOutcome {
+                    prepared: true,
+                    returned_main_ui: true,
+                    combat_team_switched: false,
+                    custom_marks_closed: false,
+                    mask_overlay_enabled: true,
+                })
+            }
+
+            fn count_auto_ley_line_outcrop_resin(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _run_index: u32,
+            ) -> Result<AutoLeyLineResinInventory> {
+                Ok(AutoLeyLineResinInventory {
+                    original_resin: 40,
+                    condensed_resin: 0,
+                    transient_resin: 0,
+                    fragile_resin: 0,
+                })
+            }
+
+            fn discover_auto_ley_line_outcrop(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _run_index: u32,
+            ) -> Result<AutoLeyLineRuntimeDiscoveryOutcome> {
+                Err(TaskError::CommonJobExecution(
+                    "capture unavailable".to_string(),
+                ))
+            }
+
+            fn prepare_auto_ley_line_outcrop_navigation(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _request: &AutoLeyLinePathingExecutionRequest,
+            ) -> Result<AutoLeyLineNavigationPreparationOutcome> {
+                unreachable!()
+            }
+
+            fn execute_auto_ley_line_outcrop_pathing(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _request: &AutoLeyLinePathingExecutionRequest,
+            ) -> Result<AutoLeyLinePathingOutcome> {
+                unreachable!()
+            }
+
+            fn execute_auto_ley_line_outcrop_fight(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _run_index: u32,
+            ) -> Result<AutoLeyLineFightOutcome> {
+                unreachable!()
+            }
+
+            fn navigate_auto_ley_line_outcrop_reward(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _run_index: u32,
+            ) -> Result<AutoLeyLineRewardNavigationOutcome> {
+                unreachable!()
+            }
+
+            fn claim_auto_ley_line_outcrop_reward(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _claim_plan: &AutoLeyLineRewardClaimPlan,
+            ) -> Result<AutoLeyLineRewardClaimOutcome> {
+                unreachable!()
+            }
+
+            fn scan_auto_ley_line_outcrop_drops(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _run_index: u32,
+            ) -> Result<AutoLeyLineDropScanOutcome> {
+                unreachable!()
+            }
+
+            fn switch_auto_ley_line_outcrop_next(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                _completed_runs: u32,
+            ) -> Result<AutoLeyLineSwitchNextOutcome> {
+                unreachable!()
+            }
+
+            fn cleanup_auto_ley_line_outcrop(
+                &mut self,
+                _plan: &AutoLeyLineOutcropExecutionPlan,
+                status: AutoLeyLineOutcropExecutionStatus,
+            ) -> Result<AutoLeyLineCleanupOutcome> {
+                assert_eq!(status, AutoLeyLineOutcropExecutionStatus::RuntimeError);
+                self.cleanup_called = true;
+                Ok(AutoLeyLineCleanupOutcome {
+                    completed: true,
+                    returned_main_ui: true,
+                    custom_marks_restored: true,
+                    mask_overlay_restored: true,
+                })
+            }
+        }
+
+        let plan = test_plan(1);
+        let mut runtime = ErrorRuntime::default();
+
+        let error = execute_auto_ley_line_outcrop_plan(&plan, &mut runtime).unwrap_err();
+
+        assert!(matches!(error, TaskError::CommonJobExecution(_)));
+        assert!(runtime.cleanup_called);
+    }
 }

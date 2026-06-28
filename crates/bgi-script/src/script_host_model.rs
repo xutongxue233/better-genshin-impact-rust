@@ -177,6 +177,7 @@ impl ScriptHostCall {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum ScriptHostCallResult {
     None,

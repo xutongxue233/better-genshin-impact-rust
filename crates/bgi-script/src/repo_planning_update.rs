@@ -243,9 +243,7 @@ fn mark_node_updates(new_node: &mut serde_json::Value, old_nodes: &[serde_json::
         }
     }
 
-    if has_direct_update && has_child_update {
-        new_object.insert("hasUpdate".to_string(), serde_json::Value::Bool(true));
-    } else if has_direct_update {
+    if has_direct_update {
         new_object.insert("hasUpdate".to_string(), serde_json::Value::Bool(true));
     }
     if let Some((_, last_updated)) = newest_leaf_last_updated {

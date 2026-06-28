@@ -1,3 +1,5 @@
+#![allow(clippy::large_enum_variant, clippy::too_many_arguments)]
+
 mod auto_artifact_salvage;
 mod auto_boss;
 mod auto_cook;
@@ -24,6 +26,7 @@ mod game_loading;
 mod get_grid_icons;
 mod macro_hotkeys;
 mod map_mask;
+mod map_recognition;
 mod quick_buy;
 mod quick_serenitea_pot;
 mod quick_teleport;
@@ -129,25 +132,30 @@ pub use catalog::{
     TaskPortState, TaskRustExecutionSurface,
 };
 pub use common_job::{
-    plan_blessing_of_the_welkin_moon, plan_check_rewards, plan_choose_talk_option,
-    plan_claim_battle_pass_rewards, plan_claim_encounter_points_rewards, plan_claim_mail_rewards,
-    plan_common_job, plan_count_inventory_item, plan_go_to_adventurers_guild,
-    plan_go_to_crafting_bench, plan_go_to_serenitea_pot, plan_linnea_mining,
-    plan_lower_head_then_walk_to, plan_one_key_expedition, plan_one_key_expedition_with_locators,
-    plan_relogin, plan_return_main_ui, plan_scan_pick_drops, plan_set_time, plan_switch_party,
-    plan_walk_to_f, plan_wonderland_cycle, BattlePassClaimAllRule, BattlePassClaimScope,
-    BattlePassManualSelectionDialogRule, BattlePassRewardLocators, BattlePassRewardStep,
-    BattlePassRewardStepAction, BattlePassRewardStepCondition, BattlePassRewardStepPhase,
-    BattlePassRewardStepResult, BlessingOfTheWelkinMoonDetectionLocators,
-    BlessingOfTheWelkinMoonExecutionConfig, BlessingOfTheWelkinMoonExecutionPlan,
-    BlessingOfTheWelkinMoonLoopRule, BlessingOfTheWelkinMoonServerTimeGate,
-    BlessingOfTheWelkinMoonStep, BlessingOfTheWelkinMoonStepAction,
-    BlessingOfTheWelkinMoonStepCondition, CheckRewardsExecutionConfig, CheckRewardsExecutionPlan,
-    CheckRewardsLocalizedTexts, CheckRewardsLocators, CheckRewardsNotifications,
-    CheckRewardsRetryRule, CheckRewardsStep, CheckRewardsStepAction, CheckRewardsStepCondition,
-    CheckRewardsStepPhase, CheckRewardsStepResult, ChooseTalkOptionExecutionConfig,
-    ChooseTalkOptionExecutionPlan, ChooseTalkOptionOcrRule, ChooseTalkOptionOrangeRule,
-    ChooseTalkOptionStep, ChooseTalkOptionStepAction, ChooseTalkOptionStepCondition,
+    apply_teleport_move_map_center_observation, classify_teleport_move_map_post_drag_center,
+    decide_teleport_move_map_center_after_drag, default_teleport_move_map_rule,
+    execute_linnea_mining_plan, plan_blessing_of_the_welkin_moon, plan_check_rewards,
+    plan_choose_talk_option, plan_claim_battle_pass_rewards, plan_claim_encounter_points_rewards,
+    plan_claim_mail_rewards, plan_common_job, plan_count_inventory_item,
+    plan_go_to_adventurers_guild, plan_go_to_crafting_bench, plan_go_to_serenitea_pot,
+    plan_linnea_mining, plan_lower_head_then_walk_to, plan_one_key_expedition,
+    plan_one_key_expedition_with_locators, plan_relogin, plan_return_main_ui, plan_scan_pick_drops,
+    plan_set_time, plan_switch_party, plan_walk_to_f, plan_wonderland_cycle,
+    select_linnea_mining_target, teleport_move_map_expected_move_len,
+    teleport_move_map_false_positive_threshold, teleport_move_map_jump_distance,
+    BattlePassClaimAllRule, BattlePassClaimScope, BattlePassManualSelectionDialogRule,
+    BattlePassRewardLocators, BattlePassRewardStep, BattlePassRewardStepAction,
+    BattlePassRewardStepCondition, BattlePassRewardStepPhase, BattlePassRewardStepResult,
+    BlessingOfTheWelkinMoonDetectionLocators, BlessingOfTheWelkinMoonExecutionConfig,
+    BlessingOfTheWelkinMoonExecutionPlan, BlessingOfTheWelkinMoonLoopRule,
+    BlessingOfTheWelkinMoonServerTimeGate, BlessingOfTheWelkinMoonStep,
+    BlessingOfTheWelkinMoonStepAction, BlessingOfTheWelkinMoonStepCondition,
+    CheckRewardsExecutionConfig, CheckRewardsExecutionPlan, CheckRewardsLocalizedTexts,
+    CheckRewardsLocators, CheckRewardsNotifications, CheckRewardsRetryRule, CheckRewardsStep,
+    CheckRewardsStepAction, CheckRewardsStepCondition, CheckRewardsStepPhase,
+    CheckRewardsStepResult, ChooseTalkOptionExecutionConfig, ChooseTalkOptionExecutionPlan,
+    ChooseTalkOptionOcrRule, ChooseTalkOptionOrangeRule, ChooseTalkOptionStep,
+    ChooseTalkOptionStepAction, ChooseTalkOptionStepCondition,
     ClaimBattlePassRewardsExecutionConfig, ClaimBattlePassRewardsExecutionPlan,
     ClaimEncounterPointsRewardsExecutionConfig, ClaimEncounterPointsRewardsExecutionPlan,
     ClaimEncounterPointsRewardsOcrRule, ClaimEncounterPointsRewardsStep,
@@ -186,10 +194,15 @@ pub use common_job::{
     GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule,
     GridScreenName, GridScrollRule, GridTemplate, InventoryTabAssetPair, LinneaMiningAimingRule,
     LinneaMiningAlignmentRule, LinneaMiningAvatarRule, LinneaMiningCleanupRule,
-    LinneaMiningClusterRule, LinneaMiningDetectionRule, LinneaMiningDetectionSource,
-    LinneaMiningExecutionConfig, LinneaMiningExecutionPlan, LinneaMiningMineRule,
-    LinneaMiningScanRule, LinneaMiningStep, LinneaMiningStepAction, LinneaMiningStepCondition,
-    LinneaMiningStepPhase, LowerHeadThenWalkToActionPress, LowerHeadThenWalkToExecutionConfig,
+    LinneaMiningCluster, LinneaMiningClusterRule, LinneaMiningDecision, LinneaMiningDecisionKind,
+    LinneaMiningDetection, LinneaMiningDetectionRule, LinneaMiningDetectionSource,
+    LinneaMiningExecutionConfig, LinneaMiningExecutionPlan, LinneaMiningExecutionReport,
+    LinneaMiningExecutionStatus, LinneaMiningExecutorState, LinneaMiningMineRule,
+    LinneaMiningObservation, LinneaMiningPoint, LinneaMiningRect, LinneaMiningRuntime,
+    LinneaMiningRuntimeActionKind, LinneaMiningRuntimeActionReport, LinneaMiningRuntimeOutcome,
+    LinneaMiningScanRule, LinneaMiningScreenSize, LinneaMiningStep, LinneaMiningStepAction,
+    LinneaMiningStepCondition, LinneaMiningStepPhase, LinneaMiningTarget,
+    LowerHeadThenWalkToActionPress, LowerHeadThenWalkToExecutionConfig,
     LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToLocators,
     LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToStep, LowerHeadThenWalkToStepAction,
     LowerHeadThenWalkToStepCondition, LowerHeadThenWalkToStepPhase, LowerHeadThenWalkToStepResult,
@@ -208,8 +221,10 @@ pub use common_job::{
     SwitchPartyConfirmRule, SwitchPartyCurrentPartyRule, SwitchPartyExecutionConfig,
     SwitchPartyExecutionPlan, SwitchPartyListScanRule, SwitchPartyLocators, SwitchPartyOpenRule,
     SwitchPartyScreenPoint, SwitchPartyStep, SwitchPartyStepAction, SwitchPartyStepCondition,
-    SwitchPartyStepPhase, SwitchPartyStepResult, TalkOptionPlanResult, TeleportExecutionConfig,
-    TeleportExecutionPlan, TeleportFailurePolicy, TeleportMapRule, TeleportNativeDependency,
+    SwitchPartyStepPhase, SwitchPartyStepResult, TalkOptionPlanResult, TeleportCountryPositionRule,
+    TeleportExecutionConfig, TeleportExecutionPlan, TeleportFailurePolicy, TeleportMapPoint,
+    TeleportMapRule, TeleportMoveMapCenterDecision, TeleportMoveMapCenterRejectReason,
+    TeleportMoveMapPostDragObservation, TeleportMoveMapRule, TeleportNativeDependency,
     TeleportPlanKind, TeleportPreflightPlan, TeleportQuickTeleportRule, TeleportRetryRule,
     TeleportStep, TeleportStepAction, TeleportStepPhase, TeleportStepResult, TeleportTargetPlan,
     WalkToFActionPress, WalkToFExecutionConfig, WalkToFExecutionPlan, WalkToFRetryRule,
@@ -275,6 +290,7 @@ pub use game_loading::*;
 pub use get_grid_icons::*;
 pub use macro_hotkeys::*;
 pub use map_mask::*;
+pub use map_recognition::*;
 pub use quick_buy::*;
 pub use quick_serenitea_pot::*;
 pub use quick_teleport::*;

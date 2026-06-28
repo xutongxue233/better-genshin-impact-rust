@@ -32,7 +32,22 @@ pub enum TaskRustExecutionSurface {
     None,
     InvocationPlanOnly,
     ExecutionPlanOnly,
+    InjectableExecutor,
     DirectExecution,
+}
+
+impl TaskRustExecutionSurface {
+    pub fn has_execution_plan(self) -> bool {
+        matches!(
+            self,
+            TaskRustExecutionSurface::ExecutionPlanOnly
+                | TaskRustExecutionSurface::InjectableExecutor
+        )
+    }
+
+    pub fn has_rust_surface(self) -> bool {
+        !matches!(self, TaskRustExecutionSurface::None)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -65,10 +80,7 @@ impl TaskCatalogEntry {
     }
 
     pub fn has_rust_execution_plan(&self) -> bool {
-        !matches!(
-            self.rust_execution_surface(),
-            TaskRustExecutionSurface::None
-        )
+        self.rust_execution_surface().has_rust_surface()
     }
 }
 
@@ -87,8 +99,8 @@ pub fn find_task_catalog_entry(key: &str) -> Option<TaskCatalogEntry> {
 
 pub fn rust_execution_surface_for_task(key: &str) -> TaskRustExecutionSurface {
     match key {
+        "AutoArtifactSalvage" | "GetGridIcons" => TaskRustExecutionSurface::InjectableExecutor,
         "AutoPick"
-        | "AutoArtifactSalvage"
         | "AutoBoss"
         | "AutoCook"
         | "AutoDomain"
@@ -106,7 +118,6 @@ pub fn rust_execution_surface_for_task(key: &str) -> TaskRustExecutionSurface {
         | "AutoTrackPath"
         | "AutoWood"
         | "GameLoading"
-        | "GetGridIcons"
         | "TurnAroundMacro"
         | "QuickEnhanceArtifactMacro"
         | "QuickBuy"

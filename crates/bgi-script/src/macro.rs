@@ -215,8 +215,9 @@ impl Default for MacroEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MacroEventType {
+    #[default]
     KeyDown,
     KeyUp,
     MouseMoveTo,
@@ -250,12 +251,6 @@ impl MacroEventType {
             6 => Some(Self::MouseWheel),
             _ => None,
         }
-    }
-}
-
-impl Default for MacroEventType {
-    fn default() -> Self {
-        Self::KeyDown
     }
 }
 

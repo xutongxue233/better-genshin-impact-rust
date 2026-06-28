@@ -1,7 +1,10 @@
+#![allow(clippy::result_large_err)]
+
 pub mod execution_records;
 pub mod farming_plan;
 pub mod group;
 pub mod host;
+pub mod log_parse;
 pub mod r#macro;
 pub mod manifest;
 pub mod pathing_result;
@@ -45,6 +48,17 @@ pub use group::{
 pub use host::{
     host_bindings, host_permissions, HostBindingDescriptor, HostBindingKind, HostBindingPortState,
     HostPermission,
+};
+pub use log_parse::{
+    analyze_log_groups, analyze_log_lines, are_dates_in_same_custom_day, convert_seconds_to_time,
+    discover_log_files, filter_travel_diary_mora_items, format_number_with_style, involved_months,
+    load_log_parse_config, log_parse_config_path, log_parse_custom_day_start,
+    merge_log_config_groups, merge_log_config_task_lists, merge_pick_dictionaries,
+    number_or_empty_string, parse_bgi_line, parse_log_file_entries, parse_log_files,
+    parse_log_lines, safe_read_log_lines, subtract_seconds, write_log_parse_config, LogActionItem,
+    LogAnalysisOptions, LogAnalysisReport, LogConfigGroup, LogConfigTask, LogFaultScenario,
+    LogFileEntry, LogGameInfo, LogParseConfig, LogParseError, LogParseResult, MoraStatistics,
+    MoraStatisticsSummary, ScriptGroupLogParseConfig,
 };
 pub use manifest::{Author, Manifest, ManifestError};
 pub use pathing_result::{

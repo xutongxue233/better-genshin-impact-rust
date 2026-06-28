@@ -48,7 +48,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::RealtimeTick,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust has config, trigger descriptor, asset resolution, OCR text cleanup, pure black/white-list logic, pure tick decision reports, and an injectable tick executor for key/scroll/wait actions; live capture, OCR/template matching, list-file IO adapter, and input adapter remain pending.",
+        notes: "Rust has config, trigger descriptor, asset resolution, OCR text cleanup, pure black/white-list logic, pure tick decision reports, and an injectable tick executor for key/scroll/wait actions; desktop AutoPick tick now wires BitBlt capture, F/L/chat/settings PureRust template matching, scroll icon color probing, runner pause-count gate, black/white list file loading, SendInput pick-key dispatch, mouse-wheel scroll, and delay handling, while Sobel/morphology text extraction and Paddle/Yap OCR remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoEat",
@@ -62,7 +62,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::RealtimeTick,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models low-HP recovery, resurrection icon locators, timing/cache rules, pure trigger tick decision, injectable tick executor, and QuickUseGadget action dispatch plan; script-dispatched solo food-inventory flow is tracked by AutoEatFood; live BV recognition, template matching, input dispatch adapter, and notifications remain pending.",
+        notes: "Rust models low-HP recovery, resurrection icon locators, timing/cache rules, pure trigger tick decision, injectable tick executor, and QuickUseGadget action dispatch plan; desktop AutoEat tick now wires BitBlt capture, low-HP pixel probing, Recovery/Resurrection template matching, foreground-window preflight, and SendInput QuickUseGadget dispatch; script-dispatched solo food-inventory flow is tracked by AutoEatFood, while full BV current-avatar parity and notifications remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoEatFood",
@@ -80,7 +80,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::ScriptDispatcher,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models script-dispatched AutoEat foodName/foodEffectType resolution, default buff-food skip semantics, Food inventory grid/classifier/OCR rules through CountInventoryItem, use-confirm contract, full-width digit normalization, and legacy int? return values; live capture/input/ONNX/OCR/click execution remains pending.",
+        notes: "Rust models script-dispatched AutoEat foodName/foodEffectType resolution, default buff-food skip semantics, Food inventory grid/classifier/OCR rules through CountInventoryItem, use-confirm contract, full-width digit normalization, legacy int? return values, shared script-dispatcher/independent-task plan routing, and an injectable inventory-food executor; desktop script-dispatcher live execution now covers the missing-default and portable-bag skip/no-op branches, while inventory-food capture/input/ONNX/OCR/click adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "QuickTeleport",
@@ -94,7 +94,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::RealtimeTick,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models config, BigMap trigger metadata, teleport/list template locators, HDR-aware OCR rules, pure tick/candidate decision ordering, injectable tick executor, and tick plan; live capture, template matching, OCR, hotkey polling, and click execution adapters remain pending.",
+        notes: "Rust models config, BigMap trigger metadata, teleport/list template locators, HDR-aware OCR rules, pure tick/candidate decision ordering, injectable tick executor, and tick plan; desktop QuickTeleport tick now wires BitBlt capture, PureRust BigMap/teleport/close/map-choose template matching, map-choose icon probing with candidate de-duplication, WinRT candidate-text OCR with standard white-text filtering, foreground-aware legacy hold-hotkey polling, tick-local Chat UI hotkey latch suppression, persistent throttle state, SendInput teleport-button/candidate clicks, and fresh teleport-button recheck, while HDR capture-path parity, native global hook event-source parity, real-game OCR regression, and full Teleport/TpTask map navigation remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoSkip",
@@ -127,7 +127,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::RealtimeTick,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoFish realtime trigger metadata, config, AutoFishing templates, exclusive fishing UI gate, semi-auto behavior tree, bite detection, fish-bar contour rules, and mouse input plan; live template matching, BehaviorTree execution, OpenCV/OCR, input dispatch, overlays, and full AutoFishingTask throw-rod branch remain pending.",
+        notes: "Rust models AutoFish realtime trigger metadata, config, AutoFishing templates, exclusive fishing UI gate, semi-auto behavior tree, bite detection, fish-bar contour rules, trigger state, and an injectable tick executor for bite/bar/input/overlay actions; desktop live capture/template/text/contour/input/overlay adapters and full AutoFishingTask throw-rod execution remain pending.",
     },
     TaskCatalogEntry {
         key: "SkillCd",
@@ -161,7 +161,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::RealtimeTick,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models MapMask config, Unknown UI trigger metadata, BigMap stability/SIFT constants, minimap ROI/matching constants, Teyvat geometry, point provider, tick/viewport decisions, overlay plan, and injectable tick executor for worker queues, overlay clears, minimap viewport clears, and big-map UI state; desktop OpenCV/SIFT, point API/cache, WPF mask overlay, and route recording adapters remain pending.",
+        notes: "Rust models MapMask config, Unknown UI trigger metadata, shared BigMap SIFT recognition metadata, BigMap stability constants, minimap ROI/matching constants, Teyvat geometry, point provider, tick/viewport decisions, overlay plan, and injectable tick executor for worker queues, overlay clears, minimap viewport clears, and big-map UI state; desktop OpenCV/SIFT, point API/cache, WPF mask overlay, and route recording adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoGeniusInvokation",
@@ -178,7 +178,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoGeniusInvokation config, strategy source resolution, strategy script parsing, character/action plans, card/dice/template/OCR/click/wait rules, skip-main-UI launch semantics, and legacy exception boundaries; live capture, template matching, OCR, input dispatch, default card JSON fallback, and duel-loop execution remain pending.",
+        notes: "Rust models AutoGeniusInvokation config, strategy source resolution, strategy script parsing, character/action plans, card/dice/template/OCR/click/wait rules, skip-main-UI launch semantics, legacy exception boundaries, and an injectable duel executor/report surface for startup, dice, action, wait, exception, cancellation, and cleanup flows; desktop live capture, template matching, OCR, input dispatch, default card JSON fallback, and TCG live adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoWood",
@@ -192,7 +192,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoWood config, task parameter normalization, AutoWood assets/ROIs, Wangshu gadget probe, wood-count OCR parsing rules, Wonderland/legacy refresh plans, Bilibili login gate, and loop phases; live capture, template matching, Paddle OCR, input dispatch, window/power control, and refresh execution remain pending.",
+        notes: "Rust models AutoWood config, task parameter normalization, AutoWood assets/ROIs, Wangshu gadget probe, wood-count OCR parsing rules, Wonderland/legacy refresh plans, Bilibili login gate, loop phases, and an injectable executor for startup, refresh, OCR count, cutting, cancellation, and cleanup; desktop live capture, template matching, input dispatch, WinRT wood-count OCR fallback, window/power control, Wonderland/legacy refresh adapters, Bilibili login via the Relogin platform driver, and no-op overlay cleanup for draw-disabled AutoWood locators are wired, while Paddle OCR parity and real-game regression remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoFight",
@@ -220,7 +220,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoOpenChest locators, 60-second search-loop policy, forward/backward/camera/interact/flower actions, per-frame decision reporting, and a desktop live executor for capture/template matching/input dispatch/cancellation/logging/flower handling; TaskContext/SystemControl preflight and Vision overlay drawing adapters remain pending.",
+        notes: "Rust models AutoOpenChest locators, 60-second search-loop policy, forward/backward/camera/interact/flower actions, per-frame decision reporting, and a desktop live executor for capture/template matching/input dispatch/cancellation/logging/flower handling; legacy draw-disabled locator overlay cleanup is a no-op, while TaskContext/SystemControl preflight and real-game regression remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoDomain",
@@ -240,7 +240,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoDomain config/params, domain entry retries, Sunday reward selection, combat/tree/reward/resin/artifact-salvage phases, template locators, and stop/retry rules; live capture, map teleport, OCR/template matching, input dispatch, CombatScenes, YOLO tree detection, reward recognition, and artifact salvage execution remain pending.",
+        notes: "Rust models AutoDomain config/params, domain entry retries, Sunday reward selection, combat/tree/reward/resin/artifact-salvage phases, template locators, stop/retry rules, and an injectable executor for entry, fight, reward, resin, artifact-salvage handoff, cancellation, and cleanup; desktop live capture, map teleport, OCR/template matching, input dispatch, CombatScenes, YOLO tree detection, reward recognition, and artifact salvage adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoTrack",
@@ -258,7 +258,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoTrack semaphore/window startup, main-UI Paimon check, mission-text OCR distance parsing, long-distance quest-menu teleport selection, blue-track-point steering, arrival OCR, cleanup, and required AutoSkip/Common/QuickTeleport locators; live capture, OCR/template execution, map/main-ui recognition, and input dispatch remain pending.",
+        notes: "Rust models AutoTrack semaphore/window startup, main-UI Paimon check, mission-text OCR distance parsing, long-distance quest-menu teleport selection, blue-track-point steering, arrival OCR, cleanup, required AutoSkip/Common/QuickTeleport locators, and an injectable executor for teleport/quest/steering/forward-release actions; desktop live phase 1 now wires BitBlt capture, PureRust template matching, WinRT mission-distance OCR, SendInput action dispatch, and no-op overlay cleanup, while legacy teleport candidate ranking parity, real overlay cleanup, non-1080p asset fallback validation, and real-game regression remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoTrackPath",
@@ -278,7 +278,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models the obsolete AutoTrackPath way2.json input, TpConfig defaults, teleport/minimap wait, mouse-angle calibration, point tracking, motion refresh, jump loop, semaphore, and cleanup rules; TpTask execution, mini-map capture, map matching, orientation computation, mouse/key input, and parallel cancellation remain pending.",
+        notes: "Rust models the obsolete AutoTrackPath way2.json input, TpConfig defaults, waypoint plans, teleport/minimap wait, mouse-angle calibration, point tracking, motion refresh, jump loop, semaphore, cancellation, cleanup rules, and an injectable executor with action reports; desktop live TpTask, mini-map capture, map matching, orientation computation, mouse/key input, overlay, and cancellation adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoMusicGame",
@@ -325,7 +325,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoBoss config/params, supported boss data, required route files, original/supplemental resin gates, AutoFight handoff, reward navigation/claim, revive retry, and post-fight repositioning; live capture, OCR/template matching, pathing/key-mouse execution, CombatScenes, reward recognition, notifications, and cancellation remain pending.",
+        notes: "Rust models AutoBoss config/params, supported boss data, required route files, original/supplemental resin gates, AutoFight handoff, reward navigation/claim, revive retry, post-fight repositioning, and an injectable executor for route/combat/reward/cancellation/cleanup outcomes; desktop live capture, OCR/template matching, pathing/key-mouse execution, CombatScenes, reward recognition, notifications, and cancellation adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoLeyLineOutcrop",
@@ -345,7 +345,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoLeyLineOutcrop config/params, static country and node route data, handbook/manual-map discovery semantics, BFS path selection, target/rerun route derivation, AutoFight handoff, OCR finish rules, resin exhaustion/recheck, reward resin priority, friendship-team switching, post-reward drop scan, and custom-mark overlay cleanup; live capture, OCR/template execution, TpTask/PathExecutor, key-mouse dispatch, CombatScenes, ScanPickTask, mask overlay, and notifications remain pending.",
+        notes: "Rust models AutoLeyLineOutcrop config/params, static country and node route data, handbook/manual-map discovery semantics, BFS path selection, target/rerun route derivation, AutoFight handoff, OCR finish rules, resin exhaustion/recheck, reward resin priority, friendship-team switching, post-reward drop scan, custom-mark overlay cleanup, and an injectable executor for route/fight/reward/rerun/cancellation flows; desktop live capture, OCR/template execution, TpTask/PathExecutor, key-mouse dispatch, CombatScenes, ScanPickTask, mask overlay, and notifications remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoStygianOnslaught",
@@ -365,7 +365,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoStygianOnslaught config/defaults, combat script path selection, Stygian finite-state graph, event-menu navigation, teleport/domain entrance detection, hard-mode selection, fixed boss coordinates, in-page preset-team switching, Stygian combat loop boundaries, domain-end OCR rule, leyline flower interaction, resin usage semantics, exit-domain flow, and quick-only AutoArtifactSalvage handoff; live capture, OCR/template detection, state-machine executor, combat command loop, input dispatch, notifications, and reward/resin clicks remain pending.",
+        notes: "Rust models AutoStygianOnslaught config/defaults, combat script path selection, Stygian finite-state graph, event-menu navigation, teleport/domain entrance detection, hard-mode selection, fixed boss coordinates, in-page preset-team switching, Stygian combat loop boundaries, domain-end OCR rule, leyline flower interaction, resin usage semantics, exit-domain flow, quick-only AutoArtifactSalvage handoff, and an injectable executor/report surface for navigation, combat, reward, exit, artifact salvage, cancellation, and cleanup flows; desktop live capture, OCR/template detection, combat command loop, input dispatch, notifications, and reward/resin adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoFishing",
@@ -379,7 +379,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::ScriptDispatcher,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models the script-dispatched AutoFishing task config, time policy rounds, tick-loop control decisions, BehaviorTree stages, pure Blackboard reset/state contract, fish/bait/RodNet model metadata, pure find-fish timeout/viewpoint/initial-state/turn decisions, pure EnterFishingMode retry/timeout/confirm/crop/selected-bait/pitch-reset reducer, pure fishpond availability and bait selection, pure target-fish selection, pure RodNet math path, pure throw-rod initialization and adjustment decisions, pure bite/check timeout reducers, pure fish-box/pull-bar/quit reducers, startup cleanup, and ordered execution plan; live capture, BehaviorTree execution, YOLO/GridIcon/Torch inference, OpenCV/OCR, input dispatch, overlays, and cancellation loop remain pending.",
+        notes: "Rust models the script-dispatched AutoFishing task config, enabled gate, time policy rounds, tick-loop control decisions, BehaviorTree stages, pure Blackboard reset/state contract, fish/bait/RodNet model metadata, pure find-fish timeout/viewpoint/initial-state/turn decisions, pure EnterFishingMode retry/timeout/confirm/crop/selected-bait/pitch-reset reducer, pure fishpond availability and bait selection, pure target-fish selection, pure RodNet math path, pure throw-rod initialization and adjustment decisions, pure bite/check timeout reducers, pure fish-box/pull-bar/quit reducers, startup cleanup, ordered execution plan, and an injectable full-task executor/report surface for rounds, bait, throw-rod, bite, quit, cancellation, and cleanup flows; desktop live capture, BehaviorTree execution, YOLO/GridIcon/Torch/RodNet inference, OpenCV/OCR, input dispatch, overlays, and cancellation adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoCook",
@@ -407,7 +407,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoArtifactSalvage config/default JS/legacy regex, 1-4 star inverse quick-select flow, destructive quick-salvage confirmation boundary, optional artifact-set filtering with gridIcon metadata, ArtifactSalvage grid constants, locked/selected HSV rules, artifact stat OCR ROIs/parsing rules, ClearScript Output contract, recognition-failure policy, and manual-review-only five-star finish; live capture, OCR, OpenCV, ONNX inference, ClearScript-compatible JS, overlay, and all input/click execution remain pending.",
+        notes: "Rust models AutoArtifactSalvage config/default JS/legacy regex, 1-4 star inverse quick-select flow, destructive quick-salvage confirmation boundary, optional artifact-set filtering with gridIcon metadata, ArtifactSalvage grid constants, locked/selected HSV rules, artifact stat OCR ROIs/parsing rules, ClearScript Output contract, recognition-failure policy, manual-review-only five-star finish, independent-task invocation expansion, and an injectable executor for quick/five-star/filter/cleanup outcomes; desktop live capture, OCR, OpenCV, ONNX inference, ClearScript-compatible JS, overlay, and input/click adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "TurnAroundMacro",
@@ -449,7 +449,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the QuickBuy hotkey preflight, Serenitea Pot coin template branch, slider drag/click/wait sequences, and overlay cleanup through injectable runtime hooks; desktop explicit command and generic independent task route now connect BitBlt capture, template matching, SendInput movement/clicks, and capture-coordinate scaling, while Toast and overlay cleanup adapters remain pending.",
+        notes: "Rust models and can execute the QuickBuy hotkey preflight, Serenitea Pot coin template branch, slider drag/click/wait sequences, and cleanup through injectable runtime hooks; desktop explicit command and generic independent task route now connect BitBlt capture, foreground process preflight, template matching, SendInput movement/clicks, waits, and capture-coordinate scaling; overlay cleanup is a no-op parity step because Rust QuickBuy does not draw WPF VisionContext overlays, while TaskContext initialization Toast remains pending.",
     },
     TaskCatalogEntry {
         key: "QuickSereniteaPot",
@@ -468,7 +468,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the QuickSereniteaPot hotkey preflight, inventory/open-bag retries, gadget tab click, Serenitea Pot icon placement, white-confirm click, main-UI/big-map recovery policy, F interaction text branch, and overlay cleanup through injectable runtime hooks; desktop explicit command and generic independent task route now connect BitBlt capture, template matching, configured Genshin action input, and capture coordinate clicks, while OCR FindF semantics, big-map live detection, Toast, and overlay cleanup adapters remain pending.",
+        notes: "Rust models and can execute the QuickSereniteaPot hotkey preflight, inventory/open-bag retries, gadget tab click, Serenitea Pot icon placement, white-confirm click, main-UI/big-map recovery policy, F interaction text branch, and overlay cleanup through injectable runtime hooks; desktop explicit command and generic independent task route now connect BitBlt capture, foreground game-window preflight, template matching, Bv big-map detection, configured Genshin action input, capture coordinate clicks, WinRT OCR-backed FindF semantics, per-plan locator construction in place of the legacy asset singleton reset, and no-op overlay cleanup for the current non-drawing desktop locators, while TaskContext initialization Toast and real-game regression remain pending.",
     },
     TaskCatalogEntry {
         key: "UseRedeemCode",
@@ -499,7 +499,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models GetGridIcons config, gridName string/numeric compatibility, inventory/manual-open policy, GridScreen and ArtifactSetFilter grid constants, item-name OCR crop, optional star suffix color-contour rule, timestamped output directory, duplicate filename skip, PNG save behavior, and related GridIconsAccuracyTest model metadata; live capture, OpenCV enumeration, Paddle OCR, input dispatch, filesystem write threads, overlay cleanup, and ONNX inference remain pending.",
+        notes: "Rust models GetGridIcons config, gridName string/numeric compatibility, inventory/manual-open policy, GridScreen and ArtifactSetFilter grid constants, item-name OCR crop, optional star suffix color-contour rule, timestamped output directory, duplicate filename skip, PNG save behavior, related GridIconsAccuracyTest model metadata, independent-task invocation expansion, and an injectable executor for open/scan/save/cleanup reports; desktop live capture, OpenCV enumeration, Paddle OCR, input dispatch, filesystem write threads, overlay cleanup, and ONNX adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "Shell",
@@ -563,7 +563,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Used by the Genshin script host for teleport and big-map movement helpers; Rust now preserves and executes typed teleport request state machines through injectable big-map/map-matching/click hooks and invocation live bridge while desktop concrete map/click adapters remain pending.",
+        notes: "Used by the Genshin script host for teleport and big-map movement helpers; Rust now preserves and executes typed teleport request state machines through injectable big-map/map-matching/click hooks and invocation live bridge. The desktop live bridge now dispatches OpenMap, verifies BigMap with PureRust templates, normalizes underground map state with QuickTeleport templates, opens the area menu and clicks the target country/independent map from WinRT OCR, loads tp.json, carries the shared Teyvat 256-layer SIFT recognition rule into desktop preflight, including keypoint/mat assets, SIFT/Flann metadata, 1/4 query downscale, 60x88 256-layer split grid, prev-rect fallback search, center Match, rect KnnMatchRect, and 256-to-2048 layer scale, carries the legacy MoveMapTo TpConfig defaults and Teyvat country-center anchors in the plan, resolves the nearest teleport point with the legacy position[2]/position[0] coordinate mapping, reads and adjusts the BigMap zoom slider with legacy 2.0/4.4 thresholds, preserves Teyvat coordinate conversion and target-window guard geometry, plans BigMap drags with the legacy mapScaleFactor/max-move/cosine-step/predicted-center math from the plan rule, runs MoveMapTo through a bounded prediction loop with legacy zoom-out/zoom-in target formulas, target-window rechecks, post-drag center update decisions, false-positive jump rejection, and C#-compatible >5 prediction-failure termination, removes duplicate MoveMapTo pre-drag actions, fails MoveMapTo when the runtime reports non-convergence, clicks the direct teleport-panel button, detects the QuickTeleport map-close/not-activated boundary, falls back to QuickTeleport candidate-panel template/OCR clicks with the legacy 500ms minimum delay plus 6x300ms teleport-button appear/disappear probing, applies point-not-activated ESC recovery with up to three coordinate-teleport attempts, polls main-UI completion, and records the effective pathing navigation seed in the execution report, while non-CHS localization parity, native OpenCV/SIFT map matching for BigMap center+rect recognition, MoveMapTo native recognized-center feed/rect correction/force-jump recovery, and AutoPathing consumption of the seed remain pending.",
     },
     TaskCatalogEntry {
         key: "WalkToF",
@@ -605,7 +605,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now exposes the LinneaMining common-job plan with legacy mines/rounds parsing, Linnea avatar requirement, BgiMine YOLO metadata, mineral clustering, target selection, aiming, scan, mining, compensation, and cleanup rules; live avatar switching, capture, ONNX inference, mouse input, and overlay adapters remain pending.",
+        notes: "Rust now exposes the LinneaMining common-job plan with legacy mines/rounds parsing, Linnea avatar requirement, BgiMine YOLO metadata, mineral clustering, target selection, aiming, scan, mining, compensation, cleanup rules, and an injectable executor/report surface; desktop live avatar switching, capture, ONNX inference, mouse input, and overlay adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "ScanPickDrops",

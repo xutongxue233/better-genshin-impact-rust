@@ -180,125 +180,125 @@ pub fn plan_claim_encounter_points_rewards(
         click_first_match: true,
     };
     let left_panel_ocr = page.ocr(Some(ocr_rule.left_panel_roi));
-    let mut steps = Vec::new();
-
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "log claim encounter points rewards start",
-        ClaimEncounterPointsRewardsStepAction::Log {
-            message: "start ClaimEncounterPointsRewards common job plan".to_string(),
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "return to main UI before opening adventurer handbook",
-        ClaimEncounterPointsRewardsStepAction::CommonJob {
-            task_key: RETURN_MAIN_UI_TASK_KEY.to_string(),
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "wait before opening adventurer handbook",
-        ClaimEncounterPointsRewardsStepAction::Page {
-            command: task_vision_result(page.wait(BEFORE_OPEN_DELAY_MS))?,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "open adventurer handbook",
-        ClaimEncounterPointsRewardsStepAction::GenshinAction {
-            action: GenshinAction::OpenAdventurerHandbook,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "wait after opening adventurer handbook",
-        ClaimEncounterPointsRewardsStepAction::Page {
-            command: task_vision_result(page.wait(AFTER_OPEN_DELAY_MS))?,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "OCR adventurer handbook left panel",
-        ClaimEncounterPointsRewardsStepAction::Ocr {
-            command: left_panel_ocr,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::Always,
-        "match commissions tab text",
-        ClaimEncounterPointsRewardsStepAction::MatchCommissions {
-            rule: ocr_rule.clone(),
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenCommissionsTextMatched,
-        "try direct claim before clicking commissions tab",
-        ClaimEncounterPointsRewardsStepAction::Locator {
-            locator: claim_button_locator.clone(),
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonDetected,
-        "wait after early claim click",
-        ClaimEncounterPointsRewardsStepAction::Page {
-            command: task_vision_result(page.wait(AFTER_CLAIM_DELAY_MS))?,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonDetected,
-        "return early claim result",
-        ClaimEncounterPointsRewardsStepAction::ReturnResult {
-            result: ClaimEncounterPointsRewardsStepResult::ClaimedFromVisibleButton,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonMissing,
-        "click matched commissions tab text",
-        ClaimEncounterPointsRewardsStepAction::ClickMatchedText,
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonMissing,
-        "wait after commissions tab click",
-        ClaimEncounterPointsRewardsStepAction::Page {
-            command: task_vision_result(page.wait(AFTER_OPEN_DELAY_MS))?,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonMissing,
-        "click claim encounter points rewards button",
-        ClaimEncounterPointsRewardsStepAction::Locator {
-            locator: claim_button_locator.clone(),
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenClaimButtonDetected,
-        "wait after claim encounter points rewards click",
-        ClaimEncounterPointsRewardsStepAction::Page {
-            command: task_vision_result(page.wait(AFTER_CLAIM_DELAY_MS))?,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenClaimButtonDetected,
-        "return to main UI after claiming encounter points rewards",
-        ClaimEncounterPointsRewardsStepAction::CommonJob {
-            task_key: RETURN_MAIN_UI_TASK_KEY.to_string(),
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::WhenClaimButtonDetected,
-        "return claimed after opening commissions result",
-        ClaimEncounterPointsRewardsStepAction::ReturnResult {
-            result: ClaimEncounterPointsRewardsStepResult::ClaimedAfterOpeningCommissions,
-        },
-    ));
-    steps.push(ClaimEncounterPointsRewardsStep::new(
-        ClaimEncounterPointsRewardsStepCondition::AfterOpenRetryLimit,
-        "return commissions tab not found result",
-        ClaimEncounterPointsRewardsStepAction::ReturnResult {
-            result: ClaimEncounterPointsRewardsStepResult::CommissionsTabNotFound,
-        },
-    ));
+    let steps = vec![
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "log claim encounter points rewards start",
+            ClaimEncounterPointsRewardsStepAction::Log {
+                message: "start ClaimEncounterPointsRewards common job plan".to_string(),
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "return to main UI before opening adventurer handbook",
+            ClaimEncounterPointsRewardsStepAction::CommonJob {
+                task_key: RETURN_MAIN_UI_TASK_KEY.to_string(),
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "wait before opening adventurer handbook",
+            ClaimEncounterPointsRewardsStepAction::Page {
+                command: task_vision_result(page.wait(BEFORE_OPEN_DELAY_MS))?,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "open adventurer handbook",
+            ClaimEncounterPointsRewardsStepAction::GenshinAction {
+                action: GenshinAction::OpenAdventurerHandbook,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "wait after opening adventurer handbook",
+            ClaimEncounterPointsRewardsStepAction::Page {
+                command: task_vision_result(page.wait(AFTER_OPEN_DELAY_MS))?,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "OCR adventurer handbook left panel",
+            ClaimEncounterPointsRewardsStepAction::Ocr {
+                command: left_panel_ocr,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::Always,
+            "match commissions tab text",
+            ClaimEncounterPointsRewardsStepAction::MatchCommissions {
+                rule: ocr_rule.clone(),
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenCommissionsTextMatched,
+            "try direct claim before clicking commissions tab",
+            ClaimEncounterPointsRewardsStepAction::Locator {
+                locator: claim_button_locator.clone(),
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonDetected,
+            "wait after early claim click",
+            ClaimEncounterPointsRewardsStepAction::Page {
+                command: task_vision_result(page.wait(AFTER_CLAIM_DELAY_MS))?,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonDetected,
+            "return early claim result",
+            ClaimEncounterPointsRewardsStepAction::ReturnResult {
+                result: ClaimEncounterPointsRewardsStepResult::ClaimedFromVisibleButton,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonMissing,
+            "click matched commissions tab text",
+            ClaimEncounterPointsRewardsStepAction::ClickMatchedText,
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonMissing,
+            "wait after commissions tab click",
+            ClaimEncounterPointsRewardsStepAction::Page {
+                command: task_vision_result(page.wait(AFTER_OPEN_DELAY_MS))?,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenEarlyClaimButtonMissing,
+            "click claim encounter points rewards button",
+            ClaimEncounterPointsRewardsStepAction::Locator {
+                locator: claim_button_locator.clone(),
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenClaimButtonDetected,
+            "wait after claim encounter points rewards click",
+            ClaimEncounterPointsRewardsStepAction::Page {
+                command: task_vision_result(page.wait(AFTER_CLAIM_DELAY_MS))?,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenClaimButtonDetected,
+            "return to main UI after claiming encounter points rewards",
+            ClaimEncounterPointsRewardsStepAction::CommonJob {
+                task_key: RETURN_MAIN_UI_TASK_KEY.to_string(),
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::WhenClaimButtonDetected,
+            "return claimed after opening commissions result",
+            ClaimEncounterPointsRewardsStepAction::ReturnResult {
+                result: ClaimEncounterPointsRewardsStepResult::ClaimedAfterOpeningCommissions,
+            },
+        ),
+        ClaimEncounterPointsRewardsStep::new(
+            ClaimEncounterPointsRewardsStepCondition::AfterOpenRetryLimit,
+            "return commissions tab not found result",
+            ClaimEncounterPointsRewardsStepAction::ReturnResult {
+                result: ClaimEncounterPointsRewardsStepResult::CommissionsTabNotFound,
+            },
+        ),
+    ];
 
     Ok(ClaimEncounterPointsRewardsExecutionPlan {
         task_key: CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY.to_string(),

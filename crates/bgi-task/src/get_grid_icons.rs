@@ -2,6 +2,10 @@ use bgi_core::config::GetGridIconsConfig;
 use bgi_vision::{Rect, Size};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use crate::common_job::{
     GridIconClassifierRule, GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate,
@@ -76,7 +80,7 @@ impl GetGridIconsExecutionConfig {
             serde_json::from_value(get_grid_icons_value.clone()).unwrap_or_default();
 
         overlay_get_grid_icons_config(&mut config.get_grid_icons_config, value);
-        if get_grid_icons_value as *const Value != value as *const Value {
+        if !std::ptr::eq(get_grid_icons_value, value) {
             overlay_get_grid_icons_config(&mut config.get_grid_icons_config, get_grid_icons_value);
         }
         config
@@ -211,7 +215,7 @@ pub struct GetGridIconsStep {
     pub action: GetGridIconsStepAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GetGridIconsStepPhase {
     Setup,
     OpenGrid,
@@ -221,7 +225,7 @@ pub enum GetGridIconsStepPhase {
     Cleanup,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GetGridIconsStepAction {
     CreateTimestampedOutputDirectory,
     ReturnMainUi,
@@ -238,6 +242,570 @@ pub enum GetGridIconsStepAction {
     ClearVisionOverlay,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsGridItem {
+    pub page_index: u32,
+    pub item_index: u32,
+    pub rect: Rect,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsPngData {
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GetGridIconsRuntimeActionStatus {
+    Executed,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GetGridIconsSkipReason {
+    MaxNumToGetZero,
+    MaxNumToGetReached,
+    MissingOcrItemName,
+    DuplicateFileName,
+    SaveFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsRuntimeActionReport {
+    pub phase: GetGridIconsStepPhase,
+    pub action: GetGridIconsStepAction,
+    pub status: GetGridIconsRuntimeActionStatus,
+    pub item: Option<GetGridIconsGridItem>,
+    pub output_file_name: Option<String>,
+    pub skip_reason: Option<GetGridIconsSkipReason>,
+    pub message: String,
+}
+
+impl GetGridIconsRuntimeActionReport {
+    fn executed(
+        phase: GetGridIconsStepPhase,
+        action: GetGridIconsStepAction,
+        item: Option<GetGridIconsGridItem>,
+        output_file_name: Option<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            phase,
+            action,
+            status: GetGridIconsRuntimeActionStatus::Executed,
+            item,
+            output_file_name,
+            skip_reason: None,
+            message: message.into(),
+        }
+    }
+
+    fn skipped(
+        phase: GetGridIconsStepPhase,
+        action: GetGridIconsStepAction,
+        item: Option<GetGridIconsGridItem>,
+        output_file_name: Option<String>,
+        reason: GetGridIconsSkipReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            phase,
+            action,
+            status: GetGridIconsRuntimeActionStatus::Skipped,
+            item,
+            output_file_name,
+            skip_reason: Some(reason),
+            message: message.into(),
+        }
+    }
+
+    fn failed(
+        phase: GetGridIconsStepPhase,
+        action: GetGridIconsStepAction,
+        item: Option<GetGridIconsGridItem>,
+        output_file_name: Option<String>,
+        reason: GetGridIconsSkipReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            phase,
+            action,
+            status: GetGridIconsRuntimeActionStatus::Failed,
+            item,
+            output_file_name,
+            skip_reason: Some(reason),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsSavedPng {
+    pub item: GetGridIconsGridItem,
+    pub item_name: String,
+    pub star_suffix: String,
+    pub file_name: String,
+    pub output_path: PathBuf,
+    pub png_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsSkippedPng {
+    pub item: Option<GetGridIconsGridItem>,
+    pub reason: GetGridIconsSkipReason,
+    pub item_name: Option<String>,
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsExecutorState {
+    pub output_dir: Option<PathBuf>,
+    pub auto_open_inventory_completed: Option<bool>,
+    pub manual_open_completed: Option<bool>,
+    pub grid_items: Vec<GetGridIconsGridItem>,
+    pub clicked_items: u64,
+    pub saved_icons: Vec<GetGridIconsSavedPng>,
+    pub skipped_icons: Vec<GetGridIconsSkippedPng>,
+    pub max_num_reached: bool,
+    pub cleanup_completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub state: GetGridIconsExecutorState,
+    pub action_reports: Vec<GetGridIconsRuntimeActionReport>,
+}
+
+pub trait GetGridIconsRuntime {
+    fn create_get_grid_icons_output_dir(
+        &mut self,
+        output_rule: &GetGridIconsOutputRule,
+        grid_screen_name: &GridScreenName,
+    ) -> Result<PathBuf>;
+
+    fn return_get_grid_icons_main_ui(&mut self, grid_screen_name: &GridScreenName) -> Result<()>;
+
+    fn open_get_grid_icons_inventory_tab(
+        &mut self,
+        grid_screen_name: &GridScreenName,
+        inventory_tab_assets: &InventoryTabAssetPair,
+    ) -> Result<()>;
+
+    fn require_get_grid_icons_manual_open(
+        &mut self,
+        grid_screen_name: &GridScreenName,
+        message: &str,
+    ) -> Result<()>;
+
+    fn enumerate_get_grid_icons_grid_items(
+        &mut self,
+        grid_rule: &GetGridIconsGridRule,
+        artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
+    ) -> Result<Vec<GetGridIconsGridItem>>;
+
+    fn click_get_grid_icons_item(
+        &mut self,
+        item: &GetGridIconsGridItem,
+        wait_after_click_ms: u64,
+    ) -> Result<()>;
+
+    fn ocr_get_grid_icons_item_name(
+        &mut self,
+        item: &GetGridIconsGridItem,
+        roi: &GetGridIconsWidthRelativeRect,
+    ) -> Result<Option<String>>;
+
+    fn count_get_grid_icons_star_suffix(
+        &mut self,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsStarSuffixRule,
+    ) -> Result<u8>;
+
+    fn capture_get_grid_icons_item_icon_png(
+        &mut self,
+        item: &GetGridIconsGridItem,
+    ) -> Result<GetGridIconsPngData>;
+
+    fn ocr_get_grid_icons_artifact_set_flower_name(
+        &mut self,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsArtifactSetFilterRule,
+    ) -> Result<Option<String>>;
+
+    fn crop_get_grid_icons_artifact_set_icon_png(
+        &mut self,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsArtifactSetFilterRule,
+    ) -> Result<GetGridIconsPngData>;
+
+    fn save_get_grid_icons_png(
+        &mut self,
+        output_dir: &Path,
+        file_name: &str,
+        png: &GetGridIconsPngData,
+    ) -> Result<()>;
+
+    fn clear_get_grid_icons_vision_overlay(&mut self) -> Result<()>;
+}
+
+pub fn execute_get_grid_icons_plan<R>(
+    plan: &GetGridIconsExecutionPlan,
+    runtime: &mut R,
+) -> Result<GetGridIconsExecutionReport>
+where
+    R: GetGridIconsRuntime,
+{
+    let mut state = GetGridIconsExecutorState::default();
+    let mut action_reports = Vec::new();
+
+    let execution_result =
+        execute_get_grid_icons_plan_inner(plan, runtime, &mut state, &mut action_reports);
+    let cleanup_result = execute_get_grid_icons_cleanup(runtime, &mut state, &mut action_reports);
+
+    match (execution_result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok(GetGridIconsExecutionReport {
+            task_key: plan.task_key.clone(),
+            completed: state.cleanup_completed,
+            state,
+            action_reports,
+        }),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) | (Err(_), Err(error)) => Err(error),
+    }
+}
+
+fn execute_get_grid_icons_plan_inner<R>(
+    plan: &GetGridIconsExecutionPlan,
+    runtime: &mut R,
+    state: &mut GetGridIconsExecutorState,
+    action_reports: &mut Vec<GetGridIconsRuntimeActionReport>,
+) -> Result<()>
+where
+    R: GetGridIconsRuntime,
+{
+    let output_dir = runtime
+        .create_get_grid_icons_output_dir(&plan.output_rule, &plan.config_rule.grid_screen_name)?;
+    state.output_dir = Some(output_dir.clone());
+    action_reports.push(GetGridIconsRuntimeActionReport::executed(
+        GetGridIconsStepPhase::Setup,
+        GetGridIconsStepAction::CreateTimestampedOutputDirectory,
+        None,
+        None,
+        output_dir.display().to_string(),
+    ));
+
+    if plan.config_rule.max_num_to_get == 0 {
+        state.max_num_reached = true;
+        state.skipped_icons.push(GetGridIconsSkippedPng {
+            item: None,
+            reason: GetGridIconsSkipReason::MaxNumToGetZero,
+            item_name: None,
+            file_name: None,
+        });
+        action_reports.push(GetGridIconsRuntimeActionReport::skipped(
+            GetGridIconsStepPhase::ScanGrid,
+            GetGridIconsStepAction::EnumerateGridItems,
+            None,
+            None,
+            GetGridIconsSkipReason::MaxNumToGetZero,
+            "maxNumToGet is 0; grid scan skipped",
+        ));
+        return Ok(());
+    }
+
+    execute_get_grid_icons_open_grid(plan, runtime, state, action_reports)?;
+
+    let grid_items = runtime.enumerate_get_grid_icons_grid_items(
+        &plan.grid_rule,
+        plan.artifact_set_filter_rule.as_ref(),
+    )?;
+    state.grid_items = grid_items;
+    action_reports.push(GetGridIconsRuntimeActionReport::executed(
+        GetGridIconsStepPhase::ScanGrid,
+        GetGridIconsStepAction::EnumerateGridItems,
+        None,
+        None,
+        format!("{} grid item(s)", state.grid_items.len()),
+    ));
+
+    let mut existing_file_names = HashSet::new();
+    for item in state.grid_items.clone() {
+        if state.saved_icons.len() as u64 >= plan.config_rule.max_num_to_get {
+            state.max_num_reached = true;
+            state.skipped_icons.push(GetGridIconsSkippedPng {
+                item: Some(item),
+                reason: GetGridIconsSkipReason::MaxNumToGetReached,
+                item_name: None,
+                file_name: None,
+            });
+            action_reports.push(GetGridIconsRuntimeActionReport::skipped(
+                GetGridIconsStepPhase::Save,
+                GetGridIconsStepAction::StopWhenMaxCountReached,
+                Some(item),
+                None,
+                GetGridIconsSkipReason::MaxNumToGetReached,
+                format!("maxNumToGet {} reached", plan.config_rule.max_num_to_get),
+            ));
+            break;
+        }
+
+        execute_get_grid_icons_item(
+            plan,
+            runtime,
+            state,
+            action_reports,
+            &output_dir,
+            &mut existing_file_names,
+            item,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn execute_get_grid_icons_open_grid<R>(
+    plan: &GetGridIconsExecutionPlan,
+    runtime: &mut R,
+    state: &mut GetGridIconsExecutorState,
+    action_reports: &mut Vec<GetGridIconsRuntimeActionReport>,
+) -> Result<()>
+where
+    R: GetGridIconsRuntime,
+{
+    if plan.open_rule.auto_open_inventory {
+        runtime.return_get_grid_icons_main_ui(&plan.config_rule.grid_screen_name)?;
+        action_reports.push(GetGridIconsRuntimeActionReport::executed(
+            GetGridIconsStepPhase::OpenGrid,
+            GetGridIconsStepAction::ReturnMainUi,
+            None,
+            None,
+            "returned to main UI before opening inventory",
+        ));
+
+        let inventory_tab_assets =
+            plan.open_rule
+                .inventory_tab_assets
+                .as_ref()
+                .ok_or_else(|| TaskError::InvalidTaskConfig {
+                    key: GET_GRID_ICONS_TASK_KEY.to_string(),
+                    message: "auto-open inventory grid has no inventory tab assets".to_string(),
+                })?;
+        runtime.open_get_grid_icons_inventory_tab(
+            &plan.config_rule.grid_screen_name,
+            inventory_tab_assets,
+        )?;
+        state.auto_open_inventory_completed = Some(true);
+        action_reports.push(GetGridIconsRuntimeActionReport::executed(
+            GetGridIconsStepPhase::OpenGrid,
+            GetGridIconsStepAction::OpenInventoryTab,
+            None,
+            None,
+            inventory_tab_assets.unchecked_asset.clone(),
+        ));
+    } else {
+        runtime.require_get_grid_icons_manual_open(
+            &plan.config_rule.grid_screen_name,
+            &plan.open_rule.manual_open_message,
+        )?;
+        state.manual_open_completed = Some(true);
+        action_reports.push(GetGridIconsRuntimeActionReport::executed(
+            GetGridIconsStepPhase::OpenGrid,
+            GetGridIconsStepAction::RequireManualGridOpen,
+            None,
+            None,
+            plan.open_rule.manual_open_message.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn execute_get_grid_icons_item<R>(
+    plan: &GetGridIconsExecutionPlan,
+    runtime: &mut R,
+    state: &mut GetGridIconsExecutorState,
+    action_reports: &mut Vec<GetGridIconsRuntimeActionReport>,
+    output_dir: &Path,
+    existing_file_names: &mut HashSet<String>,
+    item: GetGridIconsGridItem,
+) -> Result<()>
+where
+    R: GetGridIconsRuntime,
+{
+    runtime.click_get_grid_icons_item(&item, plan.capture_rule.item_click_delay_ms)?;
+    state.clicked_items += 1;
+    action_reports.push(GetGridIconsRuntimeActionReport::executed(
+        GetGridIconsStepPhase::CaptureItem,
+        GetGridIconsStepAction::ClickItemAndWait,
+        Some(item),
+        None,
+        format!("waited {} ms", plan.capture_rule.item_click_delay_ms),
+    ));
+
+    let (item_name, star_suffix, png) =
+        capture_get_grid_icons_item_payload(plan, runtime, action_reports, item)?;
+
+    let Some(item_name) = item_name else {
+        state.skipped_icons.push(GetGridIconsSkippedPng {
+            item: Some(item),
+            reason: GetGridIconsSkipReason::MissingOcrItemName,
+            item_name: None,
+            file_name: None,
+        });
+        action_reports.push(GetGridIconsRuntimeActionReport::skipped(
+            GetGridIconsStepPhase::Save,
+            GetGridIconsStepAction::SaveUniquePng,
+            Some(item),
+            None,
+            GetGridIconsSkipReason::MissingOcrItemName,
+            "item name OCR returned no text",
+        ));
+        return Ok(());
+    };
+
+    let file_name = format!("{item_name}{star_suffix}.png");
+    if !existing_file_names.insert(file_name.clone()) {
+        state.skipped_icons.push(GetGridIconsSkippedPng {
+            item: Some(item),
+            reason: GetGridIconsSkipReason::DuplicateFileName,
+            item_name: Some(item_name),
+            file_name: Some(file_name.clone()),
+        });
+        action_reports.push(GetGridIconsRuntimeActionReport::skipped(
+            GetGridIconsStepPhase::Save,
+            GetGridIconsStepAction::SaveUniquePng,
+            Some(item),
+            Some(file_name),
+            GetGridIconsSkipReason::DuplicateFileName,
+            "duplicate file name skipped",
+        ));
+        return Ok(());
+    }
+
+    match runtime.save_get_grid_icons_png(output_dir, &file_name, &png) {
+        Ok(()) => {
+            let output_path = output_dir.join(&file_name);
+            state.saved_icons.push(GetGridIconsSavedPng {
+                item,
+                item_name,
+                star_suffix,
+                file_name: file_name.clone(),
+                output_path,
+                png_len: png.bytes.len(),
+            });
+            action_reports.push(GetGridIconsRuntimeActionReport::executed(
+                GetGridIconsStepPhase::Save,
+                GetGridIconsStepAction::SaveUniquePng,
+                Some(item),
+                Some(file_name),
+                format!("{} byte(s)", png.bytes.len()),
+            ));
+        }
+        Err(error) if plan.output_rule.save_failures_are_logged_not_fatal => {
+            state.skipped_icons.push(GetGridIconsSkippedPng {
+                item: Some(item),
+                reason: GetGridIconsSkipReason::SaveFailed,
+                item_name: Some(item_name),
+                file_name: Some(file_name.clone()),
+            });
+            action_reports.push(GetGridIconsRuntimeActionReport::failed(
+                GetGridIconsStepPhase::Save,
+                GetGridIconsStepAction::SaveUniquePng,
+                Some(item),
+                Some(file_name),
+                GetGridIconsSkipReason::SaveFailed,
+                error.to_string(),
+            ));
+        }
+        Err(error) => return Err(error),
+    }
+
+    Ok(())
+}
+
+fn capture_get_grid_icons_item_payload<R>(
+    plan: &GetGridIconsExecutionPlan,
+    runtime: &mut R,
+    action_reports: &mut Vec<GetGridIconsRuntimeActionReport>,
+    item: GetGridIconsGridItem,
+) -> Result<(Option<String>, String, GetGridIconsPngData)>
+where
+    R: GetGridIconsRuntime,
+{
+    if let Some(artifact_set_filter_rule) = plan.artifact_set_filter_rule.as_ref() {
+        let item_name =
+            runtime.ocr_get_grid_icons_artifact_set_flower_name(&item, artifact_set_filter_rule)?;
+        action_reports.push(GetGridIconsRuntimeActionReport::executed(
+            GetGridIconsStepPhase::CaptureItem,
+            GetGridIconsStepAction::OcrArtifactSetFlowerName,
+            Some(item),
+            None,
+            item_name.clone().unwrap_or_default(),
+        ));
+
+        let png =
+            runtime.crop_get_grid_icons_artifact_set_icon_png(&item, artifact_set_filter_rule)?;
+        action_reports.push(GetGridIconsRuntimeActionReport::executed(
+            GetGridIconsStepPhase::CaptureItem,
+            GetGridIconsStepAction::CropArtifactSetIcon,
+            Some(item),
+            None,
+            format!("{} byte(s)", png.bytes.len()),
+        ));
+        return Ok((item_name, String::new(), png));
+    }
+
+    let item_name =
+        runtime.ocr_get_grid_icons_item_name(&item, &plan.capture_rule.item_name_ocr_roi)?;
+    action_reports.push(GetGridIconsRuntimeActionReport::executed(
+        GetGridIconsStepPhase::CaptureItem,
+        GetGridIconsStepAction::OcrItemName,
+        Some(item),
+        None,
+        item_name.clone().unwrap_or_default(),
+    ));
+
+    let star_suffix = if let Some(star_suffix_rule) = plan.capture_rule.star_suffix_rule.as_ref() {
+        let star_count = runtime.count_get_grid_icons_star_suffix(&item, star_suffix_rule)?;
+        let suffix = star_suffix_rule.glyph.repeat(star_count as usize);
+        action_reports.push(GetGridIconsRuntimeActionReport::executed(
+            GetGridIconsStepPhase::CaptureItem,
+            GetGridIconsStepAction::CountStarsWhenConfigured,
+            Some(item),
+            None,
+            suffix.clone(),
+        ));
+        suffix
+    } else {
+        String::new()
+    };
+
+    let png = runtime.capture_get_grid_icons_item_icon_png(&item)?;
+    Ok((item_name, star_suffix, png))
+}
+
+fn execute_get_grid_icons_cleanup<R>(
+    runtime: &mut R,
+    state: &mut GetGridIconsExecutorState,
+    action_reports: &mut Vec<GetGridIconsRuntimeActionReport>,
+) -> Result<()>
+where
+    R: GetGridIconsRuntime,
+{
+    runtime.clear_get_grid_icons_vision_overlay()?;
+    state.cleanup_completed = true;
+    action_reports.push(GetGridIconsRuntimeActionReport::executed(
+        GetGridIconsStepPhase::Cleanup,
+        GetGridIconsStepAction::ClearVisionOverlay,
+        None,
+        None,
+        "vision overlay cleared",
+    ));
+    Ok(())
+}
+
 pub fn plan_get_grid_icons(
     config: GetGridIconsExecutionConfig,
 ) -> Result<GetGridIconsExecutionPlan> {
@@ -252,7 +820,7 @@ pub fn plan_get_grid_icons(
         task_key: GET_GRID_ICONS_TASK_KEY.to_string(),
         display_name: GET_GRID_ICONS_DISPLAY_NAME.to_string(),
         port_state: TaskPortState::RuntimeScaffolded,
-        executor_ready: false,
+        executor_ready: true,
         capture_size: config.capture_size,
         config_rule: GetGridIconsConfigRule {
             grid_name_raw: config.get_grid_icons_config.grid_name.clone(),
@@ -280,14 +848,11 @@ pub fn plan_get_grid_icons(
         model_accuracy_rule: model_accuracy_rule(),
         steps: get_grid_icons_steps(&grid_screen_name, config.get_grid_icons_config.star_as_suffix),
         pending_native: vec![
-            "TaskRunner/ISoloTask cancellation lifecycle".to_string(),
-            "ReturnMainUiTask and AutoArtifactSalvageTask.OpenInventory input execution".to_string(),
-            "GameCaptureRegion live capture and ImageRegion crop/click behavior".to_string(),
-            "OpenCV GridScreen/ArtifactSetFilterScreen contour detection, GridCell clustering, and phase-correlation scrolling".to_string(),
-            "Paddle OCR for item names and artifact-set flower names".to_string(),
-            "SendInput mouse clicks, wheel scrolling, and inventory hotkey dispatch".to_string(),
-            "PNG filesystem writes on background threads and overlay clearing".to_string(),
-            "Optional GridIconsAccuracyTestTask ONNX/prototype inference".to_string(),
+            "desktop live adapters are not wired yet for TaskRunner/ISoloTask cancellation lifecycle".to_string(),
+            "desktop live adapters are not wired yet for ReturnMainUiTask, inventory tab opening, manual-open prompts, and SendInput mouse/keyboard dispatch".to_string(),
+            "desktop live adapters are not wired yet for GameCaptureRegion capture, ImageRegion crop/click behavior, OpenCV GridScreen/ArtifactSetFilterScreen contour enumeration, GridCell clustering, and phase-correlation scrolling".to_string(),
+            "desktop live adapters are not wired yet for Paddle OCR item names, artifact-set flower names, optional star contour suffix detection, PNG filesystem writes, and overlay cleanup".to_string(),
+            "optional GridIconsAccuracyTestTask ONNX/prototype inference live adapter remains pending".to_string(),
         ],
     })
 }
@@ -654,4 +1219,328 @@ fn u64_member<const N: usize>(value: &Value, names: [&str; N]) -> Option<u64> {
         .iter()
         .find_map(|name| value.get(*name))
         .and_then(Value::as_u64)
+}
+
+#[cfg(test)]
+mod get_grid_icons_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn get_grid_icons_executor_skips_scan_when_max_is_zero() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "maxNumToGet": 0
+            }),
+        )))
+        .unwrap();
+        let mut runtime = FakeGetGridIconsRuntime::with_items(vec![grid_item(0)]);
+
+        let report = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(runtime.create_output_dir_calls, 1);
+        assert_eq!(runtime.return_main_ui_calls, 0);
+        assert_eq!(runtime.open_inventory_tab_calls, 0);
+        assert_eq!(runtime.enumerate_calls, 0);
+        assert_eq!(runtime.save_calls, 0);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(report.state.max_num_reached);
+        assert!(report.state.grid_items.is_empty());
+        assert_eq!(
+            report.state.skipped_icons[0].reason,
+            GetGridIconsSkipReason::MaxNumToGetZero
+        );
+        assert!(report.action_reports.iter().any(|report| {
+            report.action == GetGridIconsStepAction::EnumerateGridItems
+                && report.status == GetGridIconsRuntimeActionStatus::Skipped
+        }));
+    }
+
+    #[test]
+    fn get_grid_icons_executor_scans_after_manual_open_branch() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "ArtifactSalvage",
+                "maxNumToGet": 2
+            }),
+        )))
+        .unwrap();
+        let mut runtime = FakeGetGridIconsRuntime::with_items(vec![grid_item(0)])
+            .with_names(vec![Some("ManualItem".to_string())]);
+
+        let report = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(runtime.manual_open_calls, 1);
+        assert_eq!(runtime.return_main_ui_calls, 0);
+        assert_eq!(runtime.open_inventory_tab_calls, 0);
+        assert_eq!(runtime.enumerate_calls, 1);
+        assert_eq!(runtime.click_calls, 1);
+        assert_eq!(runtime.save_calls, 1);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert_eq!(report.state.manual_open_completed, Some(true));
+        assert_eq!(report.state.saved_icons.len(), 1);
+        assert_eq!(report.state.saved_icons[0].file_name, "ManualItem.png");
+    }
+
+    #[test]
+    fn get_grid_icons_executor_auto_opens_inventory_saves_unique_pngs_and_truncates_at_max() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "starAsSuffix": true,
+                "maxNumToGet": 2
+            }),
+        )))
+        .unwrap();
+        let mut runtime = FakeGetGridIconsRuntime::with_items(vec![
+            grid_item(0),
+            grid_item(1),
+            grid_item(2),
+            grid_item(3),
+        ])
+        .with_names(vec![
+            Some("Sword".to_string()),
+            Some("Sword".to_string()),
+            Some("Bow".to_string()),
+            Some("Polearm".to_string()),
+        ])
+        .with_star_counts(vec![1, 1, 0, 0]);
+
+        let report = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(runtime.return_main_ui_calls, 1);
+        assert_eq!(runtime.open_inventory_tab_calls, 1);
+        assert_eq!(runtime.manual_open_calls, 0);
+        assert_eq!(runtime.enumerate_calls, 1);
+        assert_eq!(runtime.click_calls, 3);
+        assert_eq!(runtime.star_suffix_calls, 3);
+        assert_eq!(runtime.save_calls, 2);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert_eq!(
+            runtime.saved_file_names,
+            vec!["Sword★.png".to_string(), "Bow.png".to_string()]
+        );
+        assert_eq!(report.state.saved_icons.len(), 2);
+        assert_eq!(report.state.saved_icons[0].star_suffix, "★");
+        assert!(report.state.max_num_reached);
+        assert!(report.state.skipped_icons.iter().any(|skipped| {
+            skipped.reason == GetGridIconsSkipReason::DuplicateFileName
+                && skipped.file_name.as_deref() == Some("Sword★.png")
+        }));
+        assert!(report.state.skipped_icons.iter().any(|skipped| {
+            skipped.reason == GetGridIconsSkipReason::MaxNumToGetReached
+                && skipped.item == Some(grid_item(3))
+        }));
+    }
+
+    #[test]
+    fn get_grid_icons_executor_runs_cleanup_when_scan_fails() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::default()).unwrap();
+        let mut runtime = FakeGetGridIconsRuntime::with_items(vec![grid_item(0)]);
+        runtime.fail_enumerate = true;
+
+        let error = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap_err();
+
+        assert!(
+            matches!(error, TaskError::CommonJobExecution(message) if message == "enumerate failed")
+        );
+        assert_eq!(runtime.create_output_dir_calls, 1);
+        assert_eq!(runtime.enumerate_calls, 1);
+        assert_eq!(runtime.cleanup_calls, 1);
+    }
+
+    #[derive(Debug, Default)]
+    struct FakeGetGridIconsRuntime {
+        output_dir: PathBuf,
+        grid_items: Vec<GetGridIconsGridItem>,
+        names: Vec<Option<String>>,
+        star_counts: Vec<u8>,
+        saved_file_names: Vec<String>,
+        create_output_dir_calls: u32,
+        return_main_ui_calls: u32,
+        open_inventory_tab_calls: u32,
+        manual_open_calls: u32,
+        enumerate_calls: u32,
+        click_calls: u32,
+        item_name_ocr_calls: u32,
+        star_suffix_calls: u32,
+        capture_icon_calls: u32,
+        save_calls: u32,
+        cleanup_calls: u32,
+        fail_enumerate: bool,
+    }
+
+    impl FakeGetGridIconsRuntime {
+        fn with_items(grid_items: Vec<GetGridIconsGridItem>) -> Self {
+            Self {
+                output_dir: PathBuf::from("target/get-grid-icons-test"),
+                grid_items,
+                ..Self::default()
+            }
+        }
+
+        fn with_names(mut self, names: Vec<Option<String>>) -> Self {
+            self.names = names;
+            self
+        }
+
+        fn with_star_counts(mut self, star_counts: Vec<u8>) -> Self {
+            self.star_counts = star_counts;
+            self
+        }
+
+        fn name_for(&self, item: &GetGridIconsGridItem) -> Option<String> {
+            self.names
+                .get(item.item_index as usize)
+                .cloned()
+                .unwrap_or_else(|| Some(format!("Item{}", item.item_index)))
+        }
+
+        fn star_count_for(&self, item: &GetGridIconsGridItem) -> u8 {
+            self.star_counts
+                .get(item.item_index as usize)
+                .copied()
+                .unwrap_or_default()
+        }
+    }
+
+    impl GetGridIconsRuntime for FakeGetGridIconsRuntime {
+        fn create_get_grid_icons_output_dir(
+            &mut self,
+            _output_rule: &GetGridIconsOutputRule,
+            _grid_screen_name: &GridScreenName,
+        ) -> Result<PathBuf> {
+            self.create_output_dir_calls += 1;
+            Ok(self.output_dir.clone())
+        }
+
+        fn return_get_grid_icons_main_ui(
+            &mut self,
+            _grid_screen_name: &GridScreenName,
+        ) -> Result<()> {
+            self.return_main_ui_calls += 1;
+            Ok(())
+        }
+
+        fn open_get_grid_icons_inventory_tab(
+            &mut self,
+            _grid_screen_name: &GridScreenName,
+            _inventory_tab_assets: &InventoryTabAssetPair,
+        ) -> Result<()> {
+            self.open_inventory_tab_calls += 1;
+            Ok(())
+        }
+
+        fn require_get_grid_icons_manual_open(
+            &mut self,
+            _grid_screen_name: &GridScreenName,
+            _message: &str,
+        ) -> Result<()> {
+            self.manual_open_calls += 1;
+            Ok(())
+        }
+
+        fn enumerate_get_grid_icons_grid_items(
+            &mut self,
+            _grid_rule: &GetGridIconsGridRule,
+            _artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
+        ) -> Result<Vec<GetGridIconsGridItem>> {
+            self.enumerate_calls += 1;
+            if self.fail_enumerate {
+                return Err(TaskError::CommonJobExecution(
+                    "enumerate failed".to_string(),
+                ));
+            }
+            Ok(self.grid_items.clone())
+        }
+
+        fn click_get_grid_icons_item(
+            &mut self,
+            _item: &GetGridIconsGridItem,
+            _wait_after_click_ms: u64,
+        ) -> Result<()> {
+            self.click_calls += 1;
+            Ok(())
+        }
+
+        fn ocr_get_grid_icons_item_name(
+            &mut self,
+            item: &GetGridIconsGridItem,
+            _roi: &GetGridIconsWidthRelativeRect,
+        ) -> Result<Option<String>> {
+            self.item_name_ocr_calls += 1;
+            Ok(self.name_for(item))
+        }
+
+        fn count_get_grid_icons_star_suffix(
+            &mut self,
+            item: &GetGridIconsGridItem,
+            _rule: &GetGridIconsStarSuffixRule,
+        ) -> Result<u8> {
+            self.star_suffix_calls += 1;
+            Ok(self.star_count_for(item))
+        }
+
+        fn capture_get_grid_icons_item_icon_png(
+            &mut self,
+            item: &GetGridIconsGridItem,
+        ) -> Result<GetGridIconsPngData> {
+            self.capture_icon_calls += 1;
+            Ok(GetGridIconsPngData {
+                bytes: vec![item.item_index as u8],
+            })
+        }
+
+        fn ocr_get_grid_icons_artifact_set_flower_name(
+            &mut self,
+            item: &GetGridIconsGridItem,
+            _rule: &GetGridIconsArtifactSetFilterRule,
+        ) -> Result<Option<String>> {
+            self.item_name_ocr_calls += 1;
+            Ok(self.name_for(item))
+        }
+
+        fn crop_get_grid_icons_artifact_set_icon_png(
+            &mut self,
+            item: &GetGridIconsGridItem,
+            _rule: &GetGridIconsArtifactSetFilterRule,
+        ) -> Result<GetGridIconsPngData> {
+            self.capture_icon_calls += 1;
+            Ok(GetGridIconsPngData {
+                bytes: vec![item.item_index as u8, 1],
+            })
+        }
+
+        fn save_get_grid_icons_png(
+            &mut self,
+            _output_dir: &Path,
+            file_name: &str,
+            _png: &GetGridIconsPngData,
+        ) -> Result<()> {
+            self.save_calls += 1;
+            self.saved_file_names.push(file_name.to_string());
+            Ok(())
+        }
+
+        fn clear_get_grid_icons_vision_overlay(&mut self) -> Result<()> {
+            self.cleanup_calls += 1;
+            Ok(())
+        }
+    }
+
+    fn grid_item(item_index: u32) -> GetGridIconsGridItem {
+        GetGridIconsGridItem {
+            page_index: 0,
+            item_index,
+            rect: Rect {
+                x: 10 + item_index as i32,
+                y: 20,
+                width: 30,
+                height: 40,
+            },
+        }
+    }
 }

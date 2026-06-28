@@ -6,9 +6,9 @@ use bgi_script::{
     ScriptProjectError, ScriptProjectType,
 };
 use bgi_task::{
-    evaluate_task_invocation_plans, execute_task_invocation_plans, DispatcherRuntime,
-    ShellExecutionResult, TaskInvocationExecutionMode, TaskInvocationExecutionResult,
-    TaskInvocationPlan,
+    evaluate_task_invocation_plans_with_context, execute_task_invocation_plans_with_context,
+    DispatcherRuntime, ShellExecutionResult, TaskInvocationExecutionMode,
+    TaskInvocationExecutionResult, TaskInvocationPlan, TaskInvocationPlanningContext,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,22 +86,40 @@ impl JavaScriptTaskExecution {
     pub(crate) fn evaluate(
         invocations: &JavaScriptTaskInvocations,
         mode: TaskInvocationExecutionMode,
+        context: &TaskInvocationPlanningContext,
     ) -> Self {
         Self {
             mode,
-            dispatcher: evaluate_task_invocation_plans(invocations.dispatcher.clone(), mode),
-            genshin: evaluate_task_invocation_plans(invocations.genshin.clone(), mode),
+            dispatcher: evaluate_task_invocation_plans_with_context(
+                invocations.dispatcher.clone(),
+                mode,
+                context,
+            ),
+            genshin: evaluate_task_invocation_plans_with_context(
+                invocations.genshin.clone(),
+                mode,
+                context,
+            ),
         }
     }
 
     pub(crate) fn execute_ready(
         invocations: &JavaScriptTaskInvocations,
         dispatcher: &mut DispatcherRuntime,
+        context: &TaskInvocationPlanningContext,
     ) -> Self {
         Self {
             mode: TaskInvocationExecutionMode::ExecuteReady,
-            dispatcher: execute_task_invocation_plans(dispatcher, invocations.dispatcher.clone()),
-            genshin: execute_task_invocation_plans(dispatcher, invocations.genshin.clone()),
+            dispatcher: execute_task_invocation_plans_with_context(
+                dispatcher,
+                invocations.dispatcher.clone(),
+                context,
+            ),
+            genshin: execute_task_invocation_plans_with_context(
+                dispatcher,
+                invocations.genshin.clone(),
+                context,
+            ),
         }
     }
 
@@ -173,6 +191,7 @@ pub struct ScriptGroupExecutionRoots {
     pub http_dispatch_mode: HttpDispatchMode,
     pub notification_dispatch_mode: NotificationDispatchMode,
     pub task_invocation_mode: TaskInvocationExecutionMode,
+    pub task_invocation_planning_context: TaskInvocationPlanningContext,
     pub app_version: Option<String>,
 }
 
@@ -191,12 +210,19 @@ impl ScriptGroupExecutionRoots {
             http_dispatch_mode: HttpDispatchMode::Reqwest,
             notification_dispatch_mode: NotificationDispatchMode::Sink,
             task_invocation_mode: TaskInvocationExecutionMode::PlanOnly,
+            task_invocation_planning_context: TaskInvocationPlanningContext::with_working_directory(
+                app_root,
+            ),
             app_version: None,
         }
     }
 
     pub(crate) fn host_roots(&self) -> ScriptHostExecutionRoots {
         ScriptHostExecutionRoots::new(self.strategy_root.clone(), self.pathing_script_root.clone())
+    }
+
+    pub(crate) fn task_invocation_planning_context(&self) -> &TaskInvocationPlanningContext {
+        &self.task_invocation_planning_context
     }
 }
 

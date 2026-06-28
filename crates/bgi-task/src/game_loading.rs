@@ -596,7 +596,7 @@ pub fn parse_game_loading_config_ini_channel(config_ini: &str) -> Option<String>
             continue;
         }
 
-        let channel = value.trim().split_whitespace().next().unwrap_or_default();
+        let channel = value.split_whitespace().next().unwrap_or_default();
         if channel.is_empty() {
             return None;
         }

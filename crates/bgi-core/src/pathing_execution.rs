@@ -134,7 +134,7 @@ pub struct PathingWaypointPlan {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum PathingActionPlan {
-    LinneaMining(LinneaMiningActionPlan),
+    LinneaMining(Box<LinneaMiningActionPlan>),
     SetTime(PathingSetTimeActionPlan),
 }
 
@@ -415,8 +415,8 @@ impl PathingWaypointPlan {
 
 fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<PathingActionPlan> {
     if action.eq_ignore_ascii_case("linnea_mining") {
-        Some(PathingActionPlan::LinneaMining(plan_linnea_mining_action(
-            action_params,
+        Some(PathingActionPlan::LinneaMining(Box::new(
+            plan_linnea_mining_action(action_params),
         )))
     } else if action.eq_ignore_ascii_case("set_time") {
         Some(PathingActionPlan::SetTime(plan_set_time_action(

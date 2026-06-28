@@ -115,8 +115,9 @@ impl AutoFishingTaskExecutionConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingTaskConfigRule {
+    pub enabled: bool,
     pub whole_process_timeout_seconds: u64,
     pub throw_rod_timeout_seconds: u64,
     pub fishing_time_policy: AutoFishingTimePolicy,
@@ -126,7 +127,7 @@ pub struct AutoFishingTaskConfigRule {
     pub use_torch_probe_required: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingTimePolicy {
     All,
     Daytime,
@@ -135,7 +136,7 @@ pub enum AutoFishingTimePolicy {
     Unknown(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingStartupRule {
     pub task_name: String,
     pub disables_realtime_auto_fishing_config: bool,
@@ -146,7 +147,7 @@ pub struct AutoFishingStartupRule {
     pub always_quits_fishing_mode_at_end: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingBlackboardRule {
     pub tracks_abort: bool,
     pub tracks_selected_bait: bool,
@@ -162,7 +163,7 @@ pub struct AutoFishingBlackboardRule {
     pub reset_preserves_fishpond_and_throw_rod_flags: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingBehaviorTreeRule {
     pub root_sequence: String,
     pub whole_process_parallel_policy: String,
@@ -174,7 +175,7 @@ pub struct AutoFishingBehaviorTreeRule {
     pub ordered_stages: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTimePolicyRule {
     pub skips_time_setting_in_multiplayer: bool,
     pub dont_change_runs_once: bool,
@@ -183,7 +184,7 @@ pub struct AutoFishingTimePolicyRule {
     pub all_policy_hours: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTimePolicyRound {
     pub set_time_hour: Option<u8>,
     pub set_time_minute: Option<u8>,
@@ -193,7 +194,7 @@ pub struct AutoFishingTimePolicyRound {
     pub reason: AutoFishingTimePolicyRoundReason,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingTimePolicyRoundReason {
     MultiplayerSkipsTimeSetting,
     DontChange,
@@ -202,7 +203,7 @@ pub enum AutoFishingTimePolicyRoundReason {
     AllOrFallback,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingFindFishRule {
     pub move_viewpoint_down_dy: i32,
     pub move_viewpoint_down_sleep_ms: u64,
@@ -222,7 +223,7 @@ pub struct AutoFishingFindFishRule {
     pub initial_state_move_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingEnterModeRule {
     pub localized_fishing_text_default: String,
     pub overall_wait_seconds: u64,
@@ -235,7 +236,7 @@ pub struct AutoFishingEnterModeRule {
     pub marks_pitch_reset_after_confirm: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingFishModelRule {
     pub yolo_model_name: String,
     pub yolo_model: String,
@@ -246,7 +247,7 @@ pub struct AutoFishingFishModelRule {
     pub fish_types: Vec<AutoFishingBigFishTypeRule>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingRatioRect {
     pub x: f64,
     pub y: f64,
@@ -254,7 +255,7 @@ pub struct AutoFishingRatioRect {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingBigFishTypeRule {
     pub name: String,
     pub bait: AutoFishingBaitType,
@@ -262,7 +263,7 @@ pub struct AutoFishingBigFishTypeRule {
     pub net_index: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingBaitType {
     FruitPasteBait,
     RedrotBait,
@@ -277,7 +278,7 @@ pub enum AutoFishingBaitType {
     RefreshingLakkaBait,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingBaitRule {
     pub bait_types: Vec<AutoFishingBaitType>,
     pub selected_bait_tracked_in_blackboard: bool,
@@ -285,7 +286,7 @@ pub struct AutoFishingBaitRule {
     pub no_bait_fish_failures_before_switch: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingTargetFishCandidate {
     pub fish_type_name: String,
     pub bait: AutoFishingBaitType,
@@ -294,7 +295,7 @@ pub struct AutoFishingTargetFishCandidate {
     pub confidence: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingTargetFishSelectionObservation {
     pub selected_bait: Option<AutoFishingBaitType>,
     pub throw_rod_no_bait_fish_failures: Vec<AutoFishingBaitType>,
@@ -302,7 +303,7 @@ pub struct AutoFishingTargetFishSelectionObservation {
     pub fishes: Vec<AutoFishingTargetFishCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingTargetFishSelectionReport {
     pub ignored_baits: Vec<AutoFishingBaitType>,
     pub eligible_indices: Vec<usize>,
@@ -311,13 +312,13 @@ pub struct AutoFishingTargetFishSelectionReport {
     pub selected_distance: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingFishpondSnapshot {
     pub fishpond_rect: Option<Rect>,
     pub fishes: Vec<AutoFishingTargetFishCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingBlackboardState {
     pub abort: bool,
     pub selected_bait: Option<AutoFishingBaitType>,
@@ -350,7 +351,7 @@ impl Default for AutoFishingBlackboardState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingBlackboardResetReport {
     pub next_state: AutoFishingBlackboardState,
     pub cleared_abort_was: bool,
@@ -366,7 +367,7 @@ pub struct AutoFishingBlackboardResetReport {
     pub preserved_throw_rod_no_bait_fish: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingThrowRodInitializeReport {
     pub next_state: AutoFishingBlackboardState,
     pub cleared_stale_throw_rod_no_target: bool,
@@ -375,20 +376,20 @@ pub struct AutoFishingThrowRodInitializeReport {
     pub input_events: Vec<InputEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingBaitCount {
     pub bait: AutoFishingBaitType,
     pub count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingFishpondAvailabilityObservation {
     pub choose_bait_failures: Vec<AutoFishingBaitType>,
     pub throw_rod_no_bait_fish_failures: Vec<AutoFishingBaitType>,
     pub fishes: Vec<AutoFishingTargetFishCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingFishpondAvailabilityReport {
     pub choose_bait_ignored_baits: Vec<AutoFishingBaitType>,
     pub throw_rod_ignored_baits: Vec<AutoFishingBaitType>,
@@ -396,14 +397,14 @@ pub struct AutoFishingFishpondAvailabilityReport {
     pub has_available_fish: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingBaitSelectionObservation {
     pub current_selected_bait: Option<AutoFishingBaitType>,
     pub choose_bait_failures: Vec<AutoFishingBaitType>,
     pub fishes: Vec<AutoFishingTargetFishCandidate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingBaitSelectionReport {
     pub keeps_current_bait: bool,
     pub ignored_baits: Vec<AutoFishingBaitType>,
@@ -411,7 +412,7 @@ pub struct AutoFishingBaitSelectionReport {
     pub selected_bait: Option<AutoFishingBaitType>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingChooseBaitRule {
     pub max_failed_times_before_ignore: u64,
     pub opens_ui_with_right_click: bool,
@@ -435,7 +436,7 @@ pub struct AutoFishingChooseBaitRule {
     pub confirm_template_name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingThrowRodRule {
     pub hold_left_button_on_initialize: bool,
     pub sets_pitch_reset_on_initialize: bool,
@@ -461,7 +462,7 @@ pub struct AutoFishingThrowRodRule {
     pub sleep_after_adjustment_uses_distance: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingCheckResultRule {
     pub check_throw_rod_delay_seconds: u64,
     pub check_throw_rod_failure_template: String,
@@ -475,25 +476,25 @@ pub struct AutoFishingCheckResultRule {
     pub fishing_no_detection_finish_grace_seconds: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingBehaviorStatus {
     Running,
     Succeeded,
     Failed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTimeoutObservation {
     pub timeout_elapsed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTimeoutReport {
     pub status: AutoFishingBehaviorStatus,
     pub sets_abort: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTickAroundObservation {
     pub cancellation_requested: bool,
     pub genshin_active: bool,
@@ -502,14 +503,14 @@ pub struct AutoFishingTickAroundObservation {
     pub manual_gc_due: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingTickAroundStopReason {
     CancellationRequested,
     InactiveGameWindow,
     BehaviorTreeStopped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTickAroundReport {
     pub continue_loop: bool,
     pub should_tick_behavior_tree: bool,
@@ -519,26 +520,26 @@ pub struct AutoFishingTickAroundReport {
     pub updates_manual_gc_timestamp: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingMoveViewpointDownObservation {
     pub pitch_reset: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingMoveViewpointDownReport {
     pub next_pitch_reset: bool,
     pub status: AutoFishingBehaviorStatus,
     pub input_events: Vec<InputEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingInitialStateObservation {
     pub bait_button_present: bool,
     pub theta: f64,
     pub move_interval_elapsed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingInitialStateReport {
     pub next_theta: f64,
     pub status: AutoFishingBehaviorStatus,
@@ -546,13 +547,13 @@ pub struct AutoFishingInitialStateReport {
     pub mouse_move: Option<(i32, i32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTurnAroundObservation {
     pub capture_size: Size,
     pub fishpond_rect: Option<Rect>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingTurnAroundDecisionKind {
     NoFishSweep,
     FishpondTooFarRight,
@@ -560,7 +561,7 @@ pub enum AutoFishingTurnAroundDecisionKind {
     AlignCharacterAndCamera,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTurnAroundReport {
     pub status: AutoFishingBehaviorStatus,
     pub decision: AutoFishingTurnAroundDecisionKind,
@@ -568,14 +569,14 @@ pub struct AutoFishingTurnAroundReport {
     pub input_events: Vec<InputEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingEnterModeState {
     pub initialized: bool,
     pub selected_bait: Option<AutoFishingBaitType>,
     pub pitch_reset: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingEnterModeObservation {
     pub state: AutoFishingEnterModeState,
     pub press_f_cooldown_elapsed: bool,
@@ -588,7 +589,7 @@ pub struct AutoFishingEnterModeObservation {
     pub capture_size: Size,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingEnterModeDecisionKind {
     StartOverallWait,
     PressFishingKey,
@@ -598,7 +599,7 @@ pub enum AutoFishingEnterModeDecisionKind {
     FailedTimeout,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingEnterModeReport {
     pub next_state: AutoFishingEnterModeState,
     pub status: AutoFishingBehaviorStatus,
@@ -612,39 +613,39 @@ pub struct AutoFishingEnterModeReport {
     pub reschedule_click_white_confirm_after_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingBaitIconCropPlan {
     pub crop_rect: Rect,
     pub resize_size: Size,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingEnterModeError {
     InvalidCaptureSize,
     InvalidCropRect,
     NonFiniteComputation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingDelayedTemplateCheckObservation {
     pub delay_elapsed: bool,
     pub has_checked: bool,
     pub failure_template_present: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingDelayedTemplateCheckReport {
     pub next_has_checked: bool,
     pub status: AutoFishingBehaviorStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingFishBiteTimeoutObservation {
     pub timeout_elapsed: bool,
     pub left_button_clicked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingFishBiteTimeoutReport {
     pub next_left_button_clicked: bool,
     pub status: AutoFishingBehaviorStatus,
@@ -652,14 +653,14 @@ pub struct AutoFishingFishBiteTimeoutReport {
     pub reschedule_after_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingFishBiteMethod {
     WordBlock,
     LiftRodButton,
     Ocr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingFishBiteObservation {
     pub word_block_detected: bool,
     pub lift_rod_button_present: bool,
@@ -667,7 +668,7 @@ pub struct AutoFishingFishBiteObservation {
     pub localized_get_bite_text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingFishBiteReport {
     pub status: AutoFishingBehaviorStatus,
     pub method: Option<AutoFishingFishBiteMethod>,
@@ -675,20 +676,20 @@ pub struct AutoFishingFishBiteReport {
     pub input_events: Vec<InputEvent>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingPullBarState {
     pub previous_left_button_down: bool,
     pub no_detection_armed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingPullBarObservation {
     pub state: AutoFishingPullBarState,
     pub fish_bar_rects: Vec<Rect>,
     pub no_detection_grace_elapsed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingPullBarDecisionKind {
     PressLeftButton,
     ReleaseLeftButton,
@@ -701,7 +702,7 @@ pub enum AutoFishingPullBarDecisionKind {
     CompleteNoDetection,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingPullBarReport {
     pub next_state: AutoFishingPullBarState,
     pub status: AutoFishingBehaviorStatus,
@@ -712,14 +713,14 @@ pub struct AutoFishingPullBarReport {
     pub input_events: Vec<InputEvent>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingFishBoxAreaObservation {
     pub timeout_elapsed: bool,
     pub capture_size: Size,
     pub top_rects: Vec<Rect>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingFishBoxAreaDecisionKind {
     Timeout,
     WaitingForTwoRects,
@@ -728,7 +729,7 @@ pub enum AutoFishingFishBoxAreaDecisionKind {
     Detected,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingFishBoxAreaReport {
     pub status: AutoFishingBehaviorStatus,
     pub decision: AutoFishingFishBoxAreaDecisionKind,
@@ -738,14 +739,14 @@ pub struct AutoFishingFishBoxAreaReport {
     pub error_screenshot_recommended: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingQuitModeObservation {
     pub first_tick: bool,
     pub f_fishing_text_visible: bool,
     pub black_confirm_button_present: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingQuitModeDecisionKind {
     InitialWait,
     AlreadyExited,
@@ -753,7 +754,7 @@ pub enum AutoFishingQuitModeDecisionKind {
     PressEscape,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingQuitModeReport {
     pub status: AutoFishingBehaviorStatus,
     pub decision: AutoFishingQuitModeDecisionKind,
@@ -762,7 +763,7 @@ pub struct AutoFishingQuitModeReport {
     pub sleep_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingRodNetRule {
     pub model_input_size: Size,
     pub alpha: f64,
@@ -777,7 +778,7 @@ pub struct AutoFishingRodNetRule {
     pub bias_values: Vec<[f64; 3]>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingRodInput {
     pub rod_x1: f64,
     pub rod_x2: f64,
@@ -790,7 +791,7 @@ pub struct AutoFishingRodInput {
     pub fish_label: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingRodPreprocessResult {
     pub y0: f64,
     pub z0: f64,
@@ -800,7 +801,7 @@ pub struct AutoFishingRodPreprocessResult {
     pub h: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingRodScoreReport {
     pub preprocess: AutoFishingRodPreprocessResult,
     pub dist: f64,
@@ -808,14 +809,14 @@ pub struct AutoFishingRodScoreReport {
     pub scores: [f64; 3],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingRodState {
     Ready,
     TooClose,
     TooFar,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingRodNetError {
     InvalidFishLabel {
         fish_label: usize,
@@ -825,7 +826,7 @@ pub enum AutoFishingRodNetError {
     NonFiniteComputation,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingThrowRodClassification {
     Failed,
     Ready,
@@ -844,13 +845,13 @@ impl From<AutoFishingRodState> for AutoFishingThrowRodClassification {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingRandomMoveSample {
     pub random_x: u32,
     pub random_y: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingThrowRodGeometryObservation {
     pub capture_size: Size,
     pub rod_rect: Rect,
@@ -858,7 +859,7 @@ pub struct AutoFishingThrowRodGeometryObservation {
     pub fish_label: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingThrowRodGeometryReport {
     pub scale_size: Size,
     pub rod_input: AutoFishingRodInput,
@@ -867,7 +868,7 @@ pub struct AutoFishingThrowRodGeometryReport {
     pub distance: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingThrowRodAdjustmentObservation {
     pub rod_input: AutoFishingRodInput,
     pub classification: AutoFishingThrowRodClassification,
@@ -875,7 +876,7 @@ pub struct AutoFishingThrowRodAdjustmentObservation {
     pub random_sample: Option<AutoFishingRandomMoveSample>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingThrowRodAdjustmentKind {
     FailedRandomMove,
     ReleaseRod,
@@ -884,13 +885,13 @@ pub enum AutoFishingThrowRodAdjustmentKind {
     Noop,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingThrowRodAdjustmentStatus {
     Running,
     Succeeded,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoFishingThrowRodAdjustmentReport {
     pub kind: AutoFishingThrowRodAdjustmentKind,
     pub status: AutoFishingThrowRodAdjustmentStatus,
@@ -901,14 +902,14 @@ pub struct AutoFishingThrowRodAdjustmentReport {
     pub sleep_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingThrowRodAdjustmentError {
     MissingRandomSample,
     InvalidCaptureSize,
     NonFiniteComputation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingQuitRule {
     pub localized_fishing_text_default: String,
     pub succeeds_when_find_f_fishing_text: bool,
@@ -917,13 +918,13 @@ pub struct AutoFishingQuitRule {
     pub escape_retry_sleep_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutoFishingTaskStep {
     pub phase: AutoFishingTaskPhase,
     pub action: AutoFishingTaskAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingTaskPhase {
     Startup,
     TimePolicy,
@@ -936,7 +937,7 @@ pub enum AutoFishingTaskPhase {
     QuitFishingMode,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutoFishingTaskAction {
     DisableRealtimeAutoFish,
     ApplyFishingTimePolicy,
@@ -951,6 +952,439 @@ pub enum AutoFishingTaskAction {
     CheckRaiseHookResult,
     PullFishingBar,
     QuitFishingMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishingTaskExecutionStatus {
+    Completed,
+    Disabled,
+    StartupFailed,
+    Cancelled,
+    TimePolicyFailed,
+    FindFishFailed,
+    EnterModeFailed,
+    BaitSelectionFailed,
+    ThrowRodFailed,
+    BiteFailed,
+    PullBarFailed,
+    CleanupFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishingTaskRuntimeActionStatus {
+    Succeeded,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishingTaskRuntimeActionKind {
+    Startup,
+    ApplyTimePolicy,
+    MoveViewpointDown,
+    FindFishpond,
+    EnterFishingMode,
+    ChooseBait,
+    InitializeThrowRod,
+    ThrowRod,
+    CheckThrowRodResult,
+    WaitFishBite,
+    CheckRaiseHookResult,
+    GetFishBoxArea,
+    PullFishingBar,
+    QuitFishingMode,
+    Cleanup,
+    Skip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishingTaskSkipReason {
+    Disabled,
+    Cancelled,
+    NoTimePolicyRound,
+    NoFishpond,
+    NoAvailableFish,
+    NoBaitSelected,
+    RuntimeRequestedStop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutoFishingTaskRuntimeStage {
+    Startup,
+    TimePolicy,
+    FindFish,
+    EnterFishingMode,
+    ChooseBait,
+    ThrowRod,
+    BiteAndRaiseRod,
+    PullFishingBar,
+    QuitFishingMode,
+    Cleanup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskStartupOutcome {
+    pub completed: bool,
+    pub enabled: bool,
+    pub realtime_config_disabled: bool,
+    pub active_genshin_window: bool,
+    pub is_multiplayer: bool,
+    pub message: Option<String>,
+}
+
+impl AutoFishingTaskStartupOutcome {
+    pub fn completed() -> Self {
+        Self {
+            completed: true,
+            enabled: true,
+            realtime_config_disabled: true,
+            active_genshin_window: true,
+            is_multiplayer: false,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskTimePolicyOutcome {
+    pub completed: bool,
+    pub round: AutoFishingTimePolicyRound,
+    pub message: Option<String>,
+}
+
+impl AutoFishingTaskTimePolicyOutcome {
+    pub fn completed(round: AutoFishingTimePolicyRound) -> Self {
+        Self {
+            completed: true,
+            round,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskFindFishOutcome {
+    pub completed: bool,
+    pub fishpond: Option<AutoFishingFishpondSnapshot>,
+    pub move_viewpoint: AutoFishingMoveViewpointDownReport,
+    pub turn_around: Option<AutoFishingTurnAroundReport>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskEnterModeOutcome {
+    pub completed: bool,
+    pub selected_bait: Option<AutoFishingBaitType>,
+    pub pitch_reset: bool,
+    pub report: AutoFishingEnterModeReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskBaitOutcome {
+    pub completed: bool,
+    pub selected_bait: Option<AutoFishingBaitType>,
+    pub selection: AutoFishingBaitSelectionReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskThrowRodOutcome {
+    pub completed: bool,
+    pub target_fish: Option<AutoFishingTargetFishCandidate>,
+    pub selection: AutoFishingTargetFishSelectionReport,
+    pub initialize: AutoFishingThrowRodInitializeReport,
+    pub adjustment: AutoFishingThrowRodAdjustmentReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskDelayedCheckOutcome {
+    pub completed: bool,
+    pub report: AutoFishingDelayedTemplateCheckReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskBiteOutcome {
+    pub completed: bool,
+    pub bite: AutoFishingFishBiteReport,
+    pub timeout: AutoFishingFishBiteTimeoutReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskFishBoxOutcome {
+    pub completed: bool,
+    pub report: AutoFishingFishBoxAreaReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskPullBarOutcome {
+    pub completed: bool,
+    pub report: AutoFishingPullBarReport,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskQuitOutcome {
+    pub completed: bool,
+    pub report: AutoFishingQuitModeReport,
+    pub message: Option<String>,
+}
+
+impl AutoFishingTaskQuitOutcome {
+    pub fn completed() -> Self {
+        Self {
+            completed: true,
+            report: AutoFishingQuitModeReport {
+                status: AutoFishingBehaviorStatus::Succeeded,
+                decision: AutoFishingQuitModeDecisionKind::AlreadyExited,
+                clicks_black_confirm: false,
+                input_events: Vec::new(),
+                sleep_ms: None,
+            },
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskCleanupOutcome {
+    pub completed: bool,
+    pub realtime_config_restored: bool,
+    pub inputs_released: bool,
+    pub overlays_cleared: bool,
+    pub message: Option<String>,
+}
+
+impl AutoFishingTaskCleanupOutcome {
+    pub fn completed() -> Self {
+        Self {
+            completed: true,
+            realtime_config_restored: true,
+            inputs_released: true,
+            overlays_cleared: true,
+            message: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum AutoFishingTaskRuntimeActionOutcome {
+    Startup(AutoFishingTaskStartupOutcome),
+    TimePolicy(AutoFishingTaskTimePolicyOutcome),
+    FindFish(AutoFishingTaskFindFishOutcome),
+    EnterMode(AutoFishingTaskEnterModeOutcome),
+    Bait(AutoFishingTaskBaitOutcome),
+    ThrowRod(AutoFishingTaskThrowRodOutcome),
+    DelayedCheck(AutoFishingTaskDelayedCheckOutcome),
+    Bite(AutoFishingTaskBiteOutcome),
+    FishBox(AutoFishingTaskFishBoxOutcome),
+    PullBar(AutoFishingTaskPullBarOutcome),
+    Quit(AutoFishingTaskQuitOutcome),
+    Cleanup(AutoFishingTaskCleanupOutcome),
+    Skipped(AutoFishingTaskSkipReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskRuntimeActionReport {
+    pub phase: AutoFishingTaskPhase,
+    pub action_kind: AutoFishingTaskRuntimeActionKind,
+    pub status: AutoFishingTaskRuntimeActionStatus,
+    pub round_index: Option<u32>,
+    pub detail: String,
+    pub outcome: AutoFishingTaskRuntimeActionOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskSkippedStep {
+    pub action_kind: AutoFishingTaskRuntimeActionKind,
+    pub round_index: Option<u32>,
+    pub reason: AutoFishingTaskSkipReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskRuntimeRoundContext {
+    pub round_index: u32,
+    pub total_rounds: u32,
+    pub is_first_round: bool,
+    pub is_last_round: bool,
+    pub time_policy_round: AutoFishingTimePolicyRound,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskExecutorState {
+    pub startup_completed: bool,
+    pub enabled: bool,
+    pub active_genshin_window: bool,
+    pub is_multiplayer: bool,
+    pub current_round: u32,
+    pub target_rounds: u32,
+    pub time_policy_rounds: Vec<AutoFishingTimePolicyRound>,
+    pub applied_time_policy_rounds: u32,
+    pub blackboard: AutoFishingBlackboardState,
+    pub fishponds_found: u32,
+    pub enter_mode_completed: bool,
+    pub bait_selections: u32,
+    pub throw_rod_attempts: u32,
+    pub throw_rod_successes: u32,
+    pub bite_successes: u32,
+    pub fish_box_detections: u32,
+    pub pull_bar_successes: u32,
+    pub quit_completed: bool,
+    pub cleanup_completed: bool,
+    pub cancelled: bool,
+    pub last_skip_reason: Option<AutoFishingTaskSkipReason>,
+}
+
+impl AutoFishingTaskExecutorState {
+    fn new(plan: &AutoFishingTaskExecutionPlan) -> Self {
+        Self {
+            startup_completed: false,
+            enabled: plan.config_rule.enabled,
+            active_genshin_window: false,
+            is_multiplayer: false,
+            current_round: 0,
+            target_rounds: 0,
+            time_policy_rounds: Vec::new(),
+            applied_time_policy_rounds: 0,
+            blackboard: AutoFishingBlackboardState::default(),
+            fishponds_found: 0,
+            enter_mode_completed: false,
+            bait_selections: 0,
+            throw_rod_attempts: 0,
+            throw_rod_successes: 0,
+            bite_successes: 0,
+            fish_box_detections: 0,
+            pull_bar_successes: 0,
+            quit_completed: false,
+            cleanup_completed: false,
+            cancelled: false,
+            last_skip_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoFishingTaskExecutionReport {
+    pub task_key: String,
+    pub completed: bool,
+    pub status: AutoFishingTaskExecutionStatus,
+    pub state: AutoFishingTaskExecutorState,
+    pub executed_actions: Vec<AutoFishingTaskRuntimeActionReport>,
+    pub skipped_steps: Vec<AutoFishingTaskSkippedStep>,
+}
+
+pub trait AutoFishingTaskRuntime {
+    fn start_auto_fishing_task(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+    ) -> crate::Result<AutoFishingTaskStartupOutcome>;
+
+    fn apply_auto_fishing_time_policy(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+    ) -> crate::Result<AutoFishingTaskTimePolicyOutcome>;
+
+    fn find_auto_fishing_fishpond(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskFindFishOutcome>;
+
+    fn enter_auto_fishing_mode(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskEnterModeOutcome>;
+
+    fn choose_auto_fishing_bait(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskBaitOutcome>;
+
+    fn throw_auto_fishing_rod(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskThrowRodOutcome>;
+
+    fn check_auto_fishing_throw_rod_result(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskDelayedCheckOutcome>;
+
+    fn wait_auto_fishing_bite_and_raise_rod(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskBiteOutcome>;
+
+    fn check_auto_fishing_raise_hook_result(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskDelayedCheckOutcome>;
+
+    fn get_auto_fishing_fish_box_area(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskFishBoxOutcome>;
+
+    fn pull_auto_fishing_bar(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        context: &AutoFishingTaskRuntimeRoundContext,
+        blackboard: &AutoFishingBlackboardState,
+    ) -> crate::Result<AutoFishingTaskPullBarOutcome>;
+
+    fn quit_auto_fishing_mode(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        state: &AutoFishingTaskExecutorState,
+    ) -> crate::Result<AutoFishingTaskQuitOutcome>;
+
+    fn cleanup_auto_fishing_task(
+        &mut self,
+        plan: &AutoFishingTaskExecutionPlan,
+        state: &AutoFishingTaskExecutorState,
+    ) -> crate::Result<AutoFishingTaskCleanupOutcome>;
+
+    fn is_auto_fishing_task_cancelled(&mut self) -> bool {
+        false
+    }
 }
 
 pub fn plan_auto_fishing_task(
@@ -971,6 +1405,7 @@ pub fn plan_auto_fishing_task(
         display_name: "Auto Fishing Task".to_string(),
         capture_size: config.capture_size,
         config_rule: AutoFishingTaskConfigRule {
+            enabled: auto_config.enabled,
             whole_process_timeout_seconds,
             throw_rod_timeout_seconds,
             fishing_time_policy: fishing_time_policy(&policy_raw),
@@ -1208,18 +1643,606 @@ pub fn plan_auto_fishing_task(
             escape_retry_sleep_ms: 2_000,
         },
         steps: auto_fishing_task_steps(),
-        executor_ready: false,
+        executor_ready: true,
         pending_native: vec![
-            "live capture loop, cancellation/sleep/active-window checks, SetTimeTask execution, and GC execution; pure time-policy rounds and tick loop control decisions are ported".to_string(),
-            "BehaviourTree execution and mutable Blackboard orchestration; pure Blackboard reset/state contract is ported".to_string(),
-            "BgiFish YOLO model inference and Fishpond construction from detections; pure find-fish timeout, viewpoint, initial-state, and turn/alignment decisions are ported".to_string(),
-            "EnterFishingMode Bv observations, white-confirm click execution, and GridIcon initial bait inference; pure retry/timeout/crop/selected-bait/pitch-reset decisions are ported".to_string(),
-            "ChooseBait GridIcon recognition and bait UI interaction".to_string(),
-            "Torch/RodNet bridge for optional native parity; pure RodNet math, throw-rod initialization, and adjustment decisions are ported".to_string(),
-            "mouse/keyboard input dispatch for entering, throwing, raising, pulling, and quitting".to_string(),
-            "Paddle OCR, OpenCV fish-bar recognition/template execution, and DrawContent overlays"
+            "Rust AutoFishingTask now has an injectable executor boundary for startup, time-policy rounds, fishpond search, enter-mode, bait selection, throw-rod, bite/raise-hook, fish-box/pull-bar, quit, cancellation, and cleanup".to_string(),
+            "desktop live adapters for capture loop, cancellation-aware sleep, active-window checks, SetTimeTask execution, manual GC, mouse/keyboard dispatch, and realtime config restore remain pending wiring".to_string(),
+            "full-task live adapters for BgiFish YOLO fishpond construction, EnterFishingMode BV/template observations, white-confirm clicks, GridIcon bait inference/selection, Paddle OCR, OpenCV fish-bar recognition, template execution, and DrawContent overlays remain native-pending".to_string(),
+            "Torch/RodNet bridge for optional native parity remains pending; pure RodNet math, throw-rod initialization, and adjustment decisions are ported behind the Rust runtime boundary"
                 .to_string(),
         ],
+    }
+}
+
+pub fn execute_auto_fishing_task_plan<R>(
+    plan: &AutoFishingTaskExecutionPlan,
+    runtime: &mut R,
+) -> crate::Result<AutoFishingTaskExecutionReport>
+where
+    R: AutoFishingTaskRuntime,
+{
+    let mut state = AutoFishingTaskExecutorState::new(plan);
+    let mut executed_actions = Vec::new();
+    let mut skipped_steps = Vec::new();
+
+    let execution_result = execute_auto_fishing_task_plan_inner(
+        plan,
+        runtime,
+        &mut state,
+        &mut executed_actions,
+        &mut skipped_steps,
+    );
+    let status = match execution_result {
+        Ok(status) => status,
+        Err(error) => {
+            let cleanup_error =
+                execute_auto_fishing_task_cleanup(plan, runtime, &mut state, &mut executed_actions)
+                    .err();
+            return Err(cleanup_error.unwrap_or(error));
+        }
+    };
+
+    let cleanup_status =
+        execute_auto_fishing_task_cleanup(plan, runtime, &mut state, &mut executed_actions)?;
+    let status = if cleanup_status == AutoFishingTaskExecutionStatus::CleanupFailed {
+        AutoFishingTaskExecutionStatus::CleanupFailed
+    } else {
+        status
+    };
+
+    Ok(auto_fishing_task_report(
+        plan,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    ))
+}
+
+fn execute_auto_fishing_task_plan_inner<R>(
+    plan: &AutoFishingTaskExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoFishingTaskExecutorState,
+    executed_actions: &mut Vec<AutoFishingTaskRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoFishingTaskSkippedStep>,
+) -> crate::Result<AutoFishingTaskExecutionStatus>
+where
+    R: AutoFishingTaskRuntime,
+{
+    if !plan.config_rule.enabled {
+        state.enabled = false;
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::Disabled);
+        skipped_steps.push(auto_fishing_task_skipped_step(
+            AutoFishingTaskRuntimeActionKind::Startup,
+            None,
+            AutoFishingTaskSkipReason::Disabled,
+        ));
+        executed_actions.push(auto_fishing_task_action_report(
+            AutoFishingTaskPhase::Startup,
+            AutoFishingTaskRuntimeActionKind::Skip,
+            AutoFishingTaskRuntimeActionStatus::Skipped,
+            None,
+            "auto fishing task is disabled by config".to_string(),
+            AutoFishingTaskRuntimeActionOutcome::Skipped(AutoFishingTaskSkipReason::Disabled),
+        ));
+        return Ok(AutoFishingTaskExecutionStatus::Disabled);
+    }
+
+    let startup = runtime.start_auto_fishing_task(plan)?;
+    state.startup_completed = startup.completed;
+    state.enabled = startup.enabled;
+    state.active_genshin_window = startup.active_genshin_window;
+    state.is_multiplayer = startup.is_multiplayer;
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::Startup,
+        AutoFishingTaskRuntimeActionKind::Startup,
+        if startup.completed && startup.enabled && startup.active_genshin_window {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        None,
+        startup
+            .message
+            .clone()
+            .unwrap_or_else(|| "auto fishing startup boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::Startup(startup.clone()),
+    ));
+    if !startup.enabled {
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::Disabled);
+        return Ok(AutoFishingTaskExecutionStatus::Disabled);
+    }
+    if !startup.completed || !startup.active_genshin_window {
+        return Ok(AutoFishingTaskExecutionStatus::StartupFailed);
+    }
+    if runtime.is_auto_fishing_task_cancelled() {
+        state.cancelled = true;
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::Cancelled);
+        skipped_steps.push(auto_fishing_task_skipped_step(
+            AutoFishingTaskRuntimeActionKind::ApplyTimePolicy,
+            None,
+            AutoFishingTaskSkipReason::Cancelled,
+        ));
+        return Ok(AutoFishingTaskExecutionStatus::Cancelled);
+    }
+
+    let rounds = plan_auto_fishing_time_policy_rounds(
+        &plan.config_rule.fishing_time_policy,
+        state.is_multiplayer,
+        &plan.time_policy_rule,
+    );
+    state.target_rounds = rounds.len() as u32;
+    state.time_policy_rounds = rounds.clone();
+    if rounds.is_empty() {
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::NoTimePolicyRound);
+        skipped_steps.push(auto_fishing_task_skipped_step(
+            AutoFishingTaskRuntimeActionKind::ApplyTimePolicy,
+            None,
+            AutoFishingTaskSkipReason::NoTimePolicyRound,
+        ));
+        executed_actions.push(auto_fishing_task_action_report(
+            AutoFishingTaskPhase::TimePolicy,
+            AutoFishingTaskRuntimeActionKind::Skip,
+            AutoFishingTaskRuntimeActionStatus::Skipped,
+            None,
+            "time policy produced no fishing rounds".to_string(),
+            AutoFishingTaskRuntimeActionOutcome::Skipped(
+                AutoFishingTaskSkipReason::NoTimePolicyRound,
+            ),
+        ));
+        return Ok(AutoFishingTaskExecutionStatus::Completed);
+    }
+
+    for (round_index, round) in rounds.into_iter().enumerate() {
+        if runtime.is_auto_fishing_task_cancelled() {
+            state.cancelled = true;
+            state.last_skip_reason = Some(AutoFishingTaskSkipReason::Cancelled);
+            skipped_steps.push(auto_fishing_task_skipped_step(
+                AutoFishingTaskRuntimeActionKind::ApplyTimePolicy,
+                Some(round_index as u32),
+                AutoFishingTaskSkipReason::Cancelled,
+            ));
+            return Ok(AutoFishingTaskExecutionStatus::Cancelled);
+        }
+
+        let context = AutoFishingTaskRuntimeRoundContext {
+            round_index: round_index as u32,
+            total_rounds: state.target_rounds,
+            is_first_round: round_index == 0,
+            is_last_round: round_index as u32 + 1 == state.target_rounds,
+            time_policy_round: round,
+        };
+        state.current_round = context.round_index + 1;
+
+        if round.resets_blackboard_before_round {
+            state.blackboard =
+                reset_auto_fishing_blackboard_state(state.blackboard.clone()).next_state;
+        }
+
+        let time_policy = runtime.apply_auto_fishing_time_policy(plan, &context)?;
+        let time_policy_completed = time_policy.completed;
+        executed_actions.push(auto_fishing_task_action_report(
+            AutoFishingTaskPhase::TimePolicy,
+            AutoFishingTaskRuntimeActionKind::ApplyTimePolicy,
+            if time_policy_completed {
+                AutoFishingTaskRuntimeActionStatus::Succeeded
+            } else {
+                AutoFishingTaskRuntimeActionStatus::Failed
+            },
+            Some(context.round_index),
+            time_policy
+                .message
+                .clone()
+                .unwrap_or_else(|| "time policy boundary completed".to_string()),
+            AutoFishingTaskRuntimeActionOutcome::TimePolicy(time_policy),
+        ));
+        if !time_policy_completed {
+            return Ok(AutoFishingTaskExecutionStatus::TimePolicyFailed);
+        }
+        state.applied_time_policy_rounds += 1;
+
+        let round_status = execute_auto_fishing_task_round(
+            plan,
+            runtime,
+            state,
+            executed_actions,
+            skipped_steps,
+            &context,
+        )?;
+        if round_status != AutoFishingTaskExecutionStatus::Completed {
+            return Ok(round_status);
+        }
+    }
+
+    Ok(AutoFishingTaskExecutionStatus::Completed)
+}
+
+fn execute_auto_fishing_task_round<R>(
+    plan: &AutoFishingTaskExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoFishingTaskExecutorState,
+    executed_actions: &mut Vec<AutoFishingTaskRuntimeActionReport>,
+    skipped_steps: &mut Vec<AutoFishingTaskSkippedStep>,
+    context: &AutoFishingTaskRuntimeRoundContext,
+) -> crate::Result<AutoFishingTaskExecutionStatus>
+where
+    R: AutoFishingTaskRuntime,
+{
+    if let Some(status) = auto_fishing_task_cancel_status(runtime, state, skipped_steps, context) {
+        return Ok(status);
+    }
+
+    let find = runtime.find_auto_fishing_fishpond(plan, context, &state.blackboard)?;
+    let find_completed = find.completed && find.fishpond.is_some();
+    if let Some(fishpond) = find.fishpond.clone() {
+        state.blackboard.fishpond = Some(fishpond);
+        state.fishponds_found += 1;
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::FindFish,
+        AutoFishingTaskRuntimeActionKind::FindFishpond,
+        if find_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        find.message
+            .clone()
+            .unwrap_or_else(|| "fishpond search boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::FindFish(find),
+    ));
+    if !find_completed {
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::NoFishpond);
+        skipped_steps.push(auto_fishing_task_skipped_step(
+            AutoFishingTaskRuntimeActionKind::FindFishpond,
+            Some(context.round_index),
+            AutoFishingTaskSkipReason::NoFishpond,
+        ));
+        return Ok(AutoFishingTaskExecutionStatus::FindFishFailed);
+    }
+
+    if let Some(status) = auto_fishing_task_cancel_status(runtime, state, skipped_steps, context) {
+        return Ok(status);
+    }
+
+    let enter = runtime.enter_auto_fishing_mode(plan, context, &state.blackboard)?;
+    let enter_completed = enter.completed;
+    if enter_completed {
+        state.enter_mode_completed = true;
+        state.blackboard.selected_bait = enter.selected_bait;
+        state.blackboard.pitch_reset = enter.pitch_reset;
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::EnterFishingMode,
+        AutoFishingTaskRuntimeActionKind::EnterFishingMode,
+        if enter_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        enter
+            .message
+            .clone()
+            .unwrap_or_else(|| "enter fishing mode boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::EnterMode(enter),
+    ));
+    if !enter_completed {
+        return Ok(AutoFishingTaskExecutionStatus::EnterModeFailed);
+    }
+
+    if let Some(status) = auto_fishing_task_cancel_status(runtime, state, skipped_steps, context) {
+        return Ok(status);
+    }
+
+    let bait = runtime.choose_auto_fishing_bait(plan, context, &state.blackboard)?;
+    let bait_completed = bait.completed && bait.selected_bait.is_some();
+    if let Some(selected_bait) = bait.selected_bait {
+        state.blackboard.selected_bait = Some(selected_bait);
+        state.bait_selections += 1;
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::ChooseBait,
+        AutoFishingTaskRuntimeActionKind::ChooseBait,
+        if bait_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        bait.message
+            .clone()
+            .unwrap_or_else(|| "bait selection boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::Bait(bait),
+    ));
+    if !bait_completed {
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::NoBaitSelected);
+        skipped_steps.push(auto_fishing_task_skipped_step(
+            AutoFishingTaskRuntimeActionKind::ChooseBait,
+            Some(context.round_index),
+            AutoFishingTaskSkipReason::NoBaitSelected,
+        ));
+        return Ok(AutoFishingTaskExecutionStatus::BaitSelectionFailed);
+    }
+
+    if let Some(status) = auto_fishing_task_cancel_status(runtime, state, skipped_steps, context) {
+        return Ok(status);
+    }
+
+    let throw_rod = runtime.throw_auto_fishing_rod(plan, context, &state.blackboard)?;
+    state.throw_rod_attempts += 1;
+    let throw_rod_completed = throw_rod.completed && throw_rod.target_fish.is_some();
+    if throw_rod_completed {
+        state.throw_rod_successes += 1;
+        state.blackboard = throw_rod.initialize.next_state.clone();
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::ThrowRod,
+        AutoFishingTaskRuntimeActionKind::ThrowRod,
+        if throw_rod_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        throw_rod
+            .message
+            .clone()
+            .unwrap_or_else(|| "throw rod boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::ThrowRod(throw_rod),
+    ));
+    if !throw_rod_completed {
+        return Ok(AutoFishingTaskExecutionStatus::ThrowRodFailed);
+    }
+
+    let check_throw =
+        runtime.check_auto_fishing_throw_rod_result(plan, context, &state.blackboard)?;
+    let check_throw_completed = check_throw.completed;
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::ThrowRod,
+        AutoFishingTaskRuntimeActionKind::CheckThrowRodResult,
+        if check_throw_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        check_throw
+            .message
+            .clone()
+            .unwrap_or_else(|| "throw rod result boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::DelayedCheck(check_throw),
+    ));
+    if !check_throw_completed {
+        return Ok(AutoFishingTaskExecutionStatus::ThrowRodFailed);
+    }
+
+    if let Some(status) = auto_fishing_task_cancel_status(runtime, state, skipped_steps, context) {
+        return Ok(status);
+    }
+
+    let bite = runtime.wait_auto_fishing_bite_and_raise_rod(plan, context, &state.blackboard)?;
+    let bite_completed = bite.completed;
+    if bite_completed {
+        state.bite_successes += 1;
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::BiteAndRaiseRod,
+        AutoFishingTaskRuntimeActionKind::WaitFishBite,
+        if bite_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        bite.message
+            .clone()
+            .unwrap_or_else(|| "fish bite boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::Bite(bite),
+    ));
+    if !bite_completed {
+        return Ok(AutoFishingTaskExecutionStatus::BiteFailed);
+    }
+
+    let check_raise =
+        runtime.check_auto_fishing_raise_hook_result(plan, context, &state.blackboard)?;
+    let check_raise_completed = check_raise.completed;
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::BiteAndRaiseRod,
+        AutoFishingTaskRuntimeActionKind::CheckRaiseHookResult,
+        if check_raise_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        check_raise
+            .message
+            .clone()
+            .unwrap_or_else(|| "raise hook result boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::DelayedCheck(check_raise),
+    ));
+    if !check_raise_completed {
+        return Ok(AutoFishingTaskExecutionStatus::BiteFailed);
+    }
+
+    let fish_box = runtime.get_auto_fishing_fish_box_area(plan, context, &state.blackboard)?;
+    let fish_box_completed = fish_box.completed && fish_box.report.fish_box_rect.is_some();
+    if let Some(fish_box_rect) = fish_box.report.fish_box_rect {
+        state.blackboard.fish_box_rect = Some(fish_box_rect);
+        state.fish_box_detections += 1;
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::BiteAndRaiseRod,
+        AutoFishingTaskRuntimeActionKind::GetFishBoxArea,
+        if fish_box_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        fish_box
+            .message
+            .clone()
+            .unwrap_or_else(|| "fish box area boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::FishBox(fish_box),
+    ));
+    if !fish_box_completed {
+        return Ok(AutoFishingTaskExecutionStatus::BiteFailed);
+    }
+
+    if let Some(status) = auto_fishing_task_cancel_status(runtime, state, skipped_steps, context) {
+        return Ok(status);
+    }
+
+    let pull_bar = runtime.pull_auto_fishing_bar(plan, context, &state.blackboard)?;
+    let pull_bar_completed = pull_bar.completed;
+    if pull_bar_completed {
+        state.pull_bar_successes += 1;
+    }
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::PullFishingBar,
+        AutoFishingTaskRuntimeActionKind::PullFishingBar,
+        if pull_bar_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        Some(context.round_index),
+        pull_bar
+            .message
+            .clone()
+            .unwrap_or_else(|| "pull fishing bar boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::PullBar(pull_bar),
+    ));
+    if !pull_bar_completed {
+        return Ok(AutoFishingTaskExecutionStatus::PullBarFailed);
+    }
+
+    Ok(AutoFishingTaskExecutionStatus::Completed)
+}
+
+fn execute_auto_fishing_task_cleanup<R>(
+    plan: &AutoFishingTaskExecutionPlan,
+    runtime: &mut R,
+    state: &mut AutoFishingTaskExecutorState,
+    executed_actions: &mut Vec<AutoFishingTaskRuntimeActionReport>,
+) -> crate::Result<AutoFishingTaskExecutionStatus>
+where
+    R: AutoFishingTaskRuntime,
+{
+    let quit = runtime.quit_auto_fishing_mode(plan, state)?;
+    state.quit_completed = quit.completed;
+    let quit_completed = quit.completed;
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::QuitFishingMode,
+        AutoFishingTaskRuntimeActionKind::QuitFishingMode,
+        if quit_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        None,
+        quit.message
+            .clone()
+            .unwrap_or_else(|| "quit fishing mode boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::Quit(quit),
+    ));
+
+    let cleanup = runtime.cleanup_auto_fishing_task(plan, state)?;
+    state.cleanup_completed = cleanup.completed;
+    let cleanup_completed = cleanup.completed;
+    executed_actions.push(auto_fishing_task_action_report(
+        AutoFishingTaskPhase::QuitFishingMode,
+        AutoFishingTaskRuntimeActionKind::Cleanup,
+        if cleanup_completed {
+            AutoFishingTaskRuntimeActionStatus::Succeeded
+        } else {
+            AutoFishingTaskRuntimeActionStatus::Failed
+        },
+        None,
+        cleanup
+            .message
+            .clone()
+            .unwrap_or_else(|| "auto fishing cleanup boundary completed".to_string()),
+        AutoFishingTaskRuntimeActionOutcome::Cleanup(cleanup),
+    ));
+
+    if quit_completed && cleanup_completed {
+        Ok(AutoFishingTaskExecutionStatus::Completed)
+    } else {
+        Ok(AutoFishingTaskExecutionStatus::CleanupFailed)
+    }
+}
+
+fn auto_fishing_task_cancel_status<R>(
+    runtime: &mut R,
+    state: &mut AutoFishingTaskExecutorState,
+    skipped_steps: &mut Vec<AutoFishingTaskSkippedStep>,
+    context: &AutoFishingTaskRuntimeRoundContext,
+) -> Option<AutoFishingTaskExecutionStatus>
+where
+    R: AutoFishingTaskRuntime,
+{
+    if runtime.is_auto_fishing_task_cancelled() {
+        state.cancelled = true;
+        state.last_skip_reason = Some(AutoFishingTaskSkipReason::Cancelled);
+        skipped_steps.push(auto_fishing_task_skipped_step(
+            AutoFishingTaskRuntimeActionKind::Skip,
+            Some(context.round_index),
+            AutoFishingTaskSkipReason::Cancelled,
+        ));
+        Some(AutoFishingTaskExecutionStatus::Cancelled)
+    } else {
+        None
+    }
+}
+
+fn auto_fishing_task_report(
+    plan: &AutoFishingTaskExecutionPlan,
+    status: AutoFishingTaskExecutionStatus,
+    state: AutoFishingTaskExecutorState,
+    executed_actions: Vec<AutoFishingTaskRuntimeActionReport>,
+    skipped_steps: Vec<AutoFishingTaskSkippedStep>,
+) -> AutoFishingTaskExecutionReport {
+    AutoFishingTaskExecutionReport {
+        task_key: plan.task_key.clone(),
+        completed: status == AutoFishingTaskExecutionStatus::Completed,
+        status,
+        state,
+        executed_actions,
+        skipped_steps,
+    }
+}
+
+fn auto_fishing_task_action_report(
+    phase: AutoFishingTaskPhase,
+    action_kind: AutoFishingTaskRuntimeActionKind,
+    status: AutoFishingTaskRuntimeActionStatus,
+    round_index: Option<u32>,
+    detail: String,
+    outcome: AutoFishingTaskRuntimeActionOutcome,
+) -> AutoFishingTaskRuntimeActionReport {
+    AutoFishingTaskRuntimeActionReport {
+        phase,
+        action_kind,
+        status,
+        round_index,
+        detail,
+        outcome,
+    }
+}
+
+fn auto_fishing_task_skipped_step(
+    action_kind: AutoFishingTaskRuntimeActionKind,
+    round_index: Option<u32>,
+    reason: AutoFishingTaskSkipReason,
+) -> AutoFishingTaskSkippedStep {
+    AutoFishingTaskSkippedStep {
+        action_kind,
+        round_index,
+        reason,
     }
 }
 
@@ -2272,7 +3295,7 @@ pub fn reduce_auto_fishing_pull_bar(
     }
 
     if rects.len() > 3 {
-        rects.sort_by(|left, right| right.height.cmp(&left.height));
+        rects.sort_by_key(|rect| std::cmp::Reverse(rect.height));
         rects.truncate(3);
     }
 
@@ -2303,7 +3326,7 @@ pub fn reduce_auto_fishing_pull_bar(
     }
 
     if rects.len() == 3 {
-        rects.sort_by(|left, right| left.x.cmp(&right.x));
+        rects.sort_by_key(|rect| rect.x);
         let left = rects[0];
         let cursor = rects[1];
         let right = rects[2];
@@ -2887,4 +3910,578 @@ fn bool_member<const N: usize>(value: &Value, keys: [&str; N]) -> Option<bool> {
     keys.into_iter()
         .filter_map(|key| value.get(key))
         .find_map(Value::as_bool)
+}
+
+#[cfg(test)]
+mod auto_fishing_task_executor_tests {
+    use super::*;
+    use crate::TaskError;
+    use std::collections::VecDeque;
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum RuntimeCall {
+        Start,
+        CancelCheck(bool),
+        TimePolicy(u32, Option<u8>),
+        FindFish(u32),
+        EnterMode(u32),
+        ChooseBait(u32),
+        ThrowRod(u32),
+        CheckThrow(u32),
+        Bite(u32),
+        CheckRaise(u32),
+        FishBox(u32),
+        PullBar(u32),
+        Quit,
+        Cleanup,
+    }
+
+    struct FakeAutoFishingTaskRuntime {
+        calls: Vec<RuntimeCall>,
+        startup: AutoFishingTaskStartupOutcome,
+        cancel_checks: VecDeque<bool>,
+        fail_on: Option<AutoFishingTaskRuntimeActionKind>,
+        fishpond: Option<AutoFishingFishpondSnapshot>,
+        enter_selected_bait: Option<AutoFishingBaitType>,
+        cleanup: AutoFishingTaskCleanupOutcome,
+        quit: AutoFishingTaskQuitOutcome,
+        cleanup_count: u32,
+        quit_count: u32,
+        time_policy_hours: Vec<Option<u8>>,
+    }
+
+    impl Default for FakeAutoFishingTaskRuntime {
+        fn default() -> Self {
+            Self {
+                calls: Vec::new(),
+                startup: AutoFishingTaskStartupOutcome::completed(),
+                cancel_checks: VecDeque::new(),
+                fail_on: None,
+                fishpond: Some(test_fishpond()),
+                enter_selected_bait: None,
+                cleanup: AutoFishingTaskCleanupOutcome::completed(),
+                quit: AutoFishingTaskQuitOutcome::completed(),
+                cleanup_count: 0,
+                quit_count: 0,
+                time_policy_hours: Vec::new(),
+            }
+        }
+    }
+
+    impl FakeAutoFishingTaskRuntime {
+        fn fail_if(&self, kind: AutoFishingTaskRuntimeActionKind) -> crate::Result<()> {
+            if self.fail_on == Some(kind) {
+                Err(TaskError::CommonJobExecution(format!(
+                    "{kind:?} failed in test"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl AutoFishingTaskRuntime for FakeAutoFishingTaskRuntime {
+        fn start_auto_fishing_task(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+        ) -> crate::Result<AutoFishingTaskStartupOutcome> {
+            self.calls.push(RuntimeCall::Start);
+            self.fail_if(AutoFishingTaskRuntimeActionKind::Startup)?;
+            Ok(self.startup.clone())
+        }
+
+        fn apply_auto_fishing_time_policy(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+        ) -> crate::Result<AutoFishingTaskTimePolicyOutcome> {
+            self.calls.push(RuntimeCall::TimePolicy(
+                context.round_index,
+                context.time_policy_round.set_time_hour,
+            ));
+            self.time_policy_hours
+                .push(context.time_policy_round.set_time_hour);
+            self.fail_if(AutoFishingTaskRuntimeActionKind::ApplyTimePolicy)?;
+            Ok(AutoFishingTaskTimePolicyOutcome::completed(
+                context.time_policy_round,
+            ))
+        }
+
+        fn find_auto_fishing_fishpond(
+            &mut self,
+            plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskFindFishOutcome> {
+            self.calls.push(RuntimeCall::FindFish(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::FindFishpond)?;
+            let fishpond = self.fishpond.clone();
+            let move_viewpoint = reduce_auto_fishing_move_viewpoint_down(
+                AutoFishingMoveViewpointDownObservation {
+                    pitch_reset: blackboard.pitch_reset,
+                },
+                &plan.find_fish_rule,
+            );
+            let turn_around = Some(reduce_auto_fishing_turn_around(
+                AutoFishingTurnAroundObservation {
+                    capture_size: plan.capture_size,
+                    fishpond_rect: fishpond
+                        .as_ref()
+                        .and_then(|fishpond| fishpond.fishpond_rect),
+                },
+                &plan.find_fish_rule,
+            ));
+            Ok(AutoFishingTaskFindFishOutcome {
+                completed: fishpond.is_some(),
+                fishpond,
+                move_viewpoint,
+                turn_around,
+                message: None,
+            })
+        }
+
+        fn enter_auto_fishing_mode(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            _blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskEnterModeOutcome> {
+            self.calls.push(RuntimeCall::EnterMode(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::EnterFishingMode)?;
+            Ok(AutoFishingTaskEnterModeOutcome {
+                completed: true,
+                selected_bait: self.enter_selected_bait,
+                pitch_reset: true,
+                report: AutoFishingEnterModeReport {
+                    next_state: AutoFishingEnterModeState {
+                        initialized: true,
+                        selected_bait: self.enter_selected_bait,
+                        pitch_reset: true,
+                    },
+                    status: AutoFishingBehaviorStatus::Succeeded,
+                    decision: AutoFishingEnterModeDecisionKind::Entered,
+                    input_events: Vec::new(),
+                    clicks_white_confirm: false,
+                    white_confirm_pre_click_delay_ms: None,
+                    bait_icon_crop: None,
+                    starts_overall_timeout_ms: None,
+                    reschedule_press_f_after_ms: None,
+                    reschedule_click_white_confirm_after_ms: None,
+                },
+                message: None,
+            })
+        }
+
+        fn choose_auto_fishing_bait(
+            &mut self,
+            plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskBaitOutcome> {
+            self.calls
+                .push(RuntimeCall::ChooseBait(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::ChooseBait)?;
+            let fishes = blackboard
+                .fishpond
+                .as_ref()
+                .map(|fishpond| fishpond.fishes.clone())
+                .unwrap_or_default();
+            let selection = choose_auto_fishing_bait_for_fishpond(
+                AutoFishingBaitSelectionObservation {
+                    current_selected_bait: blackboard.selected_bait,
+                    choose_bait_failures: blackboard.choose_bait_failures.clone(),
+                    fishes,
+                },
+                &plan.choose_bait_rule,
+            );
+            Ok(AutoFishingTaskBaitOutcome {
+                completed: selection.selected_bait.is_some(),
+                selected_bait: selection.selected_bait,
+                selection,
+                message: None,
+            })
+        }
+
+        fn throw_auto_fishing_rod(
+            &mut self,
+            plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskThrowRodOutcome> {
+            self.calls.push(RuntimeCall::ThrowRod(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::ThrowRod)?;
+            let fishes = blackboard
+                .fishpond
+                .as_ref()
+                .map(|fishpond| fishpond.fishes.clone())
+                .unwrap_or_default();
+            let selection = select_auto_fishing_throw_rod_target_fish(
+                AutoFishingTargetFishSelectionObservation {
+                    selected_bait: blackboard.selected_bait,
+                    throw_rod_no_bait_fish_failures: blackboard
+                        .throw_rod_no_bait_fish_failures
+                        .clone(),
+                    target_rect: Rect {
+                        x: 940,
+                        y: 520,
+                        width: 80,
+                        height: 80,
+                    },
+                    fishes,
+                },
+                &plan.throw_rod_rule,
+            );
+            let target_fish = selection.selected_fish.clone();
+            let initialize =
+                initialize_auto_fishing_throw_rod_state(blackboard.clone(), &plan.throw_rod_rule);
+            let adjustment = plan_auto_fishing_throw_rod_adjustment(
+                AutoFishingThrowRodAdjustmentObservation {
+                    rod_input: AutoFishingRodInput {
+                        rod_x1: 100.0,
+                        rod_x2: 120.0,
+                        rod_y1: 200.0,
+                        rod_y2: 220.0,
+                        fish_x1: 110.0,
+                        fish_x2: 130.0,
+                        fish_y1: 210.0,
+                        fish_y2: 230.0,
+                        fish_label: 0,
+                    },
+                    classification: AutoFishingThrowRodClassification::Ready,
+                    capture_size: plan.capture_size,
+                    random_sample: None,
+                },
+                &plan.throw_rod_rule,
+            )
+            .map_err(|error| TaskError::VisionPlan(format!("{error:?}")))?;
+            Ok(AutoFishingTaskThrowRodOutcome {
+                completed: target_fish.is_some(),
+                target_fish,
+                selection,
+                initialize,
+                adjustment,
+                message: None,
+            })
+        }
+
+        fn check_auto_fishing_throw_rod_result(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            _blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskDelayedCheckOutcome> {
+            self.calls
+                .push(RuntimeCall::CheckThrow(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::CheckThrowRodResult)?;
+            Ok(delayed_check_outcome())
+        }
+
+        fn wait_auto_fishing_bite_and_raise_rod(
+            &mut self,
+            plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            _blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskBiteOutcome> {
+            self.calls.push(RuntimeCall::Bite(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::WaitFishBite)?;
+            Ok(AutoFishingTaskBiteOutcome {
+                completed: true,
+                bite: decide_auto_fishing_fish_bite(AutoFishingFishBiteObservation {
+                    word_block_detected: true,
+                    lift_rod_button_present: false,
+                    ocr_text: None,
+                    localized_get_bite_text: "bite".to_string(),
+                }),
+                timeout: reduce_auto_fishing_fish_bite_timeout(
+                    AutoFishingFishBiteTimeoutObservation {
+                        timeout_elapsed: false,
+                        left_button_clicked: false,
+                    },
+                    &plan.check_result_rule,
+                ),
+                message: None,
+            })
+        }
+
+        fn check_auto_fishing_raise_hook_result(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            _blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskDelayedCheckOutcome> {
+            self.calls
+                .push(RuntimeCall::CheckRaise(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::CheckRaiseHookResult)?;
+            Ok(delayed_check_outcome())
+        }
+
+        fn get_auto_fishing_fish_box_area(
+            &mut self,
+            plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            _blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskFishBoxOutcome> {
+            self.calls.push(RuntimeCall::FishBox(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::GetFishBoxArea)?;
+            let report = resolve_auto_fishing_fish_box_area(
+                AutoFishingFishBoxAreaObservation {
+                    timeout_elapsed: false,
+                    capture_size: plan.capture_size,
+                    top_rects: vec![rect(700, 100, 20, 40), rect(850, 100, 200, 38)],
+                },
+                &plan.check_result_rule,
+            );
+            Ok(AutoFishingTaskFishBoxOutcome {
+                completed: report.status == AutoFishingBehaviorStatus::Succeeded,
+                report,
+                message: None,
+            })
+        }
+
+        fn pull_auto_fishing_bar(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            context: &AutoFishingTaskRuntimeRoundContext,
+            _blackboard: &AutoFishingBlackboardState,
+        ) -> crate::Result<AutoFishingTaskPullBarOutcome> {
+            self.calls.push(RuntimeCall::PullBar(context.round_index));
+            self.fail_if(AutoFishingTaskRuntimeActionKind::PullFishingBar)?;
+            let report = reduce_auto_fishing_pull_bar(AutoFishingPullBarObservation {
+                state: AutoFishingPullBarState {
+                    previous_left_button_down: true,
+                    no_detection_armed: true,
+                },
+                fish_bar_rects: Vec::new(),
+                no_detection_grace_elapsed: true,
+            });
+            Ok(AutoFishingTaskPullBarOutcome {
+                completed: report.status == AutoFishingBehaviorStatus::Succeeded,
+                report,
+                message: None,
+            })
+        }
+
+        fn quit_auto_fishing_mode(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            _state: &AutoFishingTaskExecutorState,
+        ) -> crate::Result<AutoFishingTaskQuitOutcome> {
+            self.calls.push(RuntimeCall::Quit);
+            self.quit_count += 1;
+            self.fail_if(AutoFishingTaskRuntimeActionKind::QuitFishingMode)?;
+            Ok(self.quit.clone())
+        }
+
+        fn cleanup_auto_fishing_task(
+            &mut self,
+            _plan: &AutoFishingTaskExecutionPlan,
+            _state: &AutoFishingTaskExecutorState,
+        ) -> crate::Result<AutoFishingTaskCleanupOutcome> {
+            self.calls.push(RuntimeCall::Cleanup);
+            self.cleanup_count += 1;
+            self.fail_if(AutoFishingTaskRuntimeActionKind::Cleanup)?;
+            Ok(self.cleanup.clone())
+        }
+
+        fn is_auto_fishing_task_cancelled(&mut self) -> bool {
+            let cancelled = self.cancel_checks.pop_front().unwrap_or(false);
+            self.calls.push(RuntimeCall::CancelCheck(cancelled));
+            cancelled
+        }
+    }
+
+    #[test]
+    fn auto_fishing_task_plan_is_executor_ready_with_live_adapters_pending() {
+        let plan = enabled_plan_with_policy("DontChange");
+
+        assert!(plan.executor_ready);
+        assert!(plan.config_rule.enabled);
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("injectable executor boundary")));
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("desktop live adapters")));
+        assert!(plan
+            .pending_native
+            .iter()
+            .any(|item| item.contains("full-task live adapters")));
+    }
+
+    #[test]
+    fn execute_auto_fishing_task_one_round_success() {
+        let plan = enabled_plan_with_policy("DontChange");
+        let mut runtime = FakeAutoFishingTaskRuntime::default();
+
+        let report = execute_auto_fishing_task_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(report.status, AutoFishingTaskExecutionStatus::Completed);
+        assert_eq!(report.state.target_rounds, 1);
+        assert_eq!(report.state.current_round, 1);
+        assert_eq!(report.state.applied_time_policy_rounds, 1);
+        assert_eq!(report.state.fishponds_found, 1);
+        assert_eq!(report.state.bait_selections, 1);
+        assert_eq!(report.state.throw_rod_attempts, 1);
+        assert_eq!(report.state.throw_rod_successes, 1);
+        assert_eq!(report.state.bite_successes, 1);
+        assert_eq!(report.state.fish_box_detections, 1);
+        assert_eq!(report.state.pull_bar_successes, 1);
+        assert!(report.state.quit_completed);
+        assert!(report.state.cleanup_completed);
+        assert_eq!(runtime.quit_count, 1);
+        assert_eq!(runtime.cleanup_count, 1);
+        assert_eq!(runtime.time_policy_hours, vec![None]);
+        assert!(runtime.calls.contains(&RuntimeCall::FindFish(0)));
+        assert!(runtime.calls.contains(&RuntimeCall::ChooseBait(0)));
+        assert!(runtime.calls.contains(&RuntimeCall::ThrowRod(0)));
+        assert_eq!(runtime.calls.last(), Some(&RuntimeCall::Cleanup));
+    }
+
+    #[test]
+    fn execute_auto_fishing_task_disabled_still_runs_cleanup() {
+        let plan = plan_auto_fishing_task(AutoFishingTaskExecutionConfig::default());
+        let mut runtime = FakeAutoFishingTaskRuntime::default();
+
+        let report = execute_auto_fishing_task_plan(&plan, &mut runtime).unwrap();
+
+        assert!(!report.completed);
+        assert_eq!(report.status, AutoFishingTaskExecutionStatus::Disabled);
+        assert!(!report.state.enabled);
+        assert_eq!(
+            report.state.last_skip_reason,
+            Some(AutoFishingTaskSkipReason::Disabled)
+        );
+        assert!(!runtime.calls.contains(&RuntimeCall::Start));
+        assert_eq!(runtime.quit_count, 1);
+        assert_eq!(runtime.cleanup_count, 1);
+        assert_eq!(runtime.calls.last(), Some(&RuntimeCall::Cleanup));
+    }
+
+    #[test]
+    fn execute_auto_fishing_task_cancellation_still_runs_cleanup() {
+        let plan = enabled_plan_with_policy("DontChange");
+        let mut runtime = FakeAutoFishingTaskRuntime {
+            cancel_checks: VecDeque::from([true]),
+            ..FakeAutoFishingTaskRuntime::default()
+        };
+
+        let report = execute_auto_fishing_task_plan(&plan, &mut runtime).unwrap();
+
+        assert!(!report.completed);
+        assert_eq!(report.status, AutoFishingTaskExecutionStatus::Cancelled);
+        assert!(report.state.cancelled);
+        assert_eq!(
+            report.state.last_skip_reason,
+            Some(AutoFishingTaskSkipReason::Cancelled)
+        );
+        assert_eq!(runtime.cleanup_count, 1);
+        assert_eq!(runtime.calls.last(), Some(&RuntimeCall::Cleanup));
+        assert!(!runtime
+            .calls
+            .iter()
+            .any(|call| matches!(call, RuntimeCall::TimePolicy(_, _))));
+    }
+
+    #[test]
+    fn execute_auto_fishing_task_runtime_error_still_runs_cleanup() {
+        let plan = enabled_plan_with_policy("DontChange");
+        let mut runtime = FakeAutoFishingTaskRuntime {
+            fail_on: Some(AutoFishingTaskRuntimeActionKind::PullFishingBar),
+            ..FakeAutoFishingTaskRuntime::default()
+        };
+
+        let error = execute_auto_fishing_task_plan(&plan, &mut runtime).unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("PullFishingBar failed in test")
+        ));
+        assert_eq!(runtime.cleanup_count, 1);
+        assert!(runtime.calls.contains(&RuntimeCall::PullBar(0)));
+        assert_eq!(runtime.calls.last(), Some(&RuntimeCall::Cleanup));
+    }
+
+    #[test]
+    fn execute_auto_fishing_task_all_time_policy_runs_day_and_night_rounds() {
+        let plan = enabled_plan_with_policy("All");
+        let mut runtime = FakeAutoFishingTaskRuntime::default();
+
+        let report = execute_auto_fishing_task_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(report.status, AutoFishingTaskExecutionStatus::Completed);
+        assert_eq!(report.state.target_rounds, 2);
+        assert_eq!(report.state.applied_time_policy_rounds, 2);
+        assert_eq!(report.state.throw_rod_attempts, 2);
+        assert_eq!(report.state.pull_bar_successes, 2);
+        assert_eq!(runtime.time_policy_hours, vec![Some(7), Some(19)]);
+        assert!(runtime.calls.contains(&RuntimeCall::TimePolicy(0, Some(7))));
+        assert!(runtime
+            .calls
+            .contains(&RuntimeCall::TimePolicy(1, Some(19))));
+        assert_eq!(runtime.cleanup_count, 1);
+    }
+
+    fn enabled_plan_with_policy(policy: &str) -> AutoFishingTaskExecutionPlan {
+        let mut config = AutoFishingTaskExecutionConfig::default();
+        config.auto_fishing_config.enabled = true;
+        config.fishing_time_policy = Some(Value::String(policy.to_string()));
+        plan_auto_fishing_task(config)
+    }
+
+    fn delayed_check_outcome() -> AutoFishingTaskDelayedCheckOutcome {
+        AutoFishingTaskDelayedCheckOutcome {
+            completed: true,
+            report: reduce_auto_fishing_delayed_template_check(
+                AutoFishingDelayedTemplateCheckObservation {
+                    delay_elapsed: true,
+                    has_checked: false,
+                    failure_template_present: false,
+                },
+            ),
+            message: None,
+        }
+    }
+
+    fn test_fishpond() -> AutoFishingFishpondSnapshot {
+        AutoFishingFishpondSnapshot {
+            fishpond_rect: Some(rect(600, 300, 500, 260)),
+            fishes: vec![
+                AutoFishingTargetFishCandidate {
+                    fish_type_name: "medaka".to_string(),
+                    bait: AutoFishingBaitType::FruitPasteBait,
+                    net_index: 0,
+                    rect: rect(900, 420, 40, 30),
+                    confidence: 0.92,
+                },
+                AutoFishingTargetFishCandidate {
+                    fish_type_name: "large medaka".to_string(),
+                    bait: AutoFishingBaitType::FruitPasteBait,
+                    net_index: 1,
+                    rect: rect(960, 430, 42, 32),
+                    confidence: 0.89,
+                },
+                AutoFishingTargetFishCandidate {
+                    fish_type_name: "stickleback".to_string(),
+                    bait: AutoFishingBaitType::RedrotBait,
+                    net_index: 2,
+                    rect: rect(780, 450, 44, 34),
+                    confidence: 0.8,
+                },
+            ],
+        }
+    }
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
 }
