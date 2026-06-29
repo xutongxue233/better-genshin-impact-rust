@@ -448,6 +448,59 @@
     };
   };
 
+  type PathingMovementContract = {
+    contract_version: number;
+    movement_executor_ready: boolean;
+    native_pathing_completed: boolean;
+    pending_dependencies: string[];
+    segment_count: number;
+    waypoint_count: number;
+  };
+
+  type AutoPathingExecutionPlan = {
+    source: string;
+    route: string;
+    normalized_path: string;
+    summary: PathingSummary;
+    execution_plan: PathingExecution["execution_plan"] & {
+      movement_contract: PathingMovementContract;
+    };
+    dispatched: boolean;
+    completed: boolean;
+    notes: string;
+  };
+
+  type PathingBoundaryStatus = "reported" | "executed" | "skipped" | "unsupported" | "invalid";
+
+  type PathingActionBoundaryReport = {
+    action_code: string;
+    status: PathingBoundaryStatus;
+    message: string;
+    common_job_task_key: string | null;
+    common_job_plan: unknown | null;
+    common_job_live_execution: unknown | null;
+  };
+
+  type PathingPhaseBoundaryReport = {
+    phase: string;
+    status: PathingBoundaryStatus;
+    reason: string;
+    common_job_task_key: string | null;
+    common_job_plan: unknown | null;
+    common_job_live_execution: unknown | null;
+    navigation_seed: unknown | null;
+  };
+
+  type PathingWaypointBoundaryReport = {
+    global_index: number;
+    segment_index: number;
+    segment_waypoint_index: number;
+    waypoint_type: string;
+    action: string | null;
+    phase_reports: PathingPhaseBoundaryReport[];
+    action_report: PathingActionBoundaryReport | null;
+  };
+
   type GlobalInputExecution = {
     mode: string;
     dispatched: boolean;
@@ -490,10 +543,36 @@
 
   type DesktopAutoPathingTaskExecution = {
     task: string;
-    result: PathingExecution & {
-      route: string;
-      notes: string;
-    };
+    result: AutoPathingExecutionPlan;
+  };
+
+  type AutoPathingActionBoundaryReport = {
+    source: string;
+    route: string;
+    normalized_path: string;
+    completion_scope: string;
+    boundary_completed: boolean;
+    movement_attempted: boolean;
+    movement_completion_status: string;
+    native_pathing_completed: boolean;
+    movement_executor_ready: boolean;
+    movement_contract_version: number;
+    movement_pending_dependencies: string[];
+    movement_segment_count: number;
+    movement_waypoint_count: number;
+    executed_actions: number;
+    skipped_actions: number;
+    unsupported_actions: number;
+    invalid_actions: number;
+    unsupported_phases: number;
+    waypoint_reports: PathingWaypointBoundaryReport[];
+    notes: string;
+  };
+
+  type DesktopAutoPathingActionBoundaryExecution = {
+    task: string;
+    plan: AutoPathingExecutionPlan;
+    boundary: AutoPathingActionBoundaryReport;
   };
 
   type IndependentLiveTaskReport = {
@@ -1056,12 +1135,19 @@
     errors: string[];
   };
 
+  type IndependentTaskLiveExecution =
+    | {
+        AutoPathingActionBoundary: AutoPathingActionBoundaryReport;
+      }
+    | Record<string, unknown>;
+
   type TaskInvocationExecutionResult = {
     plan: TaskInvocationPlan;
     mode: string;
     status: string;
     message: string;
     executed: boolean;
+    independent_task_live_execution: IndependentTaskLiveExecution | null;
     live_completed: boolean | null;
   };
 
@@ -1237,6 +1323,7 @@
   let independentLiveTaskResult = $state<DesktopIndependentLiveTaskExecution | null>(null);
   let independentPathingBusy = $state(false);
   let independentPathingResult = $state<DesktopAutoPathingTaskExecution | null>(null);
+  let independentPathingBoundaryResult = $state<DesktopAutoPathingActionBoundaryExecution | null>(null);
   let independentFightBusy = $state(false);
   let independentFightPlaybackBusy = $state(false);
   let independentFightProbeBusy = $state(false);
@@ -2513,6 +2600,7 @@
     if (!selectedPathingScript) return;
     try {
       independentPathingBusy = true;
+      independentPathingBoundaryResult = null;
       shellStatus = "planning auto-pathing";
       independentPathingResult = await invoke<DesktopAutoPathingTaskExecution>("task_plan_auto_pathing", {
         payload: { route: selectedPathingScript },
@@ -2521,6 +2609,36 @@
       error = null;
     } catch (err) {
       shellStatus = "pathing plan failed";
+      error = String(err);
+    } finally {
+      independentPathingBusy = false;
+    }
+  }
+
+  async function runIndependentAutoPathingActionBoundary() {
+    if (!selectedPathingScript) {
+      await loadAvailablePathingScripts();
+    }
+    if (!selectedPathingScript) return;
+    try {
+      independentPathingBusy = true;
+      independentPathingBoundaryResult = null;
+      shellStatus = "running auto-pathing boundary";
+      independentPathingBoundaryResult = await invoke<DesktopAutoPathingActionBoundaryExecution>(
+        "task_execute_auto_pathing_action_boundary",
+        {
+          payload: { route: selectedPathingScript },
+        },
+      );
+      const boundary = independentPathingBoundaryResult.boundary;
+      independentPathingResult = {
+        task: independentPathingBoundaryResult.task,
+        result: independentPathingBoundaryResult.plan,
+      };
+      shellStatus = `pathing boundary ${boundary.movement_completion_status}`;
+      error = null;
+    } catch (err) {
+      shellStatus = "pathing boundary failed";
       error = String(err);
     } finally {
       independentPathingBusy = false;
@@ -2839,6 +2957,15 @@
     return dispatch as HtmlMaskDesktopDispatch;
   }
 
+  function maybeAutoPathingBoundaryFromInvocation(
+    result: TaskInvocationExecutionResult,
+  ): AutoPathingActionBoundaryReport | null {
+    const live = objectValue(result.independent_task_live_execution);
+    const boundary = objectValue(live?.AutoPathingActionBoundary);
+    if (!boundary || typeof boundary.completion_scope !== "string") return null;
+    return boundary as AutoPathingActionBoundaryReport;
+  }
+
   function keyMouseExecutionSummary(execution: KeyMouseExecution): ExecutionSummary {
     return {
       title: "KeyMouse",
@@ -2870,6 +2997,77 @@
         { label: "Actions", value: `${actions}` },
         { label: "Fights", value: `${execution.execution_plan.expected_fight_count}` },
         { label: "AutoPick", value: execution.execution_plan.autopick_realtime_trigger_enabled ? "on" : "off" },
+      ],
+    };
+  }
+
+  function autoPathingExecutionSummary(execution: AutoPathingExecutionPlan): ExecutionSummary {
+    const movement = execution.execution_plan.movement_contract;
+    return {
+      title: execution.summary.name || "AutoPathing",
+      meta: `${execution.source} · ${execution.dispatched ? "dispatched" : "prepared"}`,
+      details: [
+        { label: "Map", value: execution.execution_plan.map_name || execution.summary.map_name || "-" },
+        { label: "Segments", value: `${execution.execution_plan.segment_count}` },
+        { label: "Waypoints", value: `${execution.execution_plan.waypoint_count}` },
+        { label: "Actions", value: `${execution.execution_plan.action_count}` },
+        { label: "Fights", value: `${execution.execution_plan.expected_fight_count}` },
+        {
+          label: "Movement",
+          value: movement.movement_executor_ready ? "ready" : "native pending",
+        },
+        { label: "Pending", value: `${movement.pending_dependencies.length}` },
+        { label: "AutoPick", value: execution.execution_plan.autopick_realtime_trigger_enabled ? "on" : "off" },
+      ],
+    };
+  }
+
+  function pathingBoundaryStatusCounts(reports: Array<{ status: PathingBoundaryStatus }>) {
+    return reports.reduce(
+      (counts, report) => {
+        counts[report.status] += 1;
+        return counts;
+      },
+      {
+        reported: 0,
+        executed: 0,
+        skipped: 0,
+        unsupported: 0,
+        invalid: 0,
+      } satisfies Record<PathingBoundaryStatus, number>,
+    );
+  }
+
+  function autoPathingBoundarySummary(
+    execution: DesktopAutoPathingActionBoundaryExecution,
+  ): ExecutionSummary {
+    const boundary = execution.boundary;
+    const actionCounts = pathingBoundaryStatusCounts(
+      boundary.waypoint_reports.flatMap((waypoint) =>
+        waypoint.action_report ? [waypoint.action_report] : [],
+      ),
+    );
+    const phaseCounts = pathingBoundaryStatusCounts(
+      boundary.waypoint_reports.flatMap((waypoint) => waypoint.phase_reports),
+    );
+    return {
+      title: execution.task,
+      meta: `${boundary.completion_scope} · ${boundary.movement_completion_status}`,
+      details: [
+        { label: "Boundary", value: boundary.boundary_completed ? "done" : "pending" },
+        { label: "Movement", value: boundary.movement_attempted ? "attempted" : "not attempted" },
+        { label: "Native Done", value: boundary.native_pathing_completed ? "yes" : "no" },
+        { label: "Contract", value: `v${boundary.movement_contract_version}` },
+        { label: "Segments", value: `${boundary.movement_segment_count}` },
+        { label: "Waypoints", value: `${boundary.movement_waypoint_count}` },
+        { label: "Pending", value: `${boundary.movement_pending_dependencies.length}` },
+        { label: "Action Reported", value: `${actionCounts.reported}` },
+        { label: "Action Done", value: `${actionCounts.executed}` },
+        { label: "Action Skip", value: `${actionCounts.skipped}` },
+        { label: "Action Pending", value: `${actionCounts.unsupported}` },
+        { label: "Action Invalid", value: `${actionCounts.invalid}` },
+        { label: "Phase Reported", value: `${phaseCounts.reported}` },
+        { label: "Native Phases", value: `${boundary.unsupported_phases}` },
       ],
     };
   }
@@ -3164,21 +3362,32 @@
     const runtimeOnly = executionResults.filter((result) => result.status === "RuntimeOnly").length;
     const liveCompleted = executionResults.filter((result) => result.live_completed === true).length;
     const livePartial = executionResults.filter((result) => result.live_completed === false).length;
+    const autoPathingBoundary = executionResults
+      .map(maybeAutoPathingBoundaryFromInvocation)
+      .find((boundary): boundary is AutoPathingActionBoundaryReport => boundary !== null);
+    const details = [
+      { label: "Dispatcher", value: `${invocations.dispatcher.length}` },
+      { label: "Genshin", value: `${invocations.genshin.length}` },
+      { label: "Pending", value: `${nativePending}` },
+      { label: "Runtime", value: `${runtimeOnly}` },
+      { label: "Live Done", value: `${liveCompleted}` },
+      { label: "Live Partial", value: `${livePartial}` },
+      {
+        label: "First",
+        value: firstPlans.map((plan) => plan.task_key ?? plan.kind).join(", ") || "-",
+      },
+    ];
+    if (autoPathingBoundary) {
+      details.push(
+        { label: "Pathing Scope", value: autoPathingBoundary.completion_scope },
+        { label: "Pathing Move", value: autoPathingBoundary.movement_completion_status },
+        { label: "Pathing Done", value: autoPathingBoundary.native_pathing_completed ? "yes" : "no" },
+      );
+    }
     return {
       title: "Task Invocations",
       meta: `${execution?.mode ?? "PlanOnly"} · ${total} planned${invocations.errors.length > 0 ? ` · ${invocations.errors.length} errors` : ""}`,
-      details: [
-        { label: "Dispatcher", value: `${invocations.dispatcher.length}` },
-        { label: "Genshin", value: `${invocations.genshin.length}` },
-        { label: "Pending", value: `${nativePending}` },
-        { label: "Runtime", value: `${runtimeOnly}` },
-        { label: "Live Done", value: `${liveCompleted}` },
-        { label: "Live Partial", value: `${livePartial}` },
-        {
-          label: "First",
-          value: firstPlans.map((plan) => plan.task_key ?? plan.kind).join(", ") || "-",
-        },
-      ],
+      details,
     };
   }
 
@@ -5025,9 +5234,20 @@
             <Route size={17} />
             Plan
           </button>
+          <button
+            disabled={independentPathingBusy || !selectedPathingScript}
+            onclick={runIndependentAutoPathingActionBoundary}
+          >
+            <Play size={17} />
+            Boundary
+          </button>
+          <button disabled={!independentPathingBusy} title="Stop auto-pathing boundary" onclick={stopIndependentLiveTask}>
+            <Square size={17} />
+            Stop
+          </button>
         </div>
         {#if independentPathingResult}
-          {@const pathingSummary = pathingExecutionSummary(independentPathingResult.result)}
+          {@const pathingSummary = autoPathingExecutionSummary(independentPathingResult.result)}
           <div class="execution-summary">
             <div>
               <strong>{pathingSummary.title}</strong>
@@ -5035,6 +5255,23 @@
             </div>
             <dl>
               {#each pathingSummary.details as detail}
+                <div>
+                  <dt>{detail.label}</dt>
+                  <dd>{detail.value}</dd>
+                </div>
+              {/each}
+            </dl>
+          </div>
+        {/if}
+        {#if independentPathingBoundaryResult}
+          {@const boundarySummary = autoPathingBoundarySummary(independentPathingBoundaryResult)}
+          <div class="execution-summary">
+            <div>
+              <strong>{boundarySummary.title}</strong>
+              <em>{boundarySummary.meta}</em>
+            </div>
+            <dl>
+              {#each boundarySummary.details as detail}
                 <div>
                   <dt>{detail.label}</dt>
                   <dd>{detail.value}</dd>

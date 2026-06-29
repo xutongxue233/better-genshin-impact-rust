@@ -71,19 +71,20 @@ use bgi_task::{
     execute_auto_track_plan, execute_auto_wood_plan, execute_blessing_of_the_welkin_moon_live,
     execute_check_rewards_plan, execute_choose_talk_option_plan,
     execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
-    execute_claim_mail_rewards_live, execute_go_to_crafting_bench_plan,
-    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
-    execute_lower_head_then_walk_to_plan, execute_macro_hotkey_plan,
-    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
-    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
-    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
-    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
-    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
-    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
-    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight,
-    plan_auto_fish, plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick,
-    plan_auto_wood, plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
-    plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
+    execute_claim_mail_rewards_live, execute_go_to_adventurers_guild_plan,
+    execute_go_to_crafting_bench_plan, execute_independent_task_live_if_available,
+    execute_independent_task_with_cancel, execute_lower_head_then_walk_to_plan,
+    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
+    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
+    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
+    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
+    execute_team_context_combat_script_inputs, execute_teleport_plan, execute_use_redeem_code_plan,
+    execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
+    extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
+    plan_auto_eat, plan_auto_fight, plan_auto_fish, plan_auto_music_game, plan_auto_open_chest,
+    plan_auto_pathing, plan_auto_pick, plan_auto_wood, plan_quick_buy,
+    plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot, plan_quick_teleport,
+    plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
     redeem_code_entries_from_strings, reduce_lower_head_then_walk_to_tracking_frame,
     runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
     switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
@@ -134,15 +135,17 @@ use bgi_task::{
     CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
     CountInventoryItemStepAction, CountInventoryItemStepCondition,
     CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
-    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildStepAction,
-    GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
-    GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
-    GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
-    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
-    GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
-    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GridIconClassifierRule,
-    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScrollRule, GridTemplate,
-    IndependentTaskExecution, IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
+    GoToAdventurersGuildNestedOutcome, GoToAdventurersGuildPathingRule,
+    GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
+    GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
+    GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
+    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
+    GoToCraftingBenchRuntime, GoToCraftingBenchStepAction, GoToSereniteaPotEntryMode,
+    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
+    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
+    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
+    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
     LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
     LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
     LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
@@ -12388,14 +12391,199 @@ fn execute_desktop_go_to_adventurers_guild_live(
             capture_size.height
         ));
     }
-    let _frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
         "GoToAdventurersGuild live execution has no capture frame source".to_string()
     })?;
     desktop_go_to_adventurers_guild_live_preflight(plan)?;
-    Err(
-        "GoToAdventurersGuild live execution requires desktop runtime adapter wiring after preflight"
-            .to_string(),
-    )
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+    );
+    let mut runtime =
+        DesktopGoToAdventurersGuildRuntime::new(common_runtime, config, window, cancellation);
+    execute_go_to_adventurers_guild_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopGoToAdventurersGuildRuntime<'a, F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    config: &'a AppConfig,
+    window: &'a GameWindowMatch,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl<'a, F, I, C> DesktopGoToAdventurersGuildRuntime<'a, F, I, C> {
+    fn new(
+        common: PureTemplateCommonJobRuntime<F, I, C>,
+        config: &'a AppConfig,
+        window: &'a GameWindowMatch,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            common,
+            config,
+            window,
+            cancellation,
+        }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopGoToAdventurersGuildRuntime<'_, F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> GoToAdventurersGuildRuntime for DesktopGoToAdventurersGuildRuntime<'_, F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn execute_adventurers_guild_common_job(
+        &mut self,
+        task_key: &str,
+        config: Option<&serde_json::Value>,
+    ) -> bgi_task::Result<GoToAdventurersGuildNestedOutcome> {
+        let plan = bgi_task::plan_common_job(task_key, config)?.ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GoToAdventurersGuild live execution could not plan nested common-job {task_key}"
+            ))
+        })?;
+        let report = execute_desktop_common_job_live_plan(
+            self.config,
+            Some(self.window),
+            Arc::clone(&self.cancellation),
+            &plan,
+        )?
+        .ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GoToAdventurersGuild live execution has no desktop bridge for nested common-job {task_key}"
+            ))
+        })?;
+
+        match (task_key, report) {
+            (bgi_task::SWITCH_PARTY_TASK_KEY, CommonJobLiveExecutionReport::SwitchParty(report)) => {
+                Ok(GoToAdventurersGuildNestedOutcome::Completed(report.completed))
+            }
+            (
+                bgi_task::CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY,
+                CommonJobLiveExecutionReport::ClaimEncounterPointsRewards(report),
+            ) => Ok(GoToAdventurersGuildNestedOutcome::Completed(report.completed)),
+            (
+                bgi_task::RETURN_MAIN_UI_TASK_KEY,
+                CommonJobLiveExecutionReport::ReturnMainUi(report),
+            ) => Ok(GoToAdventurersGuildNestedOutcome::Completed(report.completed)),
+            (
+                bgi_task::CHOOSE_TALK_OPTION_TASK_KEY,
+                CommonJobLiveExecutionReport::ChooseTalkOption(report),
+            ) => {
+                let result = report.state.result.ok_or_else(|| {
+                    TaskError::CommonJobExecution(
+                        "GoToAdventurersGuild nested ChooseTalkOption returned no result"
+                            .to_string(),
+                    )
+                })?;
+                Ok(GoToAdventurersGuildNestedOutcome::TalkOption(result))
+            }
+            (task_key, report) => Err(TaskError::CommonJobExecution(format!(
+                "GoToAdventurersGuild nested common-job {task_key} returned incompatible live report {}",
+                report.task_name()
+            ))),
+        }
+    }
+
+    fn execute_adventurers_guild_pathing(
+        &mut self,
+        rule: &GoToAdventurersGuildPathingRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        let report = bgi_task::preflight_common_job_pathing_rule(&rule.pathing_json)?;
+        Err(TaskError::CommonJobExecution(format!(
+            "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter for {} after validating {} waypoints",
+            rule.pathing_json, report.waypoint_count
+        )))
+    }
+
+    fn retry_adventurers_guild_interaction(
+        &mut self,
+        _rule: &GoToAdventurersGuildInteractionRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter"
+                .to_string(),
+        ))
+    }
+
+    fn select_last_adventurers_guild_talk_option_until_end(
+        &mut self,
+        _max_times: Option<u8>,
+        until_paimon_menu: bool,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        let adapter = if until_paimon_menu {
+            "desktop talk UI probe/drain adapter"
+        } else {
+            "desktop talk-option drain adapter"
+        };
+        Err(TaskError::CommonJobExecution(format!(
+            "GoToAdventurersGuild live execution requires {adapter}"
+        )))
+    }
+
+    fn run_one_key_adventurers_guild_expedition(
+        &mut self,
+        plan: &OneKeyExpeditionExecutionPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        let report = execute_desktop_one_key_expedition_live(
+            self.config,
+            self.window,
+            plan,
+            Arc::clone(&self.cancellation),
+        )
+        .map_err(TaskError::CommonJobExecution)?;
+        Ok(CommonJobRuntimeOutcome::Matched(report.completed))
+    }
+
+    fn is_adventurers_guild_talk_ui_open(&mut self) -> bgi_task::Result<bool> {
+        Err(TaskError::CommonJobExecution(
+            "GoToAdventurersGuild live execution requires desktop talk UI probe/drain adapter"
+                .to_string(),
+        ))
+    }
 }
 
 fn desktop_go_to_adventurers_guild_live_preflight(
@@ -18190,6 +18378,46 @@ mod tests {
         assert!(adapter_error.contains(
             "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter"
         ));
+        assert!(!adapter_error.contains("desktop runtime adapter wiring after preflight"));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_runtime_reports_pathing_movement_boundary() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut plan)) =
+            bgi_task::plan_common_job(
+                bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY,
+                Some(&serde_json::json!({ "country": "蒙德" })),
+            )
+            .unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        for step in &mut plan.steps {
+            if !matches!(
+                step.action,
+                GoToAdventurersGuildStepAction::Pathing { .. }
+                    | GoToAdventurersGuildStepAction::ReturnResult { .. }
+            ) {
+                step.action = GoToAdventurersGuildStepAction::Log {
+                    message: "skip non-pathing runtime hook in desktop pathing test".to_string(),
+                };
+            }
+        }
+
+        let error = execute_desktop_go_to_adventurers_guild_live(
+            &AppConfig::default(),
+            &desktop_test_game_window(1920, 1080),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains(
+            "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter"
+        ));
+        assert!(error.contains("after validating"));
+        assert!(!error.contains("desktop runtime adapter wiring after preflight"));
+        assert!(!error.contains("Catherine interaction adapter"));
     }
 
     #[test]
