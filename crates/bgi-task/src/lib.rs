@@ -97,8 +97,8 @@ pub use auto_pathing::{
     AutoPathingPhaseExecutionStatus, AutoPathingPreflightExecutionContext,
     AutoPathingPreflightExecutionReport, AutoPathingPreflightPhase,
     AutoPathingResolutionPreflightReport, AutoPathingResolutionPreflightStatus, AutoPathingRuntime,
-    PathingActionBoundaryReport, PathingBoundaryStatus, PathingPhaseBoundaryReport,
-    PathingWaypointBoundaryReport, UnsupportedAutoPathingRuntime,
+    PathingActionBoundaryReport, PathingBoundaryStatus, PathingNavigationSeedReport,
+    PathingPhaseBoundaryReport, PathingWaypointBoundaryReport, UnsupportedAutoPathingRuntime,
 };
 pub use auto_pick::{
     auto_pick_text_only_crop_width, auto_pick_tick_requires_runtime_lists,

@@ -820,7 +820,7 @@ fn plan_force_teleport_action(action_params: Option<&str>) -> PathingForceTelepo
         raw_params: action_params.map(ToOwned::to_owned),
         force_teleport: true,
         executor_ready: false,
-        notes: "Pathing force_tp action is represented as a force-teleport intent for the HandleTeleport phase; native TpTask dispatch and navigation seed updates remain pending."
+        notes: "Pathing force_tp action is represented as a force-teleport intent for the HandleTeleport phase; native TpTask dispatch and final navigation state updates remain pending."
             .to_string(),
     }
 }

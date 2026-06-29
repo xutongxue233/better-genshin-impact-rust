@@ -1,11 +1,11 @@
 use crate::{
     plan_common_job, CommonJobExecutionPlan, CommonJobLiveExecutionReport, Result, TaskError,
-    TELEPORT_TASK_KEY,
+    TeleportExecutionReport, TELEPORT_TASK_KEY,
 };
 use bgi_core::{
-    read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingExecutionPlan,
-    PathingLogOutputActionPlan, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary,
-    PathingWaypointPhase, PathingWaypointPlan,
+    read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingCoordinateSpace,
+    PathingExecutionPlan, PathingLogOutputActionPlan, PathingPoint, PathingPreflightPlan,
+    PathingSetTimeActionPlan, PathingSummary, PathingWaypointPhase, PathingWaypointPlan,
 };
 use bgi_vision::Size;
 use serde::{Deserialize, Serialize};
@@ -261,6 +261,8 @@ pub struct PathingPhaseBoundaryReport {
     pub reason: String,
     pub common_job_task_key: Option<String>,
     pub common_job_plan: Option<CommonJobExecutionPlan>,
+    pub common_job_live_execution: Option<CommonJobLiveExecutionReport>,
+    pub navigation_seed: Option<PathingNavigationSeedReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -271,6 +273,15 @@ pub struct PathingActionBoundaryReport {
     pub common_job_task_key: Option<String>,
     pub common_job_plan: Option<CommonJobExecutionPlan>,
     pub common_job_live_execution: Option<CommonJobLiveExecutionReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingNavigationSeedReport {
+    pub source_task_key: String,
+    pub previous_position: PathingPoint,
+    pub map_name: Option<String>,
+    pub coordinate_space: PathingCoordinateSpace,
+    pub requires_track_conversion: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -592,7 +603,7 @@ where
         unsupported_phases: 0,
         waypoint_reports: Vec::new(),
         notes:
-            "Pathing runtime boundary reports ready pure actions, can hand mapped run-actions to a caller-provided live executor, and attaches Teleport common-job plans to teleport phases without executing them; movement, teleport dispatch, combat, recovery, and camera phases remain native-pending."
+            "Pathing runtime boundary reports ready pure actions, can hand mapped run-actions and teleport phases to a caller-provided live executor, and consumes Teleport navigation seeds into previous-position reports when the live bridge provides them; movement, final navigation state writes, combat, recovery, and camera phases remain native-pending."
                 .to_string(),
     };
 
@@ -627,7 +638,16 @@ where
                         reason,
                         common_job_task_key,
                         common_job_plan,
+                        common_job_live_execution: None,
+                        navigation_seed: None,
                     }
+                } else if *phase == PathingWaypointPhase::HandleTeleport {
+                    execute_teleport_phase_boundary(
+                        waypoint,
+                        plan,
+                        capture_size,
+                        &mut live_executor,
+                    )?
                 } else {
                     pathing_phase_boundary_report(*phase, waypoint, plan, capture_size)?
                 };
@@ -658,45 +678,23 @@ where
 
 fn pathing_phase_boundary_report(
     phase: PathingWaypointPhase,
-    waypoint: &PathingWaypointPlan,
-    plan: &AutoPathingExecutionPlan,
-    capture_size: Size,
+    _waypoint: &PathingWaypointPlan,
+    _plan: &AutoPathingExecutionPlan,
+    _capture_size: Size,
 ) -> Result<PathingPhaseBoundaryReport> {
-    let (status, reason, common_job_plan) = match phase {
+    let (status, reason, common_job_plan): (
+        PathingBoundaryStatus,
+        String,
+        Option<CommonJobExecutionPlan>,
+    ) = match phase {
         PathingWaypointPhase::RecoverWhenLowHp => (
             PathingBoundaryStatus::Unsupported,
             "low-HP recovery detection and food dispatch are still native-pending".to_string(),
             None,
         ),
-        PathingWaypointPhase::HandleTeleport => {
-            let force_teleport = match waypoint.action_plan.as_ref() {
-                Some(PathingActionPlan::ForceTeleport(force_teleport)) => {
-                    force_teleport.force_teleport
-                }
-                _ => false,
-            };
-            let common_job_plan =
-                plan_teleport_phase_common_job(waypoint, force_teleport, plan, capture_size)?;
-            if force_teleport {
-                (
-                    PathingBoundaryStatus::Unsupported,
-                    format!(
-                        "force_tp teleport intent to ({:.3}, {:.3}) is planned through the Teleport common-job contract with force_teleport=true, but AutoPathing native TpTask dispatch and navigation seed consumption remain pending",
-                        waypoint.route_point.x, waypoint.route_point.y
-                    ),
-                    Some(common_job_plan),
-                )
-            } else {
-                (
-                    PathingBoundaryStatus::Unsupported,
-                    format!(
-                        "teleport waypoint to ({:.3}, {:.3}) is planned through the Teleport common-job contract, but AutoPathing native TpTask dispatch and navigation seed consumption remain pending",
-                        waypoint.route_point.x, waypoint.route_point.y
-                    ),
-                    Some(common_job_plan),
-                )
-            }
-        }
+        PathingWaypointPhase::HandleTeleport => unreachable!(
+            "HandleTeleport is executed through execute_teleport_phase_boundary before generic phase reporting"
+        ),
         PathingWaypointPhase::FaceTo => (
             PathingBoundaryStatus::Unsupported,
             "camera orientation dispatch is not implemented in the Rust pathing boundary"
@@ -731,6 +729,134 @@ fn pathing_phase_boundary_report(
             .as_ref()
             .map(|common_job_plan| common_job_plan.task_key().to_string()),
         common_job_plan,
+        common_job_live_execution: None,
+        navigation_seed: None,
+    })
+}
+
+fn execute_teleport_phase_boundary<F>(
+    waypoint: &PathingWaypointPlan,
+    plan: &AutoPathingExecutionPlan,
+    capture_size: Size,
+    live_executor: &mut F,
+) -> Result<PathingPhaseBoundaryReport>
+where
+    F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
+{
+    let force_teleport = match waypoint.action_plan.as_ref() {
+        Some(PathingActionPlan::ForceTeleport(force_teleport)) => force_teleport.force_teleport,
+        _ => false,
+    };
+    let common_job_plan =
+        plan_teleport_phase_common_job(waypoint, force_teleport, plan, capture_size)?;
+    let common_job_task_key = Some(common_job_plan.task_key().to_string());
+
+    let live_execution = match live_executor(&common_job_plan) {
+        Ok(live_execution) => live_execution,
+        Err(error) => {
+            return Ok(PathingPhaseBoundaryReport {
+                phase: PathingWaypointPhase::HandleTeleport,
+                status: PathingBoundaryStatus::Unsupported,
+                reason: format!(
+                    "teleport waypoint to ({:.3}, {:.3}) reached the Teleport common-job live boundary, but live execution is still unavailable: {error}",
+                    waypoint.route_point.x, waypoint.route_point.y
+                ),
+                common_job_task_key,
+                common_job_plan: Some(common_job_plan),
+                common_job_live_execution: None,
+                navigation_seed: None,
+            });
+        }
+    };
+
+    match live_execution {
+        Some(CommonJobLiveExecutionReport::Teleport(teleport_report)) => {
+            let navigation_seed = teleport_navigation_seed_report(&teleport_report);
+            let (status, reason) = match navigation_seed.as_ref() {
+                Some(seed) => (
+                    PathingBoundaryStatus::Executed,
+                    format!(
+                        "teleport waypoint to ({:.3}, {:.3}) executed through the Teleport common-job live boundary and produced a previous-position seed ({:.3}, {:.3}) for AutoPathing track conversion",
+                        waypoint.route_point.x,
+                        waypoint.route_point.y,
+                        seed.previous_position.x,
+                        seed.previous_position.y
+                    ),
+                ),
+                None => (
+                    PathingBoundaryStatus::Unsupported,
+                    format!(
+                        "teleport waypoint to ({:.3}, {:.3}) reached the Teleport common-job live boundary, but the report did not contain a navigation previous-position seed",
+                        waypoint.route_point.x, waypoint.route_point.y
+                    ),
+                ),
+            };
+
+            Ok(PathingPhaseBoundaryReport {
+                phase: PathingWaypointPhase::HandleTeleport,
+                status,
+                reason,
+                common_job_task_key,
+                common_job_plan: Some(common_job_plan),
+                common_job_live_execution: Some(CommonJobLiveExecutionReport::Teleport(
+                    teleport_report,
+                )),
+                navigation_seed,
+            })
+        }
+        Some(other_report) => Ok(PathingPhaseBoundaryReport {
+            phase: PathingWaypointPhase::HandleTeleport,
+            status: PathingBoundaryStatus::Invalid,
+            reason: format!(
+                "teleport waypoint expected a Teleport live report but received {}",
+                other_report.task_name()
+            ),
+            common_job_task_key,
+            common_job_plan: Some(common_job_plan),
+            common_job_live_execution: Some(other_report),
+            navigation_seed: None,
+        }),
+        None => {
+            let reason = if force_teleport {
+                format!(
+                    "force_tp teleport intent to ({:.3}, {:.3}) is planned through the Teleport common-job contract with force_teleport=true, but the live executor returned no report; AutoPathing native TpTask dispatch remains pending",
+                    waypoint.route_point.x, waypoint.route_point.y
+                )
+            } else {
+                format!(
+                    "teleport waypoint to ({:.3}, {:.3}) is planned through the Teleport common-job contract, but the live executor returned no report; AutoPathing native TpTask dispatch remains pending",
+                    waypoint.route_point.x, waypoint.route_point.y
+                )
+            };
+            Ok(PathingPhaseBoundaryReport {
+                phase: PathingWaypointPhase::HandleTeleport,
+                status: PathingBoundaryStatus::Unsupported,
+                reason,
+                common_job_task_key,
+                common_job_plan: Some(common_job_plan),
+                common_job_live_execution: None,
+                navigation_seed: None,
+            })
+        }
+    }
+}
+
+fn teleport_navigation_seed_report(
+    teleport_report: &TeleportExecutionReport,
+) -> Option<PathingNavigationSeedReport> {
+    let seed = teleport_report
+        .state
+        .navigation_previous_position_seed
+        .as_ref()?;
+    Some(PathingNavigationSeedReport {
+        source_task_key: teleport_report.task_key.clone(),
+        previous_position: PathingPoint {
+            x: seed.x,
+            y: seed.y,
+        },
+        map_name: seed.map_name.clone(),
+        coordinate_space: PathingCoordinateSpace::RouteJson,
+        requires_track_conversion: true,
     })
 }
 

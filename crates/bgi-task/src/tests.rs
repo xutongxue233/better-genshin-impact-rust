@@ -20372,37 +20372,44 @@ fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phase
     )
     .unwrap();
     let plan = plan_auto_pathing(&root, "liyue/time_route.json").unwrap();
-    let mut calls = 0;
+    let mut calls = Vec::new();
 
     let report = execute_auto_pathing_action_boundary_with_live_executor(
         &plan,
         Size::new(1920, 1080),
         &mut |common_job_plan: &CommonJobExecutionPlan| {
-            calls += 1;
-            let CommonJobExecutionPlan::SetTime(set_time) = common_job_plan else {
-                panic!("expected SetTime common-job plan");
-            };
-            assert_eq!(set_time.requested_hour, 8);
-            assert_eq!(set_time.requested_minute, 30);
-            assert!(!set_time.skip_time_adjustment_animation);
-            Ok(Some(CommonJobLiveExecutionReport::SetTime(
-                SetTimeExecutionReport {
-                    task_key: set_time.task_key.clone(),
-                    completed: true,
-                    state: SetTimeExecutorState {
-                        skip_animation_resolved: false,
-                        ..SetTimeExecutorState::default()
-                    },
-                    executed_steps: Vec::new(),
-                    skipped_steps: Vec::new(),
-                    nested_return_main_ui_reports: Vec::new(),
-                },
-            )))
+            calls.push(common_job_plan.task_key().to_string());
+            match common_job_plan {
+                CommonJobExecutionPlan::Teleport(teleport) => {
+                    let teleport_target = teleport.target.as_ref().unwrap();
+                    assert_eq!((teleport_target.x, teleport_target.y), (1.0, 2.0));
+                    Ok(None)
+                }
+                CommonJobExecutionPlan::SetTime(set_time) => {
+                    assert_eq!(set_time.requested_hour, 8);
+                    assert_eq!(set_time.requested_minute, 30);
+                    assert!(!set_time.skip_time_adjustment_animation);
+                    Ok(Some(CommonJobLiveExecutionReport::SetTime(
+                        SetTimeExecutionReport {
+                            task_key: set_time.task_key.clone(),
+                            completed: true,
+                            state: SetTimeExecutorState {
+                                skip_animation_resolved: false,
+                                ..SetTimeExecutorState::default()
+                            },
+                            executed_steps: Vec::new(),
+                            skipped_steps: Vec::new(),
+                            nested_return_main_ui_reports: Vec::new(),
+                        },
+                    )))
+                }
+                other => panic!("unexpected common-job plan: {}", other.task_key()),
+            }
         },
     )
     .unwrap();
 
-    assert_eq!(calls, 1);
+    assert_eq!(calls, vec!["Teleport", "SetTime"]);
     assert!(report.boundary_completed);
     assert!(!report.native_pathing_completed);
     assert_eq!(report.executed_actions, 1);
@@ -20637,14 +20644,18 @@ fn auto_pathing_action_boundary_reports_force_tp_teleport_intent() {
     let report = execute_auto_pathing_action_boundary_with_live_executor(
         &plan,
         Size::new(1920, 1080),
-        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
             calls += 1;
-            panic!("force_tp teleport phase must not call common-job live executor");
+            let CommonJobExecutionPlan::Teleport(teleport_plan) = common_job_plan else {
+                panic!("expected Teleport common-job plan");
+            };
+            assert!(teleport_plan.force);
+            Ok(None)
         },
     )
     .unwrap();
 
-    assert_eq!(calls, 0);
+    assert_eq!(calls, 1);
     assert!(report.boundary_completed);
     assert!(!report.native_pathing_completed);
     assert_eq!(report.executed_actions, 0);
@@ -20667,6 +20678,8 @@ fn auto_pathing_action_boundary_reports_force_tp_teleport_intent() {
     assert!(teleport_phase.reason.contains("force_tp teleport intent"));
     assert!(teleport_phase.reason.contains("native TpTask dispatch"));
     assert!(teleport_phase.reason.contains("force_teleport=true"));
+    assert!(teleport_phase.common_job_live_execution.is_none());
+    assert!(teleport_phase.navigation_seed.is_none());
     assert_eq!(
         teleport_phase.common_job_task_key.as_deref(),
         Some(TELEPORT_TASK_KEY)
@@ -20680,6 +20693,149 @@ fn auto_pathing_action_boundary_reports_force_tp_teleport_intent() {
     let teleport_target = teleport_plan.target.as_ref().unwrap();
     assert_eq!((teleport_target.x, teleport_target.y), (9282.7, -2163.58));
     assert_eq!(teleport_target.map_name.as_deref(), Some("Teyvat"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_consumes_teleport_navigation_seed() {
+    let root = unique_test_root("auto-pathing-teleport-seed");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("teleport_seed_route.json"),
+        r#"{
+                "info": { "name": "teleport seed route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "teleport", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/teleport_seed_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            let CommonJobExecutionPlan::Teleport(teleport_plan) = common_job_plan else {
+                panic!("expected Teleport common-job plan");
+            };
+            let teleport_target = teleport_plan.target.as_ref().unwrap();
+            assert_eq!((teleport_target.x, teleport_target.y), (1.0, 2.0));
+            Ok(Some(CommonJobLiveExecutionReport::Teleport(
+                TeleportExecutionReport {
+                    task_key: teleport_plan.task_key.clone(),
+                    completed: true,
+                    state: TeleportExecutorState {
+                        navigation_previous_position_seeded: true,
+                        navigation_previous_position_seed: Some(TeleportTargetPlan {
+                            x: 100.5,
+                            y: -25.25,
+                            map_name: Some("Teyvat".to_string()),
+                        }),
+                        result: Some(TeleportStepResult::Planned),
+                        ..TeleportExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                },
+            )))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 1);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    let teleport_phase = report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .find(|phase| phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport)
+        .expect("expected HandleTeleport phase report");
+    assert_eq!(teleport_phase.status, PathingBoundaryStatus::Executed);
+    assert!(matches!(
+        teleport_phase.common_job_live_execution,
+        Some(CommonJobLiveExecutionReport::Teleport(_))
+    ));
+    let navigation_seed = teleport_phase
+        .navigation_seed
+        .as_ref()
+        .expect("expected navigation seed");
+    assert_eq!(navigation_seed.source_task_key, TELEPORT_TASK_KEY);
+    assert_eq!(
+        navigation_seed.previous_position,
+        bgi_core::PathingPoint {
+            x: 100.5,
+            y: -25.25
+        }
+    );
+    assert_eq!(navigation_seed.map_name.as_deref(), Some("Teyvat"));
+    assert_eq!(
+        navigation_seed.coordinate_space,
+        bgi_core::PathingCoordinateSpace::RouteJson
+    );
+    assert!(navigation_seed.requires_track_conversion);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_does_not_consume_unseeded_teleport_report() {
+    let root = unique_test_root("auto-pathing-teleport-unseeded");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("teleport_unseeded_route.json"),
+        r#"{
+                "info": { "name": "teleport unseeded route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "teleport", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/teleport_unseeded_route.json").unwrap();
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            let CommonJobExecutionPlan::Teleport(teleport_plan) = common_job_plan else {
+                panic!("expected Teleport common-job plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::Teleport(
+                TeleportExecutionReport {
+                    task_key: teleport_plan.task_key.clone(),
+                    completed: true,
+                    state: TeleportExecutorState {
+                        result: Some(TeleportStepResult::Planned),
+                        ..TeleportExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                },
+            )))
+        },
+    )
+    .unwrap();
+
+    let teleport_phase = report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .find(|phase| phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport)
+        .expect("expected HandleTeleport phase report");
+    assert_eq!(teleport_phase.status, PathingBoundaryStatus::Unsupported);
+    assert!(matches!(
+        teleport_phase.common_job_live_execution,
+        Some(CommonJobLiveExecutionReport::Teleport(_))
+    ));
+    assert!(teleport_phase.navigation_seed.is_none());
+    assert!(teleport_phase
+        .reason
+        .contains("did not contain a navigation previous-position seed"));
 
     let _ = fs::remove_dir_all(root);
 }

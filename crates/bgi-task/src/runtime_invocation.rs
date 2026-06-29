@@ -669,7 +669,7 @@ pub enum CommonJobLiveExecutionReport {
 }
 
 impl CommonJobLiveExecutionReport {
-    fn task_name(&self) -> &'static str {
+    pub fn task_name(&self) -> &'static str {
         match self {
             CommonJobLiveExecutionReport::ReturnMainUi(_) => "ReturnMainUi",
             CommonJobLiveExecutionReport::SetTime(_) => "SetTime",
