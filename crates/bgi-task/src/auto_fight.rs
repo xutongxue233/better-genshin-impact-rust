@@ -1,4 +1,4 @@
-use crate::task_params::AutoFightParam;
+use crate::task_params::{combat_strategy_path, AutoFightParam};
 use crate::{Result, TaskError};
 use bgi_core::{GenshinAction, KeyBindingsConfig};
 use bgi_input::{InputEvent, KeyActionType};
@@ -53,10 +53,42 @@ pub struct AutoFightExecutionConfig {
 
 impl AutoFightExecutionConfig {
     pub fn from_value(value: Option<&Value>) -> Self {
-        value
+        let mut config: Self = value
             .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let Some(value) = value else {
+            return config;
+        };
+
+        if let Some(strategy_name) = string_config_alias(
+            value,
+            &[
+                "strategyName",
+                "strategy_name",
+                "strategy",
+                "strategyNameOrPath",
+            ],
+        ) {
+            config.param.combat_strategy_path = combat_strategy_path(Some(strategy_name));
+        }
+        if let Some(strategy_path) =
+            string_config_alias(value, &["combatStrategyPath", "combat_strategy_path"])
+        {
+            config.param.combat_strategy_path = strategy_path.to_string();
+        }
+        if let Some(team_names) = string_config_alias(value, &["teamNames", "team_names"]) {
+            config.param.team_names = team_names.to_string();
+        }
+
+        config
     }
+}
+
+fn string_config_alias<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

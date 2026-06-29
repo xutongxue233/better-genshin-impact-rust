@@ -206,7 +206,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Combat strategy paths, script parser, command/round model, script/configured-team alias normalization, team-context script selection, command filtering, team metadata, ActionSchedulerByCd runtime skip planning, command execution planning, static input expansion, known-team input playback, fight-loop decision planning, finish-detection input/pixel probe planning, and independent-task preparation are ported; visual team recognition and full native fight loop execution are pending.",
+        notes: "Combat strategy paths, script parser, command/round model, script/configured-team alias normalization, team-context script selection, command filtering, team metadata, ActionSchedulerByCd runtime skip planning, command execution planning, static input expansion, known-team input playback, fight-loop decision planning, finish-detection input/pixel probe planning, and independent-task preparation are ported; the guarded desktop generic independent live route can now run the AutoFight finish-detection probe with mode=finishProbe while reporting full fight-loop completion as false; visual team recognition and full native fight loop execution are pending.",
     },
     TaskCatalogEntry {
         key: "AutoOpenChest",
@@ -407,7 +407,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoArtifactSalvage config/default JS/legacy regex, 1-4 star inverse quick-select flow, destructive quick-salvage confirmation boundary, optional artifact-set filtering with gridIcon metadata, ArtifactSalvage grid constants, locked/selected HSV rules, artifact stat OCR ROIs/parsing rules, ClearScript Output contract, recognition-failure policy, manual-review-only five-star finish, independent-task invocation expansion, and an injectable executor for quick/five-star/filter/cleanup outcomes; desktop live capture, OCR, OpenCV, ONNX inference, ClearScript-compatible JS, overlay, and input/click adapters remain pending.",
+        notes: "Rust models AutoArtifactSalvage config/default JS/legacy regex, 1-4 star inverse quick-select flow, destructive quick-salvage confirmation boundary, optional artifact-set filtering with gridIcon metadata, ArtifactSalvage grid constants, locked/selected HSV rules, artifact stat OCR ROIs/parsing rules, ClearScript Output contract, recognition-failure policy, manual-review-only five-star finish, independent-task invocation expansion, and an injectable executor for quick/five-star/filter/cleanup outcomes; the desktop generic independent live route now returns an explicit adapter gap instead of silently declining execution, while desktop live capture, OCR, OpenCV, ONNX inference, ClearScript-compatible JS, overlay, and input/click adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "TurnAroundMacro",
@@ -499,7 +499,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models GetGridIcons config, gridName string/numeric compatibility, inventory/manual-open policy, GridScreen and ArtifactSetFilter grid constants, item-name OCR crop, optional star suffix color-contour rule, timestamped output directory, duplicate filename skip, PNG save behavior, related GridIconsAccuracyTest model metadata, independent-task invocation expansion, and an injectable executor for open/scan/save/cleanup reports; desktop live capture, OpenCV enumeration, Paddle OCR, input dispatch, filesystem write threads, overlay cleanup, and ONNX adapters remain pending.",
+        notes: "Rust models GetGridIcons config, gridName string/numeric compatibility, inventory/manual-open policy, GridScreen and ArtifactSetFilter grid constants, item-name OCR crop, optional star suffix color-contour rule, timestamped output directory, duplicate filename skip, PNG save behavior, related GridIconsAccuracyTest model metadata, independent-task invocation expansion, and an injectable executor for open/scan/save/cleanup reports; the desktop generic independent live route now returns an explicit adapter gap instead of silently declining execution, while desktop live capture, OpenCV enumeration, Paddle OCR, input dispatch, filesystem write threads, overlay cleanup, and ONNX adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "Shell",

@@ -15,6 +15,7 @@ use crate::auto_eat::{
     AutoEatFoodUseOutcome, AutoEatTickExecutionReport, AUTO_EAT_FOOD_TASK_KEY,
     AUTO_EAT_SCRIPT_TASK_NAME, AUTO_EAT_TASK_KEY,
 };
+use crate::auto_fight::AutoFightFinishDetectionLiveExecution;
 use crate::auto_fish::{
     plan_auto_fish, AutoFishExecutionConfig, AutoFishExecutionPlan, AUTO_FISH_TASK_KEY,
 };
@@ -456,6 +457,7 @@ pub enum IndependentTaskLiveExecutionReport {
     AutoArtifactSalvage(AutoArtifactSalvageExecutionReport),
     AutoBoss(AutoBossExecutionReport),
     AutoDomain(AutoDomainExecutionReport),
+    AutoFightFinishProbe(AutoFightFinishDetectionLiveExecution),
     AutoGeniusInvokation(AutoGeniusInvokationExecutionReport),
     AutoLeyLineOutcrop(AutoLeyLineOutcropExecutionReport),
     AutoPathingActionBoundary(AutoPathingActionBoundaryReport),
@@ -480,6 +482,7 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoArtifactSalvage(_) => "AutoArtifactSalvage",
             IndependentTaskLiveExecutionReport::AutoBoss(_) => "AutoBoss",
             IndependentTaskLiveExecutionReport::AutoDomain(_) => "AutoDomain",
+            IndependentTaskLiveExecutionReport::AutoFightFinishProbe(_) => "AutoFight:FinishProbe",
             IndependentTaskLiveExecutionReport::AutoGeniusInvokation(_) => "AutoGeniusInvokation",
             IndependentTaskLiveExecutionReport::AutoLeyLineOutcrop(_) => "AutoLeyLineOutcrop",
             IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(_) => "AutoPathing",
@@ -508,6 +511,7 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoArtifactSalvage(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoBoss(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoDomain(report) => report.completed,
+            IndependentTaskLiveExecutionReport::AutoFightFinishProbe(_) => false,
             IndependentTaskLiveExecutionReport::AutoGeniusInvokation(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoLeyLineOutcrop(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report) => {
@@ -546,6 +550,9 @@ impl IndependentTaskLiveExecutionReport {
             }
             IndependentTaskLiveExecutionReport::AutoBoss(report) => report.executed_actions.len(),
             IndependentTaskLiveExecutionReport::AutoDomain(report) => report.executed_actions.len(),
+            IndependentTaskLiveExecutionReport::AutoFightFinishProbe(report) => {
+                report.dispatched_events
+            }
             IndependentTaskLiveExecutionReport::AutoGeniusInvokation(report) => {
                 report.executed_actions.len()
             }
@@ -608,6 +615,7 @@ impl IndependentTaskLiveExecutionReport {
             }
             IndependentTaskLiveExecutionReport::AutoBoss(report) => report.skipped_steps.len(),
             IndependentTaskLiveExecutionReport::AutoDomain(report) => report.skipped_steps.len(),
+            IndependentTaskLiveExecutionReport::AutoFightFinishProbe(_) => 0,
             IndependentTaskLiveExecutionReport::AutoGeniusInvokation(report) => {
                 report.skipped_steps.len()
             }

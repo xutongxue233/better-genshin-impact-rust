@@ -78,7 +78,7 @@ use bgi_task::{
     execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
     execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
     execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
-    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat,
+    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight,
     plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
     plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
     plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
@@ -3890,19 +3890,17 @@ fn task_probe_auto_fight_finish(
     };
     let cancellation = if matches!(mode, AutoFightFinishDetectionExecutionMode::SendInput) {
         task_state.script_cancellation.reset();
-        Some(task_state.script_cancellation.clone())
+        task_state.script_cancellation.clone()
     } else {
-        None
+        Arc::new(InputCancellationToken::new())
     };
-    let result = execute_auto_fight_finish_detection_live_probe(
-        &plan.finish_detection_plan,
+    let game_window = find_desktop_game_window(&config);
+    let result = execute_desktop_auto_fight_finish_probe_live_plan(
+        &config,
+        game_window.as_ref(),
+        &plan,
         mode,
-        cancellation.as_deref(),
-        || {
-            capture_desktop_game_bgr_image(&config).map_err(|error| {
-                bgi_task::TaskError::VisionPlan(format!("desktop capture failed: {error}"))
-            })
-        },
+        cancellation,
     )
     .map_err(|error| error.to_string())?;
 
@@ -6827,6 +6825,33 @@ fn execute_desktop_independent_task_live_plan(
                 IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report),
             ))
         }
+        Some("AutoFight") => match desktop_auto_fight_live_route_mode(plan.config.as_ref())? {
+            DesktopAutoFightLiveRouteMode::FinishProbe => {
+                let auto_fight_config = AutoFightExecutionConfig::from_value(plan.config.as_ref());
+                let auto_fight_plan = plan_auto_fight(app_root, auto_fight_config.param)?;
+                let mode = desktop_auto_fight_finish_probe_execution_mode(plan.config.as_ref());
+                let report = execute_desktop_auto_fight_finish_probe_live_plan(
+                    config,
+                    game_window,
+                    &auto_fight_plan,
+                    mode,
+                    cancellation,
+                )
+                .map_err(TaskError::CommonJobExecution)?;
+                Ok(Some(IndependentTaskLiveExecutionReport::AutoFightFinishProbe(
+                    report,
+                )))
+            }
+            DesktopAutoFightLiveRouteMode::FullFightLoop => Err(TaskError::CommonJobExecution(
+                "AutoFight full fight-loop live execution requires native CombatScenes, team recognition, skill cooldown, burst readiness, command-loop dispatch, cleanup, and post-fight pickup adapters; use mode=finishProbe for the migrated finish-detection probe boundary".to_string(),
+            )),
+        },
+        Some("AutoArtifactSalvage") => Err(TaskError::CommonJobExecution(
+            "AutoArtifactSalvage desktop live adapter remains pending: capture, OCR, OpenCV, ONNX, input/click, overlay, ClearScript-compatible filtering, and destructive confirmation adapters are not wired".to_string(),
+        )),
+        Some("GetGridIcons") => Err(TaskError::CommonJobExecution(
+            "GetGridIcons desktop live adapter remains pending: capture, OpenCV enumeration, Paddle OCR, input/click, filesystem PNG save, overlay cleanup, and optional ONNX/prototype adapters are not wired".to_string(),
+        )),
         Some(USE_REDEEM_CODE_TASK_KEY) => {
             let redeem_config = UseRedeemCodeExecutionConfig::from_value(plan.config.as_ref());
             if redeem_config.codes.is_empty() {
@@ -6963,6 +6988,108 @@ fn execute_desktop_independent_task_live_plan(
         }
         _ => Ok(None),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopAutoFightLiveRouteMode {
+    FinishProbe,
+    FullFightLoop,
+}
+
+fn desktop_auto_fight_live_route_mode(
+    config: Option<&Value>,
+) -> bgi_task::Result<DesktopAutoFightLiveRouteMode> {
+    let raw_mode = config.and_then(|value| {
+        value
+            .get("mode")
+            .or_else(|| value.get("executionMode"))
+            .or_else(|| value.get("taskMode"))
+            .or_else(|| value.get("liveMode"))
+            .and_then(Value::as_str)
+    });
+    let Some(raw_mode) = raw_mode else {
+        return Ok(DesktopAutoFightLiveRouteMode::FullFightLoop);
+    };
+    match raw_mode.trim().to_ascii_lowercase().as_str() {
+        "" | "full" | "fightloop" | "fight_loop" | "autofight" => {
+            Ok(DesktopAutoFightLiveRouteMode::FullFightLoop)
+        }
+        "finishprobe" | "finish_probe" | "finish-detection" | "finishdetection"
+        | "finish_detection" => Ok(DesktopAutoFightLiveRouteMode::FinishProbe),
+        other => Err(TaskError::CommonJobExecution(format!(
+            "unsupported AutoFight live execution mode: {other}"
+        ))),
+    }
+}
+
+fn desktop_auto_fight_finish_probe_execution_mode(
+    config: Option<&Value>,
+) -> AutoFightFinishDetectionExecutionMode {
+    let send_input = config
+        .and_then(|value| {
+            value
+                .get("sendInput")
+                .or_else(|| value.get("send_input"))
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(false);
+    if send_input {
+        AutoFightFinishDetectionExecutionMode::SendInput
+    } else {
+        AutoFightFinishDetectionExecutionMode::PlanOnly
+    }
+}
+
+fn execute_desktop_auto_fight_finish_probe_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    plan: &AutoFightExecutionPlan,
+    mode: AutoFightFinishDetectionExecutionMode,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<AutoFightFinishDetectionLiveExecution, String> {
+    execute_desktop_auto_fight_finish_probe_live_plan_with_capture(
+        game_window,
+        plan,
+        mode,
+        cancellation,
+        || {
+            capture_desktop_game_bgr_image(config).map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoFight finish probe desktop capture failed: {error}"
+                ))
+            })
+        },
+    )
+}
+
+fn execute_desktop_auto_fight_finish_probe_live_plan_with_capture<C>(
+    game_window: Option<&GameWindowMatch>,
+    plan: &AutoFightExecutionPlan,
+    mode: AutoFightFinishDetectionExecutionMode,
+    cancellation: Arc<InputCancellationToken>,
+    capture: C,
+) -> Result<AutoFightFinishDetectionLiveExecution, String>
+where
+    C: FnOnce() -> bgi_task::Result<BgrImage>,
+{
+    if cancellation.is_cancelled() {
+        return Err("AutoFight finish probe live execution cancelled".to_string());
+    }
+    let _window = game_window.ok_or_else(|| {
+        "AutoFight finish probe live execution requires a detected game window".to_string()
+    })?;
+    let cancellation = if matches!(mode, AutoFightFinishDetectionExecutionMode::SendInput) {
+        Some(cancellation.as_ref())
+    } else {
+        None
+    };
+    execute_auto_fight_finish_detection_live_probe(
+        &plan.finish_detection_plan,
+        mode,
+        cancellation,
+        capture,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn execute_desktop_auto_pathing_action_boundary_live_plan(
@@ -19371,6 +19498,143 @@ mod tests {
     }
 
     #[test]
+    fn desktop_independent_task_live_plan_reports_auto_fight_full_loop_adapter_gap() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "AutoFight".to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoFight full fight-loop live execution requires native CombatScenes")
+                    && message.contains("mode=finishProbe")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_auto_fight_finish_probe_missing_game_window() {
+        let root = desktop_test_temp_root("auto-fight-finish-probe-missing-window");
+        write_desktop_auto_fight_strategy(&root);
+        let plan = desktop_auto_fight_finish_probe_invocation_plan();
+
+        let error = execute_desktop_independent_task_live_plan(
+            &root,
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoFight finish probe live execution requires a detected game window")
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_auto_fight_finish_probe_helper_keeps_fight_loop_incomplete() {
+        let root = desktop_test_temp_root("auto-fight-finish-probe-helper");
+        write_desktop_auto_fight_strategy(&root);
+        let auto_fight_config = AutoFightExecutionConfig::from_value(Some(&serde_json::json!({
+            "strategyName": "daily",
+            "teamNames": "钟离,夜兰,行秋,班尼特"
+        })));
+        let auto_fight_plan = plan_auto_fight(&root, auto_fight_config.param).unwrap();
+        let window = desktop_test_game_window(1920, 1080);
+
+        let report = execute_desktop_auto_fight_finish_probe_live_plan_with_capture(
+            Some(&window),
+            &auto_fight_plan,
+            AutoFightFinishDetectionExecutionMode::PlanOnly,
+            Arc::new(InputCancellationToken::new()),
+            || Ok(desktop_auto_fight_finished_frame()),
+        )
+        .unwrap();
+
+        assert!(report.captured);
+        assert!(!report.dispatched);
+        assert_eq!(report.dispatched_events, 0);
+        assert!(report
+            .detection
+            .as_ref()
+            .is_some_and(|detection| detection.finished));
+        let live_report = IndependentTaskLiveExecutionReport::AutoFightFinishProbe(report);
+        assert_eq!(live_report.task_name(), "AutoFight:FinishProbe");
+        assert!(!live_report.completed());
+        assert_eq!(live_report.executed_steps(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_auto_artifact_salvage_adapter_gap() {
+        let plan = desktop_independent_task_invocation_plan("AutoArtifactSalvage");
+
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoArtifactSalvage desktop live adapter remains pending")
+                    && message.contains("capture")
+                    && message.contains("OCR")
+                    && message.contains("OpenCV")
+                    && message.contains("ONNX")
+                    && message.contains("input/click")
+                    && message.contains("overlay")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_get_grid_icons_adapter_gap() {
+        let plan = desktop_independent_task_invocation_plan("GetGridIcons");
+
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("GetGridIcons desktop live adapter remains pending")
+                    && message.contains("capture")
+                    && message.contains("OpenCV enumeration")
+                    && message.contains("Paddle OCR")
+                    && message.contains("filesystem")
+                    && message.contains("overlay")
+                    && message.contains("ONNX")
+        ));
+    }
+
+    #[test]
     fn desktop_independent_task_live_plan_reports_auto_music_performance_missing_game_window() {
         let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
             bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
@@ -19708,6 +19972,33 @@ mod tests {
         .unwrap()
     }
 
+    fn desktop_auto_fight_finish_probe_invocation_plan() -> bgi_task::TaskInvocationPlan {
+        bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "AutoFight".to_string(),
+                config: serde_json::json!({
+                    "mode": "finishProbe",
+                    "strategyName": "daily",
+                    "teamNames": "钟离,夜兰,行秋,班尼特"
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap()
+    }
+
+    fn desktop_independent_task_invocation_plan(task_key: &str) -> bgi_task::TaskInvocationPlan {
+        bgi_task::TaskInvocationPlan {
+            kind: bgi_task::TaskInvocationKind::RunIndependentTask,
+            task_key: Some(task_key.to_string()),
+            catalog_entry: bgi_task::find_task_catalog_entry(task_key),
+            interval_ms: None,
+            clears_existing_triggers: false,
+            config: Some(serde_json::json!({})),
+            uses_linked_cancellation: true,
+        }
+    }
+
     fn write_desktop_auto_pathing_log_route(root: &Path) {
         let route_dir = root.join("User").join("AutoPathing").join("liyue");
         fs::create_dir_all(&route_dir).unwrap();
@@ -19721,6 +20012,60 @@ mod tests {
             }"#,
         )
         .unwrap();
+    }
+
+    fn write_desktop_auto_fight_strategy(root: &Path) {
+        let strategy_dir = root.join("User").join("AutoFight");
+        fs::create_dir_all(&strategy_dir).unwrap();
+        fs::write(
+            strategy_dir.join("daily.txt"),
+            "钟离 keypress(e), wait(0.05)\n夜兰 keypress(q)",
+        )
+        .unwrap();
+        let catalog_path = root
+            .join("GameTask")
+            .join("AutoFight")
+            .join("Assets")
+            .join("combat_avatar.json");
+        fs::create_dir_all(catalog_path.parent().unwrap()).unwrap();
+        fs::write(
+            catalog_path,
+            r#"[
+  { "alias": ["钟离", "Zhongli"], "burstCD": 12, "id": "10000030", "name": "钟离", "nameEn": "Zhongli", "skillCD": 4, "skillHoldCD": 12, "weapon": "13" },
+  { "alias": ["夜兰", "Yelan"], "burstCD": 18, "id": "10000060", "name": "夜兰", "nameEn": "Yelan", "skillCD": 10, "weapon": "12" },
+  { "alias": ["行秋", "Xingqiu"], "burstCD": 20, "id": "10000025", "name": "行秋", "nameEn": "Xingqiu", "skillCD": 21, "weapon": "1" },
+  { "alias": ["班尼特", "Bennett"], "burstCD": 15, "id": "10000032", "name": "班尼特", "nameEn": "Bennett", "skillCD": 5, "weapon": "1" }
+]"#,
+        )
+        .unwrap();
+    }
+
+    fn desktop_auto_fight_finished_frame() -> BgrImage {
+        let size = VisionSize::new(1920, 1080);
+        let mut pixels = vec![0; size.width as usize * size.height as usize * 3];
+        set_desktop_bgr_pixel(
+            &mut pixels,
+            size,
+            bgi_task::AUTO_FIGHT_FINISH_PROGRESS_PIXEL,
+            [40, 220, 230],
+        );
+        set_desktop_bgr_pixel(
+            &mut pixels,
+            size,
+            bgi_task::AUTO_FIGHT_FINISH_WHITE_TILE_PIXEL,
+            [251, 250, 248],
+        );
+        BgrImage::new(size, pixels).unwrap()
+    }
+
+    fn set_desktop_bgr_pixel(
+        pixels: &mut [u8],
+        size: VisionSize,
+        position: (u32, u32),
+        bgr: [u8; 3],
+    ) {
+        let offset = ((position.1 * size.width + position.0) * 3) as usize;
+        pixels[offset..offset + 3].copy_from_slice(&bgr);
     }
 
     #[test]

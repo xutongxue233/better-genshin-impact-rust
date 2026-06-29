@@ -21189,6 +21189,31 @@ fn independent_auto_pathing_rejects_paths_outside_user_root() {
 }
 
 #[test]
+fn auto_fight_execution_config_accepts_strategy_name_aliases() {
+    let config = AutoFightExecutionConfig::from_value(Some(&serde_json::json!({
+        "strategyName": "daily",
+        "teamNames": "钟离,夜兰,行秋,班尼特"
+    })));
+
+    assert_eq!(
+        config.param.combat_strategy_path,
+        "User/AutoFight/daily.txt"
+    );
+    assert_eq!(config.param.team_names, "钟离,夜兰,行秋,班尼特");
+
+    let path_config = AutoFightExecutionConfig::from_value(Some(&serde_json::json!({
+        "combatStrategyPath": "User/AutoFight/boss.txt",
+        "team_names": "钟离,夜兰,行秋,班尼特"
+    })));
+
+    assert_eq!(
+        path_config.param.combat_strategy_path,
+        "User/AutoFight/boss.txt"
+    );
+    assert_eq!(path_config.param.team_names, "钟离,夜兰,行秋,班尼特");
+}
+
+#[test]
 fn independent_auto_fight_returns_combat_strategy_plan() {
     let root = unique_test_root("auto-fight");
     let strategy_dir = root.join("User").join("AutoFight");
