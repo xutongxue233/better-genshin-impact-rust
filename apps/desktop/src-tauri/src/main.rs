@@ -61,24 +61,25 @@ use bgi_task::{
     choose_talk_option_ocr_rect_from_lowest_icon,
     claim_encounter_points_text_candidates_from_ocr_regions, count_auto_cook_target_color,
     decide_quick_teleport_tick, decide_teleport_move_map_center_after_drag,
-    detect_active_combat_avatar_index_from_default_rects_with_arrow, execute_auto_cook_plan,
-    execute_auto_eat_food_plan, execute_auto_eat_tick_plan,
-    execute_auto_fight_finish_detection_live_probe, execute_auto_music_album_plan,
-    execute_auto_music_performance_plan, execute_auto_open_chest_plan,
-    execute_auto_pathing_action_boundary_with_live_executor, execute_auto_pick_tick_plan,
-    execute_auto_track_plan, execute_auto_wood_plan, execute_blessing_of_the_welkin_moon_live,
-    execute_check_rewards_plan, execute_choose_talk_option_plan,
-    execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
-    execute_claim_mail_rewards_live, execute_go_to_crafting_bench_plan,
-    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
-    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
-    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
-    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
-    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
-    execute_team_context_combat_script_inputs, execute_teleport_plan, execute_use_redeem_code_plan,
-    execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
-    extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
-    plan_auto_eat, plan_auto_music_game, plan_auto_open_chest, plan_auto_pick, plan_auto_wood,
+    detect_active_combat_avatar_index_from_default_rects_with_arrow,
+    evaluate_auto_pathing_resolution_preflight, execute_auto_cook_plan, execute_auto_eat_food_plan,
+    execute_auto_eat_tick_plan, execute_auto_fight_finish_detection_live_probe,
+    execute_auto_music_album_plan, execute_auto_music_performance_plan,
+    execute_auto_open_chest_plan, execute_auto_pathing_action_boundary_with_live_executor,
+    execute_auto_pick_tick_plan, execute_auto_track_plan, execute_auto_wood_plan,
+    execute_blessing_of_the_welkin_moon_live, execute_check_rewards_plan,
+    execute_choose_talk_option_plan, execute_claim_battle_pass_rewards_plan,
+    execute_claim_encounter_points_rewards_plan, execute_claim_mail_rewards_live,
+    execute_go_to_crafting_bench_plan, execute_independent_task_live_if_available,
+    execute_independent_task_with_cancel, execute_macro_hotkey_plan,
+    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
+    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
+    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
+    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
+    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
+    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
+    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat,
+    plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
     plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
     plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
     redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick,
@@ -96,60 +97,61 @@ use bgi_task::{
     AutoMusicPerformanceReport, AutoMusicPerformanceRuntime, AutoMusicTemplateLocator,
     AutoOpenChestAction, AutoOpenChestActionPress, AutoOpenChestExecutionConfig,
     AutoOpenChestExecutionPlan, AutoOpenChestExecutionReport, AutoOpenChestObservation,
-    AutoOpenChestRuntime, AutoPathingActionBoundaryReport, AutoPathingExecutionPlan,
-    AutoPickExecutionConfig, AutoPickExecutionPlan, AutoPickRelativeTemplateLocator,
-    AutoPickRuntime, AutoPickRuntimeLists, AutoPickTemplateLocator, AutoPickTickExecutionReport,
-    AutoPickTickObservation, AutoTrackActionPress, AutoTrackExecutionConfig,
-    AutoTrackExecutionPlan, AutoTrackExecutionReport, AutoTrackExecutionState,
-    AutoTrackMainUiObservation, AutoTrackMissionTextObservation, AutoTrackRuntime,
-    AutoTrackRuntimeAction, AutoTrackTeleportCandidate, AutoTrackTeleportObservation,
-    AutoTrackTemplateLocator, AutoTrackTemplateMatch, AutoTrackTrackingObservation,
-    AutoWoodCleanupOutcome, AutoWoodDelayOutcome, AutoWoodDelayReason, AutoWoodExecutionConfig,
-    AutoWoodExecutionPlan, AutoWoodExecutionReport, AutoWoodGadgetOutcome,
-    AutoWoodGarbageCollectionOutcome, AutoWoodInputAction, AutoWoodInputOutcome,
-    AutoWoodOcrOutcome, AutoWoodRefreshOutcome, AutoWoodRefreshStrategy, AutoWoodRuntime,
-    AutoWoodRuntimeRoundContext, AutoWoodStartupOutcome, AutoWoodTemplateLocator,
-    AutoWoodThirdPartyLoginMode, AutoWoodThirdPartyLoginOutcome, AutoWoodWindowOutcome,
-    BattlePassClaimAllRule, BattlePassClaimScope, BattlePassRewardTextCandidate,
-    BlessingOfTheWelkinMoonExecutionPlan, BlessingOfTheWelkinMoonExecutionReport,
-    CancellableCommonJobClock, CheckRewardsExecutionPlan, CheckRewardsExecutionReport,
-    CheckRewardsRuntime, CheckRewardsTextCandidate, ChooseTalkOptionCandidate,
-    ChooseTalkOptionExecutionPlan, ChooseTalkOptionExecutionReport, ChooseTalkOptionOcrRule,
-    ChooseTalkOptionOrangeRule, ChooseTalkOptionRuntime, ClaimBattlePassRewardsExecutionPlan,
-    ClaimBattlePassRewardsExecutionReport, ClaimBattlePassRewardsRuntime,
-    ClaimEncounterPointsRewardsExecutionPlan, ClaimEncounterPointsRewardsExecutionReport,
-    ClaimEncounterPointsRewardsOcrRule, ClaimEncounterPointsRewardsRuntime,
-    ClaimEncounterPointsRewardsTextCandidate, ClaimMailRewardsExecutionPlan,
-    ClaimMailRewardsExecutionReport, CombatActiveAvatarDetectionResult, CombatCommandPlaybackMode,
-    CombatTeamPlaybackExecution, CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource,
-    CommonJobInputDriver, CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome,
-    CommonJobStepAction, CountInventoryGridIconMatch, CountInventoryGridItemFrame,
-    CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
-    CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
-    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildStepAction,
-    GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
-    GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
-    GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
-    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode,
-    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
-    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
-    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
-    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
-    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
-    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
-    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
-    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
-    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
-    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
-    QuickSereniteaPotExecutionReport, QuickSereniteaPotInteractionOutcome,
-    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
-    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
-    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
-    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
-    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
-    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
-    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
-    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    AutoOpenChestRuntime, AutoPathingActionBoundaryReport, AutoPathingExecutionConfig,
+    AutoPathingExecutionPlan, AutoPathingResolutionPreflightStatus, AutoPickExecutionConfig,
+    AutoPickExecutionPlan, AutoPickRelativeTemplateLocator, AutoPickRuntime, AutoPickRuntimeLists,
+    AutoPickTemplateLocator, AutoPickTickExecutionReport, AutoPickTickObservation,
+    AutoTrackActionPress, AutoTrackExecutionConfig, AutoTrackExecutionPlan,
+    AutoTrackExecutionReport, AutoTrackExecutionState, AutoTrackMainUiObservation,
+    AutoTrackMissionTextObservation, AutoTrackRuntime, AutoTrackRuntimeAction,
+    AutoTrackTeleportCandidate, AutoTrackTeleportObservation, AutoTrackTemplateLocator,
+    AutoTrackTemplateMatch, AutoTrackTrackingObservation, AutoWoodCleanupOutcome,
+    AutoWoodDelayOutcome, AutoWoodDelayReason, AutoWoodExecutionConfig, AutoWoodExecutionPlan,
+    AutoWoodExecutionReport, AutoWoodGadgetOutcome, AutoWoodGarbageCollectionOutcome,
+    AutoWoodInputAction, AutoWoodInputOutcome, AutoWoodOcrOutcome, AutoWoodRefreshOutcome,
+    AutoWoodRefreshStrategy, AutoWoodRuntime, AutoWoodRuntimeRoundContext, AutoWoodStartupOutcome,
+    AutoWoodTemplateLocator, AutoWoodThirdPartyLoginMode, AutoWoodThirdPartyLoginOutcome,
+    AutoWoodWindowOutcome, BattlePassClaimAllRule, BattlePassClaimScope,
+    BattlePassRewardTextCandidate, BlessingOfTheWelkinMoonExecutionPlan,
+    BlessingOfTheWelkinMoonExecutionReport, CancellableCommonJobClock, CheckRewardsExecutionPlan,
+    CheckRewardsExecutionReport, CheckRewardsRuntime, CheckRewardsTextCandidate,
+    ChooseTalkOptionCandidate, ChooseTalkOptionExecutionPlan, ChooseTalkOptionExecutionReport,
+    ChooseTalkOptionOcrRule, ChooseTalkOptionOrangeRule, ChooseTalkOptionRuntime,
+    ClaimBattlePassRewardsExecutionPlan, ClaimBattlePassRewardsExecutionReport,
+    ClaimBattlePassRewardsRuntime, ClaimEncounterPointsRewardsExecutionPlan,
+    ClaimEncounterPointsRewardsExecutionReport, ClaimEncounterPointsRewardsOcrRule,
+    ClaimEncounterPointsRewardsRuntime, ClaimEncounterPointsRewardsTextCandidate,
+    ClaimMailRewardsExecutionPlan, ClaimMailRewardsExecutionReport,
+    CombatActiveAvatarDetectionResult, CombatCommandPlaybackMode, CombatTeamPlaybackExecution,
+    CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource, CommonJobInputDriver,
+    CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome, CommonJobStepAction,
+    CountInventoryGridIconMatch, CountInventoryGridItemFrame, CountInventoryItemExecutionPlan,
+    CountInventoryItemExecutionReport, CountInventoryOpenInventoryOutcome,
+    CountInventoryOpenInventoryRule, DispatcherRuntime, GoToAdventurersGuildExecutionPlan,
+    GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
+    GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
+    GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
+    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
+    GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan,
+    GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition,
+    GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule,
+    GridScrollRule, GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
+    IndependentTaskLiveExecutionReport, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
+    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
+    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
+    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
+    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
+    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
+    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
+    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
+    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
+    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
+    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
+    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
+    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
+    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
+    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
+    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScriptDispatcherExecutionPlan, ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan,
     SetTimeExecutionReport, ShellConfig, ShellExecutionResult, SwitchPartyChooseMenuRule,
     SwitchPartyConfirmRule, SwitchPartyExecutionPlan, SwitchPartyExecutionReport,
@@ -3711,18 +3713,11 @@ fn task_execute_auto_pathing_action_boundary(
         };
 
         let game_window = find_desktop_game_window(&config);
-        let capture_size = desktop_common_job_capture_size(game_window.as_ref());
-        let boundary = execute_auto_pathing_action_boundary_with_live_executor(
+        let boundary = execute_desktop_auto_pathing_action_boundary_live_plan(
+            &config,
+            game_window.as_ref(),
+            Arc::clone(&script_cancellation),
             &plan,
-            capture_size,
-            |common_job_plan| {
-                execute_desktop_common_job_live_plan(
-                    &config,
-                    game_window.as_ref(),
-                    Arc::clone(&script_cancellation),
-                    common_job_plan,
-                )
-            },
         )
         .map_err(|error| error.to_string())?;
 
@@ -6818,6 +6813,20 @@ fn execute_desktop_independent_task_live_plan(
     plan: &bgi_task::TaskInvocationPlan,
 ) -> bgi_task::Result<Option<IndependentTaskLiveExecutionReport>> {
     match plan.task_key.as_deref() {
+        Some("AutoPathing") => {
+            let auto_pathing_config = AutoPathingExecutionConfig::from_value(plan.config.as_ref());
+            let auto_pathing_plan = plan_auto_pathing(app_root, &auto_pathing_config.route)?;
+            let report = execute_desktop_auto_pathing_action_boundary_live_plan(
+                config,
+                game_window,
+                cancellation,
+                &auto_pathing_plan,
+            )
+            .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(
+                IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report),
+            ))
+        }
         Some(USE_REDEEM_CODE_TASK_KEY) => {
             let redeem_config = UseRedeemCodeExecutionConfig::from_value(plan.config.as_ref());
             if redeem_config.codes.is_empty() {
@@ -6954,6 +6963,41 @@ fn execute_desktop_independent_task_live_plan(
         }
         _ => Ok(None),
     }
+}
+
+fn execute_desktop_auto_pathing_action_boundary_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    plan: &AutoPathingExecutionPlan,
+) -> Result<AutoPathingActionBoundaryReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("AutoPathing action boundary live execution cancelled".to_string());
+    }
+
+    let window = game_window.ok_or_else(|| {
+        "AutoPathing action boundary live execution requires a detected game window".to_string()
+    })?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let preflight =
+        evaluate_auto_pathing_resolution_preflight(&plan.execution_plan.preflight, capture_size);
+    if !matches!(
+        preflight.status,
+        AutoPathingResolutionPreflightStatus::Passed
+            | AutoPathingResolutionPreflightStatus::Skipped
+    ) {
+        return Err(preflight.message);
+    }
+
+    execute_auto_pathing_action_boundary_with_live_executor(plan, capture_size, |common_job_plan| {
+        execute_desktop_common_job_live_plan(
+            config,
+            game_window,
+            Arc::clone(&cancellation),
+            common_job_plan,
+        )
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn execute_desktop_turn_around_macro_live_plan(
@@ -19231,6 +19275,102 @@ mod tests {
     }
 
     #[test]
+    fn desktop_independent_task_live_plan_reports_auto_pathing_missing_game_window() {
+        let root = desktop_test_temp_root("auto-pathing-missing-window");
+        write_desktop_auto_pathing_log_route(&root);
+        let plan = desktop_auto_pathing_log_route_invocation_plan();
+
+        let error = execute_desktop_independent_task_live_plan(
+            &root,
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoPathing action boundary live execution requires a detected game window")
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_rejects_auto_pathing_non_16_9_window() {
+        let root = desktop_test_temp_root("auto-pathing-non-16-9");
+        write_desktop_auto_pathing_log_route(&root);
+        let plan = desktop_auto_pathing_log_route_invocation_plan();
+        let window = desktop_test_game_window(1024, 768);
+
+        let error = execute_desktop_independent_task_live_plan(
+            &root,
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message) if message.contains("不是 16:9")
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_runs_auto_pathing_action_boundary() {
+        let root = desktop_test_temp_root("auto-pathing-action-boundary");
+        write_desktop_auto_pathing_log_route(&root);
+        let plan = desktop_auto_pathing_log_route_invocation_plan();
+        let window = desktop_test_game_window(1920, 1080);
+
+        let live_report = execute_desktop_independent_task_live_plan(
+            &root,
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap()
+        .expect("expected AutoPathing live boundary report");
+
+        assert_eq!(live_report.task_name(), "AutoPathing");
+        assert!(!live_report.completed());
+        let IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report) = live_report
+        else {
+            panic!("expected AutoPathing action-boundary report");
+        };
+
+        assert!(report.boundary_completed);
+        assert!(!report.native_pathing_completed);
+        assert_eq!(report.executed_actions, 0);
+        assert_eq!(report.invalid_actions, 0);
+        assert!(report.unsupported_phases > 0);
+        let action_report = report
+            .waypoint_reports
+            .iter()
+            .find_map(|waypoint| waypoint.action_report.as_ref())
+            .expect("expected log_output action report");
+        assert_eq!(
+            action_report.status,
+            bgi_task::PathingBoundaryStatus::Reported
+        );
+        assert!(action_report.message.contains("desktop live route reached"));
+        assert!(report
+            .waypoint_reports
+            .iter()
+            .flat_map(|waypoint| waypoint.phase_reports.iter())
+            .any(|phase| {
+                phase.phase == bgi_core::PathingWaypointPhase::MoveTo
+                    && phase.status == bgi_task::PathingBoundaryStatus::Unsupported
+            }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn desktop_independent_task_live_plan_reports_auto_music_performance_missing_game_window() {
         let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
             bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
@@ -19553,6 +19693,34 @@ mod tests {
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
         std::env::temp_dir().join(format!("bettergi-desktop-{name}-{suffix}"))
+    }
+
+    fn desktop_auto_pathing_log_route_invocation_plan() -> bgi_task::TaskInvocationPlan {
+        bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: "AutoPathing".to_string(),
+                config: serde_json::json!({
+                    "route": "liyue/live_log_route.json"
+                }),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap()
+    }
+
+    fn write_desktop_auto_pathing_log_route(root: &Path) {
+        let route_dir = root.join("User").join("AutoPathing").join("liyue");
+        fs::create_dir_all(&route_dir).unwrap();
+        fs::write(
+            route_dir.join("live_log_route.json"),
+            r#"{
+                "info": { "name": "desktop live log route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "walk", "action": "log_output", "action_params": "desktop live route reached" }
+                ]
+            }"#,
+        )
+        .unwrap();
     }
 
     #[test]

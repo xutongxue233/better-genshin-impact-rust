@@ -29,6 +29,7 @@ use crate::auto_music_game::{
     AutoMusicPerformanceStopReason,
 };
 use crate::auto_open_chest::AutoOpenChestExecutionReport;
+use crate::auto_pathing::AutoPathingActionBoundaryReport;
 use crate::auto_pick::{
     plan_auto_pick, AutoPickExecutionConfig, AutoPickExecutionPlan, AutoPickTickExecutionReport,
     AUTO_PICK_TASK_KEY,
@@ -457,6 +458,7 @@ pub enum IndependentTaskLiveExecutionReport {
     AutoDomain(AutoDomainExecutionReport),
     AutoGeniusInvokation(AutoGeniusInvokationExecutionReport),
     AutoLeyLineOutcrop(AutoLeyLineOutcropExecutionReport),
+    AutoPathingActionBoundary(AutoPathingActionBoundaryReport),
     AutoStygianOnslaught(AutoStygianOnslaughtExecutionReport),
     AutoOpenChest(AutoOpenChestExecutionReport),
     AutoMusicGamePerformance(AutoMusicPerformanceReport),
@@ -480,6 +482,7 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoDomain(_) => "AutoDomain",
             IndependentTaskLiveExecutionReport::AutoGeniusInvokation(_) => "AutoGeniusInvokation",
             IndependentTaskLiveExecutionReport::AutoLeyLineOutcrop(_) => "AutoLeyLineOutcrop",
+            IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(_) => "AutoPathing",
             IndependentTaskLiveExecutionReport::AutoStygianOnslaught(_) => "AutoStygianOnslaught",
             IndependentTaskLiveExecutionReport::AutoOpenChest(_) => "AutoOpenChest",
             IndependentTaskLiveExecutionReport::AutoMusicGamePerformance(_) => {
@@ -507,6 +510,9 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoDomain(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoGeniusInvokation(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoLeyLineOutcrop(report) => report.completed,
+            IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report) => {
+                report.native_pathing_completed
+            }
             IndependentTaskLiveExecutionReport::AutoStygianOnslaught(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoOpenChest(report) => report.completed,
             IndependentTaskLiveExecutionReport::AutoMusicGamePerformance(report) => {
@@ -545,6 +551,9 @@ impl IndependentTaskLiveExecutionReport {
             }
             IndependentTaskLiveExecutionReport::AutoLeyLineOutcrop(report) => {
                 report.executed_actions.len()
+            }
+            IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report) => {
+                report.executed_actions
             }
             IndependentTaskLiveExecutionReport::AutoStygianOnslaught(report) => {
                 report.executed_actions.len()
@@ -604,6 +613,9 @@ impl IndependentTaskLiveExecutionReport {
             }
             IndependentTaskLiveExecutionReport::AutoLeyLineOutcrop(report) => {
                 report.skipped_steps.len()
+            }
+            IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report) => {
+                report.skipped_actions
             }
             IndependentTaskLiveExecutionReport::AutoStygianOnslaught(report) => {
                 report.skipped_steps.len()
