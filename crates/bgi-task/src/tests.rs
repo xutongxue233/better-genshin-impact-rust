@@ -20408,14 +20408,31 @@ fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phase
     assert_eq!(report.executed_actions, 1);
     assert_eq!(report.invalid_actions, 0);
     assert!(report.unsupported_phases >= 3);
-    assert!(report
+    let teleport_phase = report
         .waypoint_reports
         .iter()
         .flat_map(|waypoint| waypoint.phase_reports.iter())
-        .any(|phase| {
+        .find(|phase| {
             phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport
                 && phase.status == PathingBoundaryStatus::Unsupported
-        }));
+        })
+        .expect("expected teleport phase report");
+    assert_eq!(
+        teleport_phase.common_job_task_key.as_deref(),
+        Some(TELEPORT_TASK_KEY)
+    );
+    let Some(CommonJobExecutionPlan::Teleport(teleport_plan)) =
+        teleport_phase.common_job_plan.as_ref()
+    else {
+        panic!("expected Teleport common-job plan");
+    };
+    assert!(!teleport_plan.force);
+    let teleport_target = teleport_plan.target.as_ref().unwrap();
+    assert_eq!((teleport_target.x, teleport_target.y), (1.0, 2.0));
+    assert_eq!(teleport_target.map_name.as_deref(), Some("Teyvat"));
+    assert!(teleport_phase
+        .reason
+        .contains("Teleport common-job contract"));
     assert!(report
         .waypoint_reports
         .iter()
@@ -20650,6 +20667,19 @@ fn auto_pathing_action_boundary_reports_force_tp_teleport_intent() {
     assert!(teleport_phase.reason.contains("force_tp teleport intent"));
     assert!(teleport_phase.reason.contains("native TpTask dispatch"));
     assert!(teleport_phase.reason.contains("force_teleport=true"));
+    assert_eq!(
+        teleport_phase.common_job_task_key.as_deref(),
+        Some(TELEPORT_TASK_KEY)
+    );
+    let Some(CommonJobExecutionPlan::Teleport(teleport_plan)) =
+        teleport_phase.common_job_plan.as_ref()
+    else {
+        panic!("expected Teleport common-job plan");
+    };
+    assert!(teleport_plan.force);
+    let teleport_target = teleport_plan.target.as_ref().unwrap();
+    assert_eq!((teleport_target.x, teleport_target.y), (9282.7, -2163.58));
+    assert_eq!(teleport_target.map_name.as_deref(), Some("Teyvat"));
 
     let _ = fs::remove_dir_all(root);
 }
