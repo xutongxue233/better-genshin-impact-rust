@@ -6447,7 +6447,7 @@ fn execute_desktop_script_dispatcher_live_plan(
                 .map_err(TaskError::CommonJobExecution)
         }
         ScriptDispatcherExecutionPlan::AutoEatFood(plan) => {
-            execute_desktop_auto_eat_food_live(plan, cancellation)
+            execute_desktop_auto_eat_food_live(config, game_window, plan, cancellation)
                 .map(ScriptDispatcherLiveExecutionReport::AutoEatFood)
                 .map(Some)
         }
@@ -6456,6 +6456,8 @@ fn execute_desktop_script_dispatcher_live_plan(
 }
 
 fn execute_desktop_auto_eat_food_live(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
     plan: &AutoEatFoodExecutionPlan,
     cancellation: Arc<InputCancellationToken>,
 ) -> bgi_task::Result<AutoEatFoodExecutionReport> {
@@ -6465,6 +6467,14 @@ fn execute_desktop_auto_eat_food_live(
         ));
     }
     if matches!(plan.mode, AutoEatFoodPlanMode::InventoryFood { .. }) {
+        desktop_inventory_live_preflight(
+            config,
+            game_window,
+            "AutoEatFood inventory-food",
+            plan.capture_size,
+            &cancellation,
+        )
+        .map_err(TaskError::CommonJobExecution)?;
         return Err(TaskError::CommonJobExecution(
             "AutoEatFood inventory-food live execution requires desktop inventory grid/ONNX/OCR/click adapters"
                 .to_string(),
@@ -11119,26 +11129,56 @@ fn desktop_common_job_global_input(
     ))
 }
 
+fn desktop_inventory_live_preflight(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    task_name: &str,
+    plan_capture_size: VisionSize,
+    cancellation: &InputCancellationToken,
+) -> Result<VisionSize, String> {
+    if cancellation.is_cancelled() {
+        return Err(format!("{task_name} live execution cancelled"));
+    }
+    let Some(window) = game_window else {
+        return Err(format!(
+            "{task_name} live execution requires a detected game window"
+        ));
+    };
+    let metrics = window
+        .metrics
+        .ok_or_else(|| format!("{task_name} live execution requires game window metrics"))?;
+    let capture_mode = native_capture_mode(&config.capture_mode);
+    if !matches!(capture_mode, NativeCaptureMode::BitBlt) {
+        return Err(format!(
+            "{task_name} live execution requires the BitBlt capture backend"
+        ));
+    }
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan_capture_size != capture_size {
+        return Err(format!(
+            "{task_name} live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan_capture_size.width,
+            plan_capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    Ok(capture_size)
+}
+
 fn execute_desktop_count_inventory_item_live(
     config: &AppConfig,
     window: &GameWindowMatch,
     plan: &CountInventoryItemExecutionPlan,
     cancellation: Arc<InputCancellationToken>,
 ) -> Result<CountInventoryItemExecutionReport, String> {
-    if cancellation.is_cancelled() {
-        return Err("CountInventoryItem live execution cancelled".to_string());
-    }
-    let (_global_input, capture_size) =
-        desktop_common_job_global_input(config, window, "CountInventoryItem")?;
-    if plan.capture_size != capture_size {
-        return Err(format!(
-            "CountInventoryItem live execution requires plan capture size {}x{} to match current capture size {}x{}",
-            plan.capture_size.width,
-            plan.capture_size.height,
-            capture_size.width,
-            capture_size.height
-        ));
-    }
+    desktop_inventory_live_preflight(
+        config,
+        Some(window),
+        "CountInventoryItem",
+        plan.capture_size,
+        &cancellation,
+    )?;
     Err(
         "CountInventoryItem live execution requires desktop inventory grid/ONNX/OCR/click adapters"
             .to_string(),
@@ -18832,6 +18872,22 @@ mod tests {
             &AppConfig::default(),
             None,
             Arc::new(InputCancellationToken::new()),
+            &ScriptDispatcherExecutionPlan::AutoEatFood(plan.clone()),
+        )
+        .unwrap_err();
+
+        let TaskError::CommonJobExecution(message) = error else {
+            panic!("expected AutoEatFood common-job execution error");
+        };
+        assert!(message
+            .contains("AutoEatFood inventory-food live execution requires a detected game window"));
+        assert!(!message.contains("inventory grid/ONNX/OCR/click adapters"));
+
+        let window = desktop_test_game_window(1920, 1080);
+        let error = execute_desktop_script_dispatcher_live_plan(
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
             &ScriptDispatcherExecutionPlan::AutoEatFood(plan),
         )
         .unwrap_err();
@@ -18839,7 +18895,106 @@ mod tests {
         assert!(matches!(
             error,
             TaskError::CommonJobExecution(message)
-                if message.contains("inventory grid/ONNX/OCR/click adapters")
+                if message.contains("AutoEatFood inventory-food live execution requires desktop inventory grid/ONNX/OCR/click adapters")
+        ));
+    }
+
+    #[test]
+    fn desktop_inventory_live_preflight_reports_shared_capture_boundaries() {
+        let count_plan = bgi_task::plan_common_job(
+            bgi_task::COUNT_INVENTORY_ITEM_TASK_KEY,
+            Some(&serde_json::json!({
+                "gridScreenName": "Materials",
+                "itemName": "晶核"
+            })),
+        )
+        .unwrap()
+        .unwrap();
+        let CommonJobExecutionPlan::CountInventoryItem(count_plan) = count_plan else {
+            panic!("expected CountInventoryItem plan");
+        };
+        let small_window = desktop_test_game_window(1280, 720);
+
+        let count_error = execute_desktop_count_inventory_item_live(
+            &AppConfig::default(),
+            &small_window,
+            &count_plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(count_error.contains(
+            "CountInventoryItem live execution requires plan capture size 1920x1080 to match current capture size 1280x720"
+        ));
+        assert!(!count_error.contains("inventory grid/ONNX/OCR/click adapters"));
+
+        let wgc_config = AppConfig {
+            capture_mode: bgi_core::CaptureMode::WindowsGraphicsCapture,
+            ..AppConfig::default()
+        };
+        let bit_blt_error = execute_desktop_count_inventory_item_live(
+            &wgc_config,
+            &desktop_test_game_window(1920, 1080),
+            &count_plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(bit_blt_error
+            .contains("CountInventoryItem live execution requires the BitBlt capture backend"));
+        assert!(!bit_blt_error.contains("inventory grid/ONNX/OCR/click adapters"));
+
+        let auto_eat_plan = bgi_task::plan_auto_eat_food(
+            bgi_task::AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+                "foodName": "甜甜花酿鸡"
+            })))
+            .unwrap(),
+        )
+        .unwrap();
+        let auto_eat_error = execute_desktop_script_dispatcher_live_plan(
+            &AppConfig::default(),
+            Some(&small_window),
+            Arc::new(InputCancellationToken::new()),
+            &ScriptDispatcherExecutionPlan::AutoEatFood(auto_eat_plan),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            auto_eat_error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoEatFood inventory-food live execution requires plan capture size 1920x1080 to match current capture size 1280x720")
+                    && !message.contains("inventory grid/ONNX/OCR/click adapters")
+        ));
+    }
+
+    #[test]
+    fn desktop_auto_eat_food_inventory_preflight_requires_bit_blt_capture_backend() {
+        let plan = bgi_task::plan_auto_eat_food(
+            bgi_task::AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+                "foodName": "甜甜花酿鸡"
+            })))
+            .unwrap(),
+        )
+        .unwrap();
+        let window = desktop_test_game_window(1920, 1080);
+        let config = AppConfig {
+            capture_mode: bgi_core::CaptureMode::WindowsGraphicsCapture,
+            ..AppConfig::default()
+        };
+
+        let error = execute_desktop_script_dispatcher_live_plan(
+            &config,
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+            &ScriptDispatcherExecutionPlan::AutoEatFood(plan),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("AutoEatFood inventory-food live execution requires the BitBlt capture backend")
+                    && !message.contains("inventory grid/ONNX/OCR/click adapters")
         ));
     }
 
