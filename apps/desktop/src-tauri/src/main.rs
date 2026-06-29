@@ -127,29 +127,29 @@ use bgi_task::{
     CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
     CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
     GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildStepAction,
-    GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
-    GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
-    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
-    GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan,
-    GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition,
-    GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule,
-    GridScrollRule, GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
-    IndependentTaskLiveExecutionReport, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
-    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
-    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
-    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
-    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
-    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
-    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
-    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
-    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
-    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
-    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
-    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
-    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
-    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
-    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
-    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
+    GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
+    GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
+    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode,
+    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
+    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
+    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
+    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
+    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
+    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
+    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
+    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
+    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
+    QuickSereniteaPotExecutionReport, QuickSereniteaPotInteractionOutcome,
+    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
+    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
+    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
+    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
+    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
+    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
+    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
+    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScriptDispatcherExecutionPlan, ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan,
     SetTimeExecutionReport, ShellConfig, ShellExecutionResult, SwitchPartyChooseMenuRule,
     SwitchPartyConfirmRule, SwitchPartyExecutionPlan, SwitchPartyExecutionReport,
@@ -11388,7 +11388,7 @@ fn execute_desktop_go_to_adventurers_guild_live(
     }
     desktop_go_to_adventurers_guild_live_preflight(plan)?;
     Err(
-        "GoToAdventurersGuild live execution requires desktop nested common-job adapter plumbing"
+        "GoToAdventurersGuild live execution requires desktop runtime adapter wiring after preflight"
             .to_string(),
     )
 }
@@ -11397,23 +11397,70 @@ fn desktop_go_to_adventurers_guild_live_preflight(
     plan: &GoToAdventurersGuildExecutionPlan,
 ) -> Result<(), String> {
     for step in &plan.steps {
+        if !desktop_go_to_adventurers_guild_preflight_condition_applies(plan, step.condition) {
+            continue;
+        }
         match &step.action {
+            GoToAdventurersGuildStepAction::CommonJob { task_key, .. } => {
+                if !desktop_go_to_adventurers_guild_nested_common_job_bridge_available(task_key) {
+                    return Err(format!(
+                        "GoToAdventurersGuild live execution has no desktop bridge for nested common-job {task_key} at phase {:?} ({})",
+                        step.phase, step.label
+                    ));
+                }
+            }
             GoToAdventurersGuildStepAction::Pathing { rule } => {
                 return Err(format!(
-                    "GoToAdventurersGuild live execution requires native PathExecutor adapter for {}",
-                    rule.pathing_json
+                    "GoToAdventurersGuild live execution requires native PathExecutor adapter at phase {:?} ({}) for {}",
+                    step.phase, step.label, rule.pathing_json
                 ));
             }
             GoToAdventurersGuildStepAction::InteractionRetry { .. } => {
-                return Err(
-                    "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter at phase {:?} ({})",
+                    step.phase, step.label
+                ));
+            }
+            GoToAdventurersGuildStepAction::SelectLastTalkOptionUntilEnd { .. } => {
+                if step.condition == GoToAdventurersGuildStepCondition::WhenTalkUiStillOpen {
+                    return Err(format!(
+                        "GoToAdventurersGuild live execution requires desktop talk UI probe/drain adapter at phase {:?} ({})",
+                        step.phase, step.label
+                    ));
+                }
+                return Err(format!(
+                    "GoToAdventurersGuild live execution requires desktop talk-option drain adapter at phase {:?} ({})",
+                    step.phase, step.label
+                ));
             }
             _ => {}
         }
     }
     Ok(())
+}
+
+fn desktop_go_to_adventurers_guild_preflight_condition_applies(
+    plan: &GoToAdventurersGuildExecutionPlan,
+    condition: GoToAdventurersGuildStepCondition,
+) -> bool {
+    match condition {
+        GoToAdventurersGuildStepCondition::WhenDailyRewardPartyConfigured => plan
+            .daily_reward_party_name
+            .as_deref()
+            .is_some_and(|party_name| !party_name.trim().is_empty()),
+        GoToAdventurersGuildStepCondition::WhenOnlyDoOnceFalse => !plan.only_do_once,
+        _ => true,
+    }
+}
+
+fn desktop_go_to_adventurers_guild_nested_common_job_bridge_available(task_key: &str) -> bool {
+    matches!(
+        task_key,
+        bgi_task::SWITCH_PARTY_TASK_KEY
+            | bgi_task::CLAIM_ENCOUNTER_POINTS_REWARDS_TASK_KEY
+            | bgi_task::CHOOSE_TALK_OPTION_TASK_KEY
+            | bgi_task::RETURN_MAIN_UI_TASK_KEY
+    )
 }
 
 fn execute_desktop_go_to_serenitea_pot_live(
@@ -11438,7 +11485,7 @@ fn execute_desktop_go_to_serenitea_pot_live(
     }
     desktop_go_to_serenitea_pot_live_preflight(plan)?;
     Err(
-        "GoToSereniteaPot live execution requires desktop nested common-job adapter plumbing"
+        "GoToSereniteaPot live execution requires desktop runtime adapter wiring after preflight"
             .to_string(),
     )
 }
@@ -16605,7 +16652,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_adventurers_guild_live_preflight_rejects_before_nested_jobs() {
+    fn desktop_go_to_adventurers_guild_preflight_rejects_pathing_after_supported_nested_jobs() {
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) =
             bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
         else {
@@ -16616,7 +16663,194 @@ mod tests {
 
         assert!(error
             .contains("GoToAdventurersGuild live execution requires native PathExecutor adapter"));
+        assert!(error.contains("Pathing"));
+        assert!(error.contains("path to adventurers guild and press interaction"));
         assert!(error.contains("GameTask/Common/Element/Assets/Json/冒险家协会_"));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_preflight_skips_unknown_nested_when_static_condition_false()
+    {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut default_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        default_plan.steps[1].action = GoToAdventurersGuildStepAction::CommonJob {
+            task_key: "SkippedUnsupportedPartyJob".to_string(),
+            config: None,
+        };
+
+        let default_error =
+            desktop_go_to_adventurers_guild_live_preflight(&default_plan).unwrap_err();
+
+        assert!(default_error.contains("native PathExecutor adapter"));
+        assert!(!default_error.contains("SkippedUnsupportedPartyJob"));
+
+        let config = serde_json::json!({
+            "onlyDoOnce": true
+        });
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut only_once_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, Some(&config))
+                .unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        only_once_plan.steps[2].action = GoToAdventurersGuildStepAction::CommonJob {
+            task_key: "SkippedUnsupportedEncounterJob".to_string(),
+            config: None,
+        };
+
+        let only_once_error =
+            desktop_go_to_adventurers_guild_live_preflight(&only_once_plan).unwrap_err();
+
+        assert!(only_once_error.contains("native PathExecutor adapter"));
+        assert!(!only_once_error.contains("SkippedUnsupportedEncounterJob"));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_preflight_skips_static_conditions() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(default_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        let config = serde_json::json!({
+            "dailyRewardPartyName": "daily",
+            "onlyDoOnce": true
+        });
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(configured_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, Some(&config))
+                .unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+
+        assert!(
+            !desktop_go_to_adventurers_guild_preflight_condition_applies(
+                &default_plan,
+                GoToAdventurersGuildStepCondition::WhenDailyRewardPartyConfigured
+            )
+        );
+        assert!(desktop_go_to_adventurers_guild_preflight_condition_applies(
+            &default_plan,
+            GoToAdventurersGuildStepCondition::WhenOnlyDoOnceFalse
+        ));
+        assert!(desktop_go_to_adventurers_guild_preflight_condition_applies(
+            &configured_plan,
+            GoToAdventurersGuildStepCondition::WhenDailyRewardPartyConfigured
+        ));
+        assert!(
+            !desktop_go_to_adventurers_guild_preflight_condition_applies(
+                &configured_plan,
+                GoToAdventurersGuildStepCondition::WhenOnlyDoOnceFalse
+            )
+        );
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_preflight_rejects_unknown_nested_bridge() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        plan.steps.insert(
+            1,
+            bgi_task::GoToAdventurersGuildStep {
+                phase: bgi_task::GoToAdventurersGuildStepPhase::Setup,
+                condition: GoToAdventurersGuildStepCondition::Always,
+                label: "probe unsupported nested bridge".to_string(),
+                action: GoToAdventurersGuildStepAction::CommonJob {
+                    task_key: "UnsupportedNestedJob".to_string(),
+                    config: None,
+                },
+            },
+        );
+
+        let error = desktop_go_to_adventurers_guild_live_preflight(&plan).unwrap_err();
+
+        assert!(error.contains(
+            "GoToAdventurersGuild live execution has no desktop bridge for nested common-job UnsupportedNestedJob"
+        ));
+        assert!(error.contains("probe unsupported nested bridge"));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_preflight_reports_next_adapter_boundaries() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut catherine_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        for step in &mut catherine_plan.steps {
+            if matches!(step.action, GoToAdventurersGuildStepAction::Pathing { .. }) {
+                step.action = GoToAdventurersGuildStepAction::Log {
+                    message: "skip pathing blocker in desktop preflight test".to_string(),
+                };
+            }
+        }
+
+        let catherine_error =
+            desktop_go_to_adventurers_guild_live_preflight(&catherine_plan).unwrap_err();
+
+        assert!(catherine_error.contains("desktop Catherine interaction adapter"));
+        assert!(catherine_error.contains("Pathing"));
+        assert!(catherine_error.contains("retry Catherine interaction until talk UI opens"));
+
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut daily_drain_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        for step in &mut daily_drain_plan.steps {
+            if matches!(
+                step.action,
+                GoToAdventurersGuildStepAction::Pathing { .. }
+                    | GoToAdventurersGuildStepAction::InteractionRetry { .. }
+            ) {
+                step.action = GoToAdventurersGuildStepAction::Log {
+                    message: "skip earlier blocker in desktop preflight test".to_string(),
+                };
+            }
+        }
+
+        let daily_drain_error =
+            desktop_go_to_adventurers_guild_live_preflight(&daily_drain_plan).unwrap_err();
+
+        assert!(daily_drain_error.contains("desktop talk-option drain adapter"));
+        assert!(daily_drain_error.contains("DailyReward"));
+        assert!(daily_drain_error.contains("select trailing dialogue options after daily reward"));
+
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut cleanup_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+        for step in &mut cleanup_plan.steps {
+            if matches!(
+                step.action,
+                GoToAdventurersGuildStepAction::Pathing { .. }
+                    | GoToAdventurersGuildStepAction::InteractionRetry { .. }
+            ) || (step.condition
+                == GoToAdventurersGuildStepCondition::WhenDailyRewardOptionFound
+                && matches!(
+                    step.action,
+                    GoToAdventurersGuildStepAction::SelectLastTalkOptionUntilEnd { .. }
+                ))
+            {
+                step.action = GoToAdventurersGuildStepAction::Log {
+                    message: "skip earlier blocker in desktop preflight test".to_string(),
+                };
+            }
+        }
+
+        let cleanup_error =
+            desktop_go_to_adventurers_guild_live_preflight(&cleanup_plan).unwrap_err();
+
+        assert!(cleanup_error.contains("desktop talk UI probe/drain adapter"));
+        assert!(cleanup_error.contains("Cleanup"));
+        assert!(cleanup_error.contains("select last option to exit remaining dialogue"));
     }
 
     #[test]
