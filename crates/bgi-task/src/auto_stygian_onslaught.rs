@@ -2584,7 +2584,7 @@ fn pending_native(artifact_salvage_enabled: bool, team_switch_enabled: bool) -> 
         "CombatScriptParser, CombatScenes team recognition, avatar switching, combat command loop, and AutoFight FightStatusFlag adapters remain pending".to_string(),
         "domain-end detection thread, cancellation coordination, key release, and result-state OCR adapters remain pending".to_string(),
         "ResinStatus OCR, AutoDomainTask.PressUseResin button matching, continuation/exit clicks, and reward notification adapters remain pending".to_string(),
-        "WalkToFTask and LowerHeadThenWalkToTask movement/camera adapters for key and leyline flower interaction remain pending".to_string(),
+        "Stygian key and leyline flower interaction orchestration still needs to call the migrated WalkToFTask/LowerHeadThenWalkToTask live bridges and wire reward-result OCR retries".to_string(),
     ];
     if team_switch_enabled {
         pending.push("preset-team panel OCR, scroll/drag selection, repeated team-name click, and fallback panel close adapters remain pending".to_string());

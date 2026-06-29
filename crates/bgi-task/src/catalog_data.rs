@@ -591,7 +591,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the lower-head tracking, target alignment, F-key OCR-result, and cleanup state machine through injectable hooks and invocation live bridge; desktop concrete capture/mouse/OCR adapters remain pending.",
+        notes: "Rust now preserves and executes the lower-head tracking, target alignment, F-key OCR-result, and cleanup state machine through injectable hooks and invocation live bridge; desktop live phase 1 wires BitBlt capture, PureRust target/F-key template matching, WinRT F-key text OCR, SendInput camera/W movement, and no-op overlay cleanup while Paddle OCR white-text cropping and real overlay drawing remain pending.",
     },
     TaskCatalogEntry {
         key: "LinneaMining",

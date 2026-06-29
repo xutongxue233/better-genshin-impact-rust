@@ -1,6 +1,7 @@
 use super::{image_locator, task_vision_result};
-use crate::{Result, TaskPortState};
-use bgi_core::GenshinAction;
+use crate::{Result, TaskError, TaskPortState};
+use bgi_core::{GenshinAction, KeyBindingsConfig};
+use bgi_input::{input_events_for_action, InputEvent, KeyActionType};
 use bgi_vision::{BvLocatorOperation, BvLocatorPlan, BvPage, Size};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -137,6 +138,33 @@ pub enum LowerHeadThenWalkToStepResult {
     Activated,
     InitialTargetMissing,
     Timeout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LowerHeadThenWalkToTrackingObservation {
+    pub capture_size: Size,
+    pub target_rect: Option<bgi_vision::Rect>,
+    pub activation_text_detected: bool,
+    pub elapsed_ms: u32,
+    pub previous_move_x: i32,
+    pub dpi_scale: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LowerHeadThenWalkToTrackingDecisionKind {
+    TargetMissing,
+    TargetBelowCenter,
+    TurnAndWalk,
+    Activated,
+    Timeout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LowerHeadThenWalkToTrackingDecision {
+    pub kind: LowerHeadThenWalkToTrackingDecisionKind,
+    pub result: Option<LowerHeadThenWalkToStepResult>,
+    pub next_previous_move_x: i32,
+    pub input_events: Vec<InputEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,8 +345,148 @@ pub fn plan_lower_head_then_walk_to(
         movement_rule,
         f_key_rule,
         steps,
-        notes: "Legacy lower-head tracking loop is represented and executable through an injectable target tracking/F-key state machine with cleanup; desktop live capture, mouse, OCR, and overlay IO remain pending.".to_string(),
+        notes: "Legacy lower-head tracking loop is represented and executable through an injectable target tracking/F-key state machine with cleanup; desktop live phase 1 wires BitBlt capture, PureRust target/F-key template matching, WinRT F-key text OCR, SendInput camera/W movement, and no-op overlay cleanup while Paddle OCR white-text cropping and real overlay drawing remain pending.".to_string(),
     })
+}
+
+pub fn reduce_lower_head_then_walk_to_tracking_frame(
+    observation: LowerHeadThenWalkToTrackingObservation,
+    movement_rule: &LowerHeadThenWalkToMovementRule,
+    key_bindings: &KeyBindingsConfig,
+    timeout_ms: u32,
+) -> Result<LowerHeadThenWalkToTrackingDecision> {
+    if observation.elapsed_ms > timeout_ms {
+        return Ok(LowerHeadThenWalkToTrackingDecision {
+            kind: LowerHeadThenWalkToTrackingDecisionKind::Timeout,
+            result: Some(LowerHeadThenWalkToStepResult::Timeout),
+            next_previous_move_x: observation.previous_move_x,
+            input_events: Vec::new(),
+        });
+    }
+
+    let Some(target_rect) = observation.target_rect else {
+        return Ok(LowerHeadThenWalkToTrackingDecision {
+            kind: LowerHeadThenWalkToTrackingDecisionKind::TargetMissing,
+            result: None,
+            next_previous_move_x: observation.previous_move_x,
+            input_events: lower_head_look_down_events(movement_rule),
+        });
+    };
+
+    let mut input_events = Vec::new();
+    let target_center = target_rect.center();
+    let center_y_threshold =
+        observation.capture_size.height as f64 * movement_rule.center_y_threshold_ratio;
+    if f64::from(target_center.y) > center_y_threshold {
+        input_events.push(InputEvent::MouseMoveRelative {
+            dx: movement_rule.target_below_center_mouse_dx,
+            dy: 0,
+        });
+        if movement_rule.target_below_center_release_forward {
+            input_events.extend(lower_head_move_forward_events(
+                key_bindings,
+                KeyActionType::KeyUp,
+            )?);
+        }
+        return Ok(LowerHeadThenWalkToTrackingDecision {
+            kind: LowerHeadThenWalkToTrackingDecisionKind::TargetBelowCenter,
+            result: None,
+            next_previous_move_x: observation.previous_move_x,
+            input_events,
+        });
+    }
+
+    let dpi_scale = if observation.dpi_scale.is_finite() && observation.dpi_scale > 0.0 {
+        observation.dpi_scale
+    } else {
+        1.0
+    };
+    let raw_move_x = ((f64::from(target_center.x) - observation.capture_size.width as f64 / 2.0)
+        / movement_rule.direction_divisor
+        / dpi_scale) as i32;
+    let move_x = adjusted_lower_head_move_x(raw_move_x, movement_rule);
+    if move_x != 0 {
+        input_events.push(InputEvent::MouseMoveRelative { dx: move_x, dy: 0 });
+    }
+
+    let direction_reversed = observation.previous_move_x != 0
+        && move_x != 0
+        && observation.previous_move_x.signum() != move_x.signum();
+    let should_press_forward = movement_rule.press_forward_when_move_zero_or_direction_reversed
+        && (move_x == 0 || direction_reversed);
+    input_events.extend(lower_head_move_forward_events(
+        key_bindings,
+        if should_press_forward {
+            KeyActionType::KeyDown
+        } else {
+            KeyActionType::KeyUp
+        },
+    )?);
+
+    if observation.activation_text_detected {
+        input_events.extend(lower_head_move_forward_events(
+            key_bindings,
+            KeyActionType::KeyUp,
+        )?);
+        return Ok(LowerHeadThenWalkToTrackingDecision {
+            kind: LowerHeadThenWalkToTrackingDecisionKind::Activated,
+            result: Some(LowerHeadThenWalkToStepResult::Activated),
+            next_previous_move_x: move_x,
+            input_events,
+        });
+    }
+
+    input_events.extend(lower_head_look_down_events(movement_rule));
+    Ok(LowerHeadThenWalkToTrackingDecision {
+        kind: LowerHeadThenWalkToTrackingDecisionKind::TurnAndWalk,
+        result: None,
+        next_previous_move_x: move_x,
+        input_events,
+    })
+}
+
+fn adjusted_lower_head_move_x(move_x: i32, movement_rule: &LowerHeadThenWalkToMovementRule) -> i32 {
+    match move_x {
+        value
+            if value >= movement_rule.medium_turn_min_abs
+                && value < movement_rule.medium_turn_max_abs =>
+        {
+            movement_rule.medium_turn_boost + value
+        }
+        value
+            if value > -movement_rule.medium_turn_max_abs
+                && value <= -movement_rule.medium_turn_min_abs =>
+        {
+            -movement_rule.medium_turn_boost + value
+        }
+        value if value > 0 && value < movement_rule.small_turn_threshold => {
+            movement_rule.small_turn_boost + value
+        }
+        value if value > -movement_rule.small_turn_threshold && value < 0 => {
+            -movement_rule.small_turn_boost + value
+        }
+        value => value,
+    }
+}
+
+fn lower_head_look_down_events(movement_rule: &LowerHeadThenWalkToMovementRule) -> Vec<InputEvent> {
+    vec![
+        InputEvent::MouseMoveRelative {
+            dx: movement_rule.look_down_mouse_dx,
+            dy: movement_rule.look_down_mouse_dy,
+        },
+        InputEvent::Delay {
+            milliseconds: u64::from(movement_rule.loop_delay_ms),
+        },
+    ]
+}
+
+fn lower_head_move_forward_events(
+    key_bindings: &KeyBindingsConfig,
+    action_type: KeyActionType,
+) -> Result<Vec<InputEvent>> {
+    input_events_for_action(key_bindings, GenshinAction::MoveForward, action_type)
+        .map_err(|error| TaskError::CommonJobExecution(error.to_string()))
 }
 
 fn scaled_width(size: Size, value_1080p: u32) -> u32 {

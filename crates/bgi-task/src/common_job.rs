@@ -167,14 +167,16 @@ pub use common_job_linnea_mining::{
     LINNEA_MINING_MODEL_PATH, LINNEA_MINING_TASK_KEY,
 };
 pub use common_job_lower_head_then_walk_to::{
-    plan_lower_head_then_walk_to, LowerHeadThenWalkToActionPress,
-    LowerHeadThenWalkToExecutionConfig, LowerHeadThenWalkToExecutionPlan,
-    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToLocators, LowerHeadThenWalkToMovementRule,
-    LowerHeadThenWalkToStep, LowerHeadThenWalkToStepAction, LowerHeadThenWalkToStepCondition,
-    LowerHeadThenWalkToStepPhase, LowerHeadThenWalkToStepResult,
-    LOWER_HEAD_THEN_WALK_TO_ACTIVATION_TEXT, LOWER_HEAD_THEN_WALK_TO_DEFAULT_TARGET,
-    LOWER_HEAD_THEN_WALK_TO_DEFAULT_TIMEOUT_MS, LOWER_HEAD_THEN_WALK_TO_LOOP_DELAY_MS,
-    LOWER_HEAD_THEN_WALK_TO_PICK_KEY, LOWER_HEAD_THEN_WALK_TO_TASK_KEY,
+    plan_lower_head_then_walk_to, reduce_lower_head_then_walk_to_tracking_frame,
+    LowerHeadThenWalkToActionPress, LowerHeadThenWalkToExecutionConfig,
+    LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToLocators,
+    LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToStep, LowerHeadThenWalkToStepAction,
+    LowerHeadThenWalkToStepCondition, LowerHeadThenWalkToStepPhase, LowerHeadThenWalkToStepResult,
+    LowerHeadThenWalkToTrackingDecision, LowerHeadThenWalkToTrackingDecisionKind,
+    LowerHeadThenWalkToTrackingObservation, LOWER_HEAD_THEN_WALK_TO_ACTIVATION_TEXT,
+    LOWER_HEAD_THEN_WALK_TO_DEFAULT_TARGET, LOWER_HEAD_THEN_WALK_TO_DEFAULT_TIMEOUT_MS,
+    LOWER_HEAD_THEN_WALK_TO_LOOP_DELAY_MS, LOWER_HEAD_THEN_WALK_TO_PICK_KEY,
+    LOWER_HEAD_THEN_WALK_TO_TASK_KEY,
 };
 pub use common_job_one_key_expedition::{
     plan_one_key_expedition, plan_one_key_expedition_with_locators,

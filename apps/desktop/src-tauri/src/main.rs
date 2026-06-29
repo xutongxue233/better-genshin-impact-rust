@@ -73,24 +73,24 @@ use bgi_task::{
     execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
     execute_claim_mail_rewards_live, execute_go_to_crafting_bench_plan,
     execute_independent_task_live_if_available, execute_independent_task_with_cancel,
-    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
-    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
-    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
-    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
-    execute_team_context_combat_script_inputs, execute_teleport_plan, execute_use_redeem_code_plan,
-    execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
-    extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
-    plan_auto_eat, plan_auto_fight, plan_auto_fish, plan_auto_music_game, plan_auto_open_chest,
-    plan_auto_pathing, plan_auto_pick, plan_auto_wood, plan_quick_buy,
-    plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot, plan_quick_teleport,
-    plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
-    redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick,
-    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
-    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
-    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
-    AutoEatExecutionConfig, AutoEatExecutionPlan, AutoEatFoodExecutionPlan,
-    AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime, AutoEatRuntime,
-    AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    execute_lower_head_then_walk_to_plan, execute_macro_hotkey_plan,
+    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
+    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
+    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
+    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
+    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
+    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
+    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight,
+    plan_auto_fish, plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick,
+    plan_auto_wood, plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
+    plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
+    redeem_code_entries_from_strings, reduce_lower_head_then_walk_to_tracking_frame,
+    runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
+    switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
+    AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
+    AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
+    AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
+    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
@@ -141,6 +141,9 @@ use bgi_task::{
     GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
     GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
     IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
+    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
+    LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
     MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
     MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
     OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
@@ -6975,6 +6978,7 @@ fn execute_desktop_common_job_live_plan(
             | CommonJobExecutionPlan::GoToCraftingBench(_)
             | CommonJobExecutionPlan::GoToAdventurersGuild(_)
             | CommonJobExecutionPlan::GoToSereniteaPot(_)
+            | CommonJobExecutionPlan::LowerHeadThenWalkTo(_)
             | CommonJobExecutionPlan::WalkToF(_)
     ) {
         return Ok(None);
@@ -7084,6 +7088,15 @@ fn execute_desktop_common_job_live_plan(
             Arc::clone(&cancellation),
         )
         .map(CommonJobLiveExecutionReport::GoToSereniteaPot),
+        CommonJobExecutionPlan::LowerHeadThenWalkTo(plan) => {
+            execute_desktop_lower_head_then_walk_to_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::LowerHeadThenWalkTo)
+        }
         CommonJobExecutionPlan::WalkToF(plan) => {
             execute_desktop_walk_to_f_live(config, window, plan, Arc::clone(&cancellation))
                 .map(CommonJobLiveExecutionReport::WalkToF)
@@ -13407,6 +13420,312 @@ fn execute_desktop_walk_to_f_live(
     .map_err(|error| error.to_string())
 }
 
+fn execute_desktop_lower_head_then_walk_to_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &LowerHeadThenWalkToExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<LowerHeadThenWalkToExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("LowerHeadThenWalkTo live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "LowerHeadThenWalkTo")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "LowerHeadThenWalkTo live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "LowerHeadThenWalkTo live execution has no capture frame source".to_string()
+    })?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+    );
+    let mut runtime = DesktopLowerHeadThenWalkToRuntime::new(
+        common_runtime,
+        config.key_bindings_config.clone(),
+        plan.capture_size,
+        plan.timeout_ms,
+        cancellation,
+    );
+    execute_lower_head_then_walk_to_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopLowerHeadThenWalkToRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    key_bindings: KeyBindingsConfig,
+    capture_size: VisionSize,
+    timeout_ms: u32,
+    dpi_scale: f64,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl<F, I, C> DesktopLowerHeadThenWalkToRuntime<F, I, C> {
+    fn new(
+        common: PureTemplateCommonJobRuntime<F, I, C>,
+        key_bindings: KeyBindingsConfig,
+        capture_size: VisionSize,
+        timeout_ms: u32,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            common,
+            key_bindings,
+            capture_size,
+            timeout_ms,
+            dpi_scale: 1.0,
+            cancellation,
+        }
+    }
+}
+
+impl<F, I, C> DesktopLowerHeadThenWalkToRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "LowerHeadThenWalkTo live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_image_region(&mut self) -> bgi_task::Result<ImageRegion> {
+        self.ensure_not_cancelled()?;
+        let image = self.common.frame_source_mut().capture_frame()?;
+        Ok(ImageRegion::capture(image))
+    }
+
+    fn locate_region_on_capture(
+        &self,
+        capture: &ImageRegion,
+        locator: &BvLocatorPlan,
+        label: &str,
+    ) -> bgi_task::Result<Option<Region>> {
+        let region = capture
+            .find(self.common.vision_backend(), &locator.recognition_object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "LowerHeadThenWalkTo {label} template lookup failed: {error}"
+                ))
+            })?;
+        Ok(region.is_exist().then_some(region))
+    }
+
+    fn activation_text_detected(
+        &self,
+        capture: &ImageRegion,
+        f_key_rule: &LowerHeadThenWalkToFKeyRule,
+    ) -> bgi_task::Result<bool> {
+        let Some(f_key_region) =
+            self.locate_region_on_capture(capture, &f_key_rule.pick_key_locator, "F-key")?
+        else {
+            return Ok(false);
+        };
+        let scale = capture.image.size.width as f64 / 1920.0;
+        let text_rect = Rect::new(
+            f_key_region.rect.x + (f64::from(f_key_rule.text_x_offset_1080p) * scale) as i32,
+            f_key_region.rect.y,
+            ((f64::from(f_key_rule.text_width_1080p) * scale) as i32).max(1),
+            f_key_region.rect.height.max(1),
+        )
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        if text_rect.x < 0
+            || text_rect.y < 0
+            || text_rect.x + text_rect.width > capture.image.size.width as i32
+            || text_rect.y + text_rect.height > capture.image.size.height as i32
+        {
+            return Ok(false);
+        }
+        let roi = desktop_ocr_roi_for_image(capture.image.size, text_rect)?;
+        let cropped = capture.derive_crop(roi).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "LowerHeadThenWalkTo F-key text crop failed: {error}"
+            ))
+        })?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped.image).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "LowerHeadThenWalkTo F-key text OCR failed: {error}"
+            ))
+        })?;
+        let text = desktop_lower_head_then_walk_to_ocr_text_from_regions(&regions);
+        Ok(normalize_desktop_ocr_text(&text)
+            .contains(&normalize_desktop_ocr_text(&f_key_rule.activation_text)))
+    }
+
+    fn release_move_forward_best_effort(&mut self) {
+        if let Ok(events) = input_events_for_action(
+            &self.key_bindings,
+            GenshinAction::MoveForward,
+            KeyActionType::KeyUp,
+        ) {
+            let _ = CommonJobRuntime::dispatch_input(&mut self.common, &events);
+        }
+    }
+
+    fn execute_lower_head_tracking_loop_inner(
+        &mut self,
+        target_locator: &BvLocatorPlan,
+        movement_rule: &LowerHeadThenWalkToMovementRule,
+        f_key_rule: &LowerHeadThenWalkToFKeyRule,
+    ) -> bgi_task::Result<LowerHeadThenWalkToStepResult> {
+        let start = Instant::now();
+        let mut previous_move_x = 0;
+        loop {
+            self.ensure_not_cancelled()?;
+            let capture = self.capture_image_region()?;
+            let target_rect = self
+                .locate_region_on_capture(&capture, target_locator, "target")?
+                .map(|region| region.rect);
+            let activation_text_detected = if target_rect.is_some() {
+                self.activation_text_detected(&capture, f_key_rule)?
+            } else {
+                false
+            };
+            let elapsed_ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+            let decision = reduce_lower_head_then_walk_to_tracking_frame(
+                LowerHeadThenWalkToTrackingObservation {
+                    capture_size: self.capture_size,
+                    target_rect,
+                    activation_text_detected,
+                    elapsed_ms,
+                    previous_move_x,
+                    dpi_scale: self.dpi_scale,
+                },
+                movement_rule,
+                &self.key_bindings,
+                self.timeout_ms,
+            )?;
+            if !decision.input_events.is_empty() {
+                CommonJobRuntime::dispatch_input(&mut self.common, &decision.input_events)?;
+            }
+            previous_move_x = decision.next_previous_move_x;
+            if let Some(result) = decision.result {
+                return Ok(result);
+            }
+        }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopLowerHeadThenWalkToRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> LowerHeadThenWalkToRuntime for DesktopLowerHeadThenWalkToRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn execute_lower_head_tracking_loop(
+        &mut self,
+        target_locator: &BvLocatorPlan,
+        movement_rule: &LowerHeadThenWalkToMovementRule,
+        f_key_rule: &LowerHeadThenWalkToFKeyRule,
+    ) -> bgi_task::Result<LowerHeadThenWalkToStepResult> {
+        let result =
+            self.execute_lower_head_tracking_loop_inner(target_locator, movement_rule, f_key_rule);
+        if result.is_err() {
+            self.release_move_forward_best_effort();
+        }
+        result
+    }
+
+    fn clear_vision_drawings(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn desktop_lower_head_then_walk_to_ocr_text_from_regions(regions: &[OcrResultRegion]) -> String {
+    let mut regions = regions
+        .iter()
+        .filter(|region| !region.text.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.rect.center().y, region.rect.center().x));
+
+    let mut lines: Vec<(i32, i32, Vec<OcrResultRegion>)> = Vec::new();
+    for region in regions {
+        let center_y = region.rect.center().y;
+        let height = region.rect.height.max(1);
+        let Some((line_y, line_height, line_regions)) =
+            lines.iter_mut().find(|(line_y, line_height, _)| {
+                let tolerance = ((*line_height).max(height) / 2).max(4);
+                (center_y - *line_y).abs() <= tolerance
+            })
+        else {
+            lines.push((center_y, height, vec![region]));
+            continue;
+        };
+        let count = line_regions.len() as i32;
+        *line_y = ((*line_y * count) + center_y) / (count + 1);
+        *line_height = (*line_height).max(height);
+        line_regions.push(region);
+    }
+
+    lines
+        .into_iter()
+        .map(|(_, _, mut line_regions)| {
+            line_regions.sort_by_key(|region| region.rect.center().x);
+            line_regions
+                .into_iter()
+                .map(|region| region.text)
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn execute_desktop_teleport_live(
     config: &AppConfig,
     window: &GameWindowMatch,
@@ -17339,6 +17658,59 @@ mod tests {
             TaskError::CommonJobExecution(message)
                 if message.contains("GoToSereniteaPot live execution requires a detected game window")
         ));
+
+        let lower_head_then_walk_to =
+            bgi_task::plan_common_job(bgi_task::LOWER_HEAD_THEN_WALK_TO_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &lower_head_then_walk_to,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("LowerHeadThenWalkTo live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_lower_head_then_walk_to_live_rejects_capture_size_mismatch() {
+        let Some(CommonJobExecutionPlan::LowerHeadThenWalkTo(plan)) =
+            bgi_task::plan_common_job(bgi_task::LOWER_HEAD_THEN_WALK_TO_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected LowerHeadThenWalkTo plan");
+        };
+        let window = GameWindowMatch {
+            handle: WindowHandle(1),
+            process_id: Some(1),
+            process_name: Some("GenshinImpact".to_string()),
+            class_name: Some("UnityWndClass".to_string()),
+            title: Some("原神".to_string()),
+            kind: bgi_capture::GameWindowMatchKind::ProcessName,
+            metrics: Some(bgi_capture::GameWindowMetrics::from_legacy_capture_rect(
+                1280,
+                720,
+                bgi_capture::WindowRect::new(0, 0, 1280, 720),
+            )),
+        };
+
+        let error = execute_desktop_lower_head_then_walk_to_live(
+            &AppConfig::default(),
+            &window,
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains(
+            "LowerHeadThenWalkTo live execution requires plan capture size 1920x1080 to match current capture size 1280x720"
+        ));
     }
 
     #[test]
@@ -19031,6 +19403,24 @@ mod tests {
         ]);
 
         assert_eq!(text, "璃月锚点\n蒙德");
+    }
+
+    #[test]
+    fn desktop_lower_head_then_walk_to_ocr_text_orders_winrt_words() {
+        let text = desktop_lower_head_then_walk_to_ocr_text_from_regions(&[
+            OcrResultRegion {
+                rect: Rect::new(34, 10, 18, 18).unwrap(),
+                text: "活".to_string(),
+                score: 1.0,
+            },
+            OcrResultRegion {
+                rect: Rect::new(10, 11, 18, 18).unwrap(),
+                text: "激".to_string(),
+                score: 1.0,
+            },
+        ]);
+
+        assert_eq!(text, "激活");
     }
 
     #[test]

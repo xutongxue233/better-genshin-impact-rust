@@ -28032,6 +28032,130 @@ fn lower_head_then_walk_to_plan_preserves_legacy_tracking_and_activation_flow() 
 }
 
 #[test]
+fn lower_head_then_walk_to_tracking_frame_applies_legacy_movement_rules() {
+    let plan = plan_lower_head_then_walk_to(LowerHeadThenWalkToExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+
+    let below_center = reduce_lower_head_then_walk_to_tracking_frame(
+        LowerHeadThenWalkToTrackingObservation {
+            capture_size: plan.capture_size,
+            target_rect: Some(Rect::new(960, 800, 20, 20).unwrap()),
+            activation_text_detected: false,
+            elapsed_ms: 100,
+            previous_move_x: 0,
+            dpi_scale: 1.0,
+        },
+        &plan.movement_rule,
+        &key_bindings,
+        plan.timeout_ms,
+    )
+    .unwrap();
+    assert_eq!(
+        below_center.kind,
+        LowerHeadThenWalkToTrackingDecisionKind::TargetBelowCenter
+    );
+    assert_eq!(
+        below_center.input_events,
+        vec![
+            InputEvent::MouseMoveRelative { dx: -50, dy: 0 },
+            InputEvent::KeyUp {
+                vk: KeyId::W.vk(),
+                extended: None
+            }
+        ]
+    );
+
+    let turning = reduce_lower_head_then_walk_to_tracking_frame(
+        LowerHeadThenWalkToTrackingObservation {
+            capture_size: plan.capture_size,
+            target_rect: Some(Rect::new(1500, 100, 20, 20).unwrap()),
+            activation_text_detected: false,
+            elapsed_ms: 100,
+            previous_move_x: -20,
+            dpi_scale: 1.0,
+        },
+        &plan.movement_rule,
+        &key_bindings,
+        plan.timeout_ms,
+    )
+    .unwrap();
+    assert_eq!(
+        turning.kind,
+        LowerHeadThenWalkToTrackingDecisionKind::TurnAndWalk
+    );
+    assert_eq!(turning.next_previous_move_x, 68);
+    assert_eq!(
+        turning.input_events,
+        vec![
+            InputEvent::MouseMoveRelative { dx: 68, dy: 0 },
+            InputEvent::KeyDown {
+                vk: KeyId::W.vk(),
+                extended: None
+            },
+            InputEvent::MouseMoveRelative { dx: 0, dy: 800 },
+            InputEvent::Delay { milliseconds: 100 }
+        ]
+    );
+
+    let activated = reduce_lower_head_then_walk_to_tracking_frame(
+        LowerHeadThenWalkToTrackingObservation {
+            capture_size: plan.capture_size,
+            target_rect: Some(Rect::new(950, 100, 20, 20).unwrap()),
+            activation_text_detected: true,
+            elapsed_ms: 100,
+            previous_move_x: 0,
+            dpi_scale: 1.0,
+        },
+        &plan.movement_rule,
+        &key_bindings,
+        plan.timeout_ms,
+    )
+    .unwrap();
+    assert_eq!(
+        activated.kind,
+        LowerHeadThenWalkToTrackingDecisionKind::Activated
+    );
+    assert_eq!(
+        activated.result,
+        Some(LowerHeadThenWalkToStepResult::Activated)
+    );
+    assert_eq!(
+        activated.input_events,
+        vec![
+            InputEvent::KeyDown {
+                vk: KeyId::W.vk(),
+                extended: None
+            },
+            InputEvent::KeyUp {
+                vk: KeyId::W.vk(),
+                extended: None
+            }
+        ]
+    );
+
+    let timeout = reduce_lower_head_then_walk_to_tracking_frame(
+        LowerHeadThenWalkToTrackingObservation {
+            capture_size: plan.capture_size,
+            target_rect: Some(Rect::new(950, 100, 20, 20).unwrap()),
+            activation_text_detected: false,
+            elapsed_ms: plan.timeout_ms + 1,
+            previous_move_x: 0,
+            dpi_scale: 1.0,
+        },
+        &plan.movement_rule,
+        &key_bindings,
+        plan.timeout_ms,
+    )
+    .unwrap();
+    assert_eq!(
+        timeout.kind,
+        LowerHeadThenWalkToTrackingDecisionKind::Timeout
+    );
+    assert_eq!(timeout.result, Some(LowerHeadThenWalkToStepResult::Timeout));
+    assert!(timeout.input_events.is_empty());
+}
+
+#[test]
 fn lower_head_then_walk_to_executor_returns_initial_target_missing_and_cleans_up() {
     let plan = plan_lower_head_then_walk_to(LowerHeadThenWalkToExecutionConfig::default()).unwrap();
     let key_bindings = KeyBindingsConfig::default();
