@@ -262,7 +262,7 @@ pub fn plan_turn_around_macro(config: MacroHotkeyExecutionConfig) -> MacroHotkey
         preflight_rule: None,
         steps,
         pending_native: vec![
-            "desktop hotkey route still calls the legacy macro path until the desktop hotkey bridge consumes this Rust plan".to_string(),
+            "legacy global hotkey registration still needs to invoke the desktop independent-task live route".to_string(),
         ],
         notes: "Rust preserves the legacy TurnAroundMacro behavior: rewrite a zero runaroundMouseXInterval to one, move mouse by the effective horizontal interval, then wait runaroundInterval milliseconds.".to_string(),
     }
@@ -366,8 +366,8 @@ pub fn plan_quick_enhance_artifact_macro(
         preflight_rule: Some(preflight_rule),
         steps,
         pending_native: vec![
-            "desktop hotkey route still calls the legacy macro path until the desktop hotkey bridge consumes this Rust plan".to_string(),
-            "real TaskContext initialization and toast adapters remain desktop-side work".to_string(),
+            "desktop independent-task live route explicitly rejects until the TaskContext/toast preflight adapter is wired".to_string(),
+            "capture-point click/move adapters remain desktop-side work before the legacy macro path can be retired".to_string(),
         ],
         notes: "Rust preserves QuickEnhanceArtifactMacro's initialized-context guard, fixed 1080p click chain, enhanceWaitDelay addition, and final cursor move back to the quick-add button.".to_string(),
     }

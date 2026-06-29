@@ -20085,7 +20085,7 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
     assert_eq!(enhance_entry.hotkey_fields, &["enhanceArtifactHotkey"]);
     assert!(enhance_entry
         .notes
-        .contains("desktop hotkey bridge and toast/preflight adapter still need"));
+        .contains("desktop independent-task live route now reaches this Rust boundary"));
 
     let descriptors = independent_tasks();
     assert!(descriptors.iter().any(|task| {

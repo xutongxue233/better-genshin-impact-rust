@@ -435,7 +435,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the QuickEnhanceArtifactMacro hotkey plan through injectable runtime hooks, preserving the initialized-context guard, fixed 1080p click sequence, enhanceWaitDelay addition, and final cursor move; desktop hotkey bridge and toast/preflight adapter still need to consume this Rust plan before the legacy macro path can be retired.",
+        notes: "Rust models and can execute the QuickEnhanceArtifactMacro hotkey plan through injectable runtime hooks, preserving the initialized-context guard, fixed 1080p click sequence, enhanceWaitDelay addition, and final cursor move; the desktop independent-task live route now reaches this Rust boundary and explicitly rejects until TaskContext/toast preflight plus capture-point click/move adapters are wired before the legacy macro path can be retired.",
     },
     TaskCatalogEntry {
         key: "QuickBuy",

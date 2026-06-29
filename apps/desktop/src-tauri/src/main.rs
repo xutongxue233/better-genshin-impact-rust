@@ -79,14 +79,15 @@ use bgi_task::{
     execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
     extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
     plan_auto_eat, plan_auto_music_game, plan_auto_open_chest, plan_auto_pick, plan_auto_wood,
-    plan_quick_buy, plan_quick_serenitea_pot, plan_quick_teleport, plan_return_main_ui,
-    plan_turn_around_macro, plan_wonderland_cycle, redeem_code_entries_from_strings,
-    runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
-    switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
-    AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
-    AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
-    AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
-    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
+    plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
+    redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick,
+    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
+    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
+    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
+    AutoEatExecutionConfig, AutoEatExecutionPlan, AutoEatFoodExecutionPlan,
+    AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime, AutoEatRuntime,
+    AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoMusicAlbumExecutionReport, AutoMusicAlbumPageStatus, AutoMusicAlbumRuntime,
@@ -162,9 +163,10 @@ use bgi_task::{
     AUTO_MUSIC_GAME_TASK_KEY, AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH, AUTO_OPEN_CHEST_TASK_KEY,
     AUTO_PICK_PICK_KEY_ASSET, AUTO_TRACK_DEFAULT_CAPTURE_WIDTH, AUTO_TRACK_TASK_KEY,
     AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY, COMMON_BTN_WHITE_CONFIRM,
-    QUICK_BUY_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY, QUICK_TELEPORT_MAP_SCALE_BUTTON,
-    QUICK_TELEPORT_MAP_SETTINGS_BUTTON, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS,
-    RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
+    QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
+    QUICK_TELEPORT_MAP_SCALE_BUTTON, QUICK_TELEPORT_MAP_SETTINGS_BUTTON,
+    RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY,
+    USE_REDEEM_CODE_TASK_KEY,
 };
 use bgi_vision::{
     convert_bgr_image, crop_bgr_image, in_range_mask, recognition_type_infos,
@@ -6888,6 +6890,17 @@ fn execute_desktop_independent_task_live_plan(
                 report,
             )))
         }
+        Some(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY) => {
+            let report = execute_desktop_quick_enhance_artifact_macro_live_plan(
+                game_window,
+                plan.config.as_ref(),
+                cancellation,
+            )
+            .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(
+                IndependentTaskLiveExecutionReport::QuickEnhanceArtifactMacro(report),
+            ))
+        }
         Some(AUTO_MUSIC_GAME_TASK_KEY) => {
             match desktop_auto_music_game_route_mode(plan.config.as_ref())? {
                 DesktopAutoMusicGameRouteMode::Performance => {
@@ -6943,6 +6956,20 @@ fn execute_desktop_turn_around_macro_live_plan(
     let mut config = MacroHotkeyExecutionConfig::from_value(plan_config);
     config.capture_size = desktop_common_job_capture_size(Some(window));
     let plan = plan_turn_around_macro(config);
+    execute_desktop_macro_hotkey_live(&plan, cancellation)
+}
+
+fn execute_desktop_quick_enhance_artifact_macro_live_plan(
+    game_window: Option<&GameWindowMatch>,
+    plan_config: Option<&Value>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<MacroHotkeyExecutionReport, String> {
+    let window = game_window.ok_or_else(|| {
+        "QuickEnhanceArtifactMacro live execution requires a detected game window".to_string()
+    })?;
+    let mut config = MacroHotkeyExecutionConfig::from_value(plan_config);
+    config.capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_quick_enhance_artifact_macro(config);
     execute_desktop_macro_hotkey_live(&plan, cancellation)
 }
 
@@ -18904,6 +18931,60 @@ mod tests {
             error,
             TaskError::CommonJobExecution(message)
                 if message.contains("TurnAroundMacro live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_quick_enhance_artifact_macro_missing_game_window()
+    {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("QuickEnhanceArtifactMacro live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_quick_enhance_artifact_macro_adapter_gap() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let window = desktop_test_game_window(1920, 1080);
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("MacroHotkey desktop preflight adapter is not wired")
         ));
     }
 

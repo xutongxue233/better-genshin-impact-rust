@@ -466,6 +466,7 @@ pub enum IndependentTaskLiveExecutionReport {
     AutoWood(AutoWoodExecutionReport),
     GetGridIcons(GetGridIconsExecutionReport),
     TurnAroundMacro(MacroHotkeyExecutionReport),
+    QuickEnhanceArtifactMacro(MacroHotkeyExecutionReport),
     QuickBuy(QuickBuyExecutionReport),
     QuickSereniteaPot(QuickSereniteaPotExecutionReport),
     UseRedeemCode(UseRedeemCodeExecutionReport),
@@ -490,6 +491,9 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoWood(_) => "AutoWood",
             IndependentTaskLiveExecutionReport::GetGridIcons(_) => "GetGridIcons",
             IndependentTaskLiveExecutionReport::TurnAroundMacro(_) => "TurnAroundMacro",
+            IndependentTaskLiveExecutionReport::QuickEnhanceArtifactMacro(_) => {
+                "QuickEnhanceArtifactMacro"
+            }
             IndependentTaskLiveExecutionReport::QuickBuy(_) => "QuickBuy",
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(_) => "QuickSereniteaPot",
             IndependentTaskLiveExecutionReport::UseRedeemCode(_) => "UseRedeemCode",
@@ -520,6 +524,9 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoWood(report) => report.completed,
             IndependentTaskLiveExecutionReport::GetGridIcons(report) => report.completed,
             IndependentTaskLiveExecutionReport::TurnAroundMacro(report) => report.completed,
+            IndependentTaskLiveExecutionReport::QuickEnhanceArtifactMacro(report) => {
+                report.completed
+            }
             IndependentTaskLiveExecutionReport::QuickBuy(report) => report.completed,
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(report) => report.completed,
             IndependentTaskLiveExecutionReport::UseRedeemCode(report) => report.completed,
@@ -572,6 +579,9 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::TurnAroundMacro(report) => {
                 report.executed_steps.len()
             }
+            IndependentTaskLiveExecutionReport::QuickEnhanceArtifactMacro(report) => {
+                report.executed_steps.len()
+            }
             IndependentTaskLiveExecutionReport::QuickBuy(report) => report.executed_steps.len(),
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(report) => {
                 report.executed_steps.len()
@@ -620,6 +630,9 @@ impl IndependentTaskLiveExecutionReport {
                 .filter(|action| action.status == GetGridIconsRuntimeActionStatus::Skipped)
                 .count(),
             IndependentTaskLiveExecutionReport::TurnAroundMacro(report) => {
+                report.skipped_steps.len()
+            }
+            IndependentTaskLiveExecutionReport::QuickEnhanceArtifactMacro(report) => {
                 report.skipped_steps.len()
             }
             IndependentTaskLiveExecutionReport::QuickBuy(report) => report.skipped_steps.len(),
