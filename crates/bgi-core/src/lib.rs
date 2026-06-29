@@ -44,8 +44,9 @@ pub use pathing::{
     plan_linnea_mining_action, read_pathing_task, LinneaMiningActionPlan,
     LinneaMiningAlignmentRule, LinneaMiningCleanupRule, LinneaMiningClusterRule,
     LinneaMiningDetectionRule, LinneaMiningDetectionSource, LinneaMiningMineRule,
-    LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType, PathingExecutionPlan,
-    PathingFarmingExecutionPlan, PathingPoint, PathingPreflightPlan, PathingSegmentPlan,
+    LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType,
+    PathingCommonJobActionPlan, PathingExecutionPlan, PathingFarmingExecutionPlan,
+    PathingLogOutputActionPlan, PathingPoint, PathingPreflightPlan, PathingSegmentPlan,
     PathingSetTimeActionPlan, PathingSummary, PathingTask, PathingWaypointPhase,
     PathingWaypointPlan, Waypoint,
 };

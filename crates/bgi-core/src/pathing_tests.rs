@@ -421,6 +421,48 @@ fn pathing_execution_plan_parses_set_time_action_params_like_legacy_handler() {
 }
 
 #[test]
+fn pathing_execution_plan_models_log_and_common_job_actions() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "action-route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "orientation", "action": "log_output", "action_params": "arrived" },
+                { "x": 11.0, "y": 21.0, "type": "path", "action": "exit_and_relogin" },
+                { "x": 12.0, "y": 22.0, "type": "path", "action": "wonderland_cycle", "action_params": "ignored" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+
+    let Some(PathingActionPlan::LogOutput(log_output)) = &plan.segments[0].waypoints[0].action_plan
+    else {
+        panic!("expected log_output action plan");
+    };
+    assert_eq!(log_output.action_code, "log_output");
+    assert_eq!(log_output.message, "arrived");
+    assert!(log_output.executor_ready);
+
+    let Some(PathingActionPlan::CommonJob(relogin)) = &plan.segments[0].waypoints[1].action_plan
+    else {
+        panic!("expected exit_and_relogin common-job action plan");
+    };
+    assert_eq!(relogin.action_code, "exit_and_relogin");
+    assert_eq!(relogin.common_job_task_key, "Relogin");
+    assert!(relogin.executor_ready);
+
+    let Some(PathingActionPlan::CommonJob(wonderland)) = &plan.segments[0].waypoints[2].action_plan
+    else {
+        panic!("expected wonderland_cycle common-job action plan");
+    };
+    assert_eq!(wonderland.action_code, "wonderland_cycle");
+    assert_eq!(wonderland.raw_params.as_deref(), Some("ignored"));
+    assert_eq!(wonderland.common_job_task_key, "WonderlandCycle");
+    assert!(wonderland.executor_ready);
+}
+
+#[test]
 fn empty_pathing_execution_plan_skips_preflight_like_legacy_executor() {
     let task = PathingTask::from_json(
         r#"{

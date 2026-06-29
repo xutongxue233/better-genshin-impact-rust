@@ -212,6 +212,8 @@ pub struct PathingWaypointPlan {
 pub enum PathingActionPlan {
     LinneaMining(Box<LinneaMiningActionPlan>),
     SetTime(PathingSetTimeActionPlan),
+    LogOutput(PathingLogOutputActionPlan),
+    CommonJob(PathingCommonJobActionPlan),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -308,6 +310,24 @@ pub struct PathingSetTimeActionPlan {
     pub minute: Option<i32>,
     pub skip_time_adjustment_animation: Option<bool>,
     pub parse_error: Option<String>,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingLogOutputActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub message: String,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingCommonJobActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub common_job_task_key: String,
     pub executor_ready: bool,
     pub notes: String,
 }
@@ -675,6 +695,18 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
         Some(PathingActionPlan::SetTime(plan_set_time_action(
             action_params,
         )))
+    } else if action.eq_ignore_ascii_case("log_output") {
+        Some(PathingActionPlan::LogOutput(plan_log_output_action(
+            action_params,
+        )))
+    } else if action.eq_ignore_ascii_case("exit_and_relogin") {
+        Some(PathingActionPlan::CommonJob(
+            plan_common_job_pathing_action("exit_and_relogin", action_params, "Relogin"),
+        ))
+    } else if action.eq_ignore_ascii_case("wonderland_cycle") {
+        Some(PathingActionPlan::CommonJob(
+            plan_common_job_pathing_action("wonderland_cycle", action_params, "WonderlandCycle"),
+        ))
     } else {
         None
     }
@@ -739,6 +771,33 @@ fn plan_set_time_action(action_params: Option<&str>) -> PathingSetTimeActionPlan
     plan.skip_time_adjustment_animation = Some(skip_time_adjustment_animation);
     plan.executor_ready = true;
     plan
+}
+
+fn plan_log_output_action(action_params: Option<&str>) -> PathingLogOutputActionPlan {
+    PathingLogOutputActionPlan {
+        action_code: "log_output".to_string(),
+        raw_params: action_params.map(ToOwned::to_owned),
+        message: action_params.unwrap_or_default().to_string(),
+        executor_ready: true,
+        notes: "Pathing log_output action is preserved as a Rust action-boundary report."
+            .to_string(),
+    }
+}
+
+fn plan_common_job_pathing_action(
+    action_code: &str,
+    action_params: Option<&str>,
+    common_job_task_key: &str,
+) -> PathingCommonJobActionPlan {
+    PathingCommonJobActionPlan {
+        action_code: action_code.to_string(),
+        raw_params: action_params.map(ToOwned::to_owned),
+        common_job_task_key: common_job_task_key.to_string(),
+        executor_ready: true,
+        notes: format!(
+            "Pathing {action_code} action is mapped to the {common_job_task_key} common-job executor contract; legacy action_params are preserved but not consumed by this handler."
+        ),
+    }
 }
 
 fn parse_legacy_bool(value: &str) -> Option<bool> {

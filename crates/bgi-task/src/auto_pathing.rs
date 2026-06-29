@@ -2,8 +2,9 @@ use crate::{
     plan_common_job, CommonJobExecutionPlan, CommonJobLiveExecutionReport, Result, TaskError,
 };
 use bgi_core::{
-    read_pathing_task, PathingActionPlan, PathingExecutionPlan, PathingPreflightPlan,
-    PathingSetTimeActionPlan, PathingSummary, PathingWaypointPhase, PathingWaypointPlan,
+    read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingExecutionPlan,
+    PathingLogOutputActionPlan, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary,
+    PathingWaypointPhase, PathingWaypointPlan,
 };
 use bgi_vision::Size;
 use serde::{Deserialize, Serialize};
@@ -588,7 +589,7 @@ where
         unsupported_phases: 0,
         waypoint_reports: Vec::new(),
         notes:
-            "Pathing runtime boundary executed only ready global actions; movement, teleport, combat, recovery, and camera phases remain native-pending."
+            "Pathing runtime boundary reports ready pure actions and can hand mapped common-job actions to a caller-provided live executor; movement, teleport, combat, recovery, and camera phases remain native-pending."
                 .to_string(),
     };
 
@@ -644,9 +645,7 @@ where
     }
 
     report.boundary_completed = true;
-    report.native_pathing_completed = report.unsupported_phases == 0
-        && report.unsupported_actions == 0
-        && report.invalid_actions == 0;
+    report.native_pathing_completed = false;
     Ok(report)
 }
 
@@ -699,6 +698,12 @@ where
         Some(PathingActionPlan::SetTime(set_time)) => {
             execute_set_time_pathing_action(set_time, capture_size, live_executor)
         }
+        Some(PathingActionPlan::LogOutput(log_output)) => {
+            execute_log_output_pathing_action(log_output)
+        }
+        Some(PathingActionPlan::CommonJob(common_job)) => {
+            execute_common_job_pathing_action(common_job, capture_size, live_executor)
+        }
         Some(PathingActionPlan::LinneaMining(_)) => Ok(PathingActionBoundaryReport {
             action_code: "linnea_mining".to_string(),
             status: PathingBoundaryStatus::Unsupported,
@@ -717,6 +722,101 @@ where
                     .to_string(),
             common_job_task_key: None,
             common_job_plan: None,
+            common_job_live_execution: None,
+        }),
+    }
+}
+
+fn execute_log_output_pathing_action(
+    log_output: &PathingLogOutputActionPlan,
+) -> Result<PathingActionBoundaryReport> {
+    Ok(PathingActionBoundaryReport {
+        action_code: log_output.action_code.clone(),
+        status: PathingBoundaryStatus::Reported,
+        message: format!("pathing log_output action reported: {}", log_output.message),
+        common_job_task_key: None,
+        common_job_plan: None,
+        common_job_live_execution: None,
+    })
+}
+
+fn execute_common_job_pathing_action<F>(
+    common_job: &PathingCommonJobActionPlan,
+    capture_size: Size,
+    live_executor: &mut F,
+) -> Result<PathingActionBoundaryReport>
+where
+    F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
+{
+    if !common_job.executor_ready {
+        return Ok(PathingActionBoundaryReport {
+            action_code: common_job.action_code.clone(),
+            status: PathingBoundaryStatus::Invalid,
+            message: format!(
+                "pathing action {} is not executor-ready",
+                common_job.action_code
+            ),
+            common_job_task_key: Some(common_job.common_job_task_key.clone()),
+            common_job_plan: None,
+            common_job_live_execution: None,
+        });
+    }
+
+    let config = json!({
+        "captureSize": capture_size,
+    });
+    let Some(common_job_plan) = plan_common_job(&common_job.common_job_task_key, Some(&config))?
+    else {
+        return Ok(PathingActionBoundaryReport {
+            action_code: common_job.action_code.clone(),
+            status: PathingBoundaryStatus::Invalid,
+            message: format!(
+                "common-job task {} is not registered",
+                common_job.common_job_task_key
+            ),
+            common_job_task_key: Some(common_job.common_job_task_key.clone()),
+            common_job_plan: None,
+            common_job_live_execution: None,
+        });
+    };
+
+    if !common_job_plan.executor_ready() {
+        return Ok(PathingActionBoundaryReport {
+            action_code: common_job.action_code.clone(),
+            status: PathingBoundaryStatus::Unsupported,
+            message: format!(
+                "common-job task {} is planned but not executor-ready",
+                common_job_plan.task_key()
+            ),
+            common_job_task_key: Some(common_job.common_job_task_key.clone()),
+            common_job_plan: Some(common_job_plan),
+            common_job_live_execution: None,
+        });
+    }
+
+    match live_executor(&common_job_plan)? {
+        Some(common_job_live_execution) => Ok(PathingActionBoundaryReport {
+            action_code: common_job.action_code.clone(),
+            status: PathingBoundaryStatus::Executed,
+            message: format!(
+                "pathing {} action executed through {} common-job live boundary",
+                common_job.action_code,
+                common_job_plan.task_key()
+            ),
+            common_job_task_key: Some(common_job.common_job_task_key.clone()),
+            common_job_plan: Some(common_job_plan),
+            common_job_live_execution: Some(common_job_live_execution),
+        }),
+        None => Ok(PathingActionBoundaryReport {
+            action_code: common_job.action_code.clone(),
+            status: PathingBoundaryStatus::Skipped,
+            message: format!(
+                "pathing {} action reached {} common-job plan, but live executor returned no report",
+                common_job.action_code,
+                common_job_plan.task_key()
+            ),
+            common_job_task_key: Some(common_job.common_job_task_key.clone()),
+            common_job_plan: Some(common_job_plan),
             common_job_live_execution: None,
         }),
     }

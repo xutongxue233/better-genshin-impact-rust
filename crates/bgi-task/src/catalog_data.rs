@@ -306,7 +306,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Route JSON model is ported with PathExecutor-style segmentation, preflight, waypoint phases, and a planning-only movement contract that records coordinate conversion, position observation, camera/input dispatch, teleport, recovery, trap escape, action-handler, and termination dependencies; action handlers, navigation, suspend/resume, and native movement/teleport execution remain pending.",
+        notes: "Route JSON model is ported with PathExecutor-style segmentation, preflight, waypoint phases, typed action plans, and a planning-only movement contract that records coordinate conversion, position observation, camera/input dispatch, teleport, recovery, trap escape, action-handler, and termination dependencies; the Rust action boundary now executes SetTime through the common-job live bridge, reports log_output actions, and routes exit_and_relogin/WonderlandCycle actions into Relogin/WonderlandCycle common-job plans, while navigation, suspend/resume, force_tp teleport handling, combat/action handlers, and native movement execution remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoBoss",

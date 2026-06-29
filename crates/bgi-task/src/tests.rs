@@ -20487,6 +20487,119 @@ fn auto_pathing_action_boundary_rejects_invalid_set_time_without_live_call() {
 }
 
 #[test]
+fn auto_pathing_action_boundary_reports_log_output_and_runs_common_jobs() {
+    let root = unique_test_root("auto-pathing-log-common-jobs");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("common_job_route.json"),
+        r#"{
+                "info": { "name": "common job route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "orientation", "move_mode": "walk", "action": "log_output", "action_params": "arrived" },
+                    { "x": 3.0, "y": 4.0, "type": "path", "move_mode": "walk", "action": "exit_and_relogin" },
+                    { "x": 5.0, "y": 6.0, "type": "path", "move_mode": "walk", "action": "wonderland_cycle" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/common_job_route.json").unwrap();
+    let mut calls = Vec::new();
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            calls.push(common_job_plan.task_key().to_string());
+            match common_job_plan {
+                CommonJobExecutionPlan::Relogin(relogin) => {
+                    assert_eq!(relogin.capture_size, Size::new(1920, 1080));
+                    Ok(Some(CommonJobLiveExecutionReport::Relogin(
+                        ReloginExecutionReport {
+                            task_key: relogin.task_key.clone(),
+                            completed: true,
+                            state: ReloginExecutorState {
+                                result: Some(ReloginStepResult::Completed),
+                                ..ReloginExecutorState::default()
+                            },
+                            executed_steps: Vec::new(),
+                            skipped_steps: Vec::new(),
+                        },
+                    )))
+                }
+                CommonJobExecutionPlan::WonderlandCycle(wonderland) => {
+                    assert_eq!(wonderland.capture_size, Size::new(1920, 1080));
+                    Ok(Some(CommonJobLiveExecutionReport::WonderlandCycle(
+                        WonderlandCycleExecutionReport {
+                            task_key: wonderland.task_key.clone(),
+                            completed: true,
+                            state: WonderlandCycleExecutorState {
+                                result: Some(WonderlandCycleStepResult::ReturnedToTeyvat),
+                                ..WonderlandCycleExecutorState::default()
+                            },
+                            executed_steps: Vec::new(),
+                            skipped_steps: Vec::new(),
+                        },
+                    )))
+                }
+                other => panic!("unexpected pathing common-job action: {}", other.task_key()),
+            }
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, vec!["Relogin", "WonderlandCycle"]);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 2);
+    assert_eq!(report.unsupported_actions, 0);
+    assert_eq!(report.invalid_actions, 0);
+
+    let log_report = report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.action_report.as_ref())
+        .find(|action| action.action_code == "log_output")
+        .expect("expected log_output action report");
+    assert_eq!(log_report.status, PathingBoundaryStatus::Reported);
+    assert!(log_report.message.contains("arrived"));
+
+    let relogin_report = report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.action_report.as_ref())
+        .find(|action| action.action_code == "exit_and_relogin")
+        .expect("expected exit_and_relogin action report");
+    assert_eq!(relogin_report.status, PathingBoundaryStatus::Executed);
+    assert_eq!(
+        relogin_report.common_job_task_key.as_deref(),
+        Some("Relogin")
+    );
+    assert!(matches!(
+        relogin_report.common_job_live_execution,
+        Some(CommonJobLiveExecutionReport::Relogin(_))
+    ));
+
+    let wonderland_report = report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.action_report.as_ref())
+        .find(|action| action.action_code == "wonderland_cycle")
+        .expect("expected wonderland_cycle action report");
+    assert_eq!(wonderland_report.status, PathingBoundaryStatus::Executed);
+    assert_eq!(
+        wonderland_report.common_job_task_key.as_deref(),
+        Some("WonderlandCycle")
+    );
+    assert!(matches!(
+        wonderland_report.common_job_live_execution,
+        Some(CommonJobLiveExecutionReport::WonderlandCycle(_))
+    ));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_runtime_report_stops_on_unsupported_phase_without_success_end() {
     let root = unique_test_root("auto-pathing-runtime-unsupported");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");
