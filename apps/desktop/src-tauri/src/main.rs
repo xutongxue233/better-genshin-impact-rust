@@ -138,11 +138,11 @@ use bgi_task::{
     GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
     GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
     GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
-    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode,
-    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
-    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
-    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
-    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
+    GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
+    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GridIconClassifierRule,
+    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScrollRule, GridTemplate,
+    IndependentTaskExecution, IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
     LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
     LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
     LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
@@ -12177,6 +12177,7 @@ fn execute_desktop_go_to_crafting_bench_live(
             capture_size.height
         ));
     }
+    desktop_go_to_crafting_bench_live_preflight(plan)?;
     let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
         "GoToCraftingBench live execution has no capture frame source".to_string()
     })?;
@@ -12190,6 +12191,69 @@ fn execute_desktop_go_to_crafting_bench_live(
     let mut runtime = DesktopGoToCraftingBenchRuntime::new(common_runtime);
     execute_go_to_crafting_bench_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
+}
+
+fn desktop_go_to_crafting_bench_live_preflight(
+    plan: &GoToCraftingBenchExecutionPlan,
+) -> Result<(), String> {
+    for step in &plan.steps {
+        match &step.action {
+            GoToCraftingBenchStepAction::Pathing { rule } => {
+                desktop_common_job_pathing_live_preflight("GoToCraftingBench", &rule.pathing_json)?;
+            }
+            GoToCraftingBenchStepAction::InteractionRetry { .. } => {
+                return Err(
+                    "GoToCraftingBench live execution requires desktop crafting-bench interaction adapter"
+                        .to_string(),
+                );
+            }
+            GoToCraftingBenchStepAction::SelectLastTalkOptionUntilEnd { .. } => {
+                return Err(
+                    "GoToCraftingBench live execution requires desktop talk-option selection adapter"
+                        .to_string(),
+                );
+            }
+            GoToCraftingBenchStepAction::RecognizeResinCounts { .. } => {
+                return Err(
+                    "GoToCraftingBench live execution requires desktop resin-count OCR adapter"
+                        .to_string(),
+                );
+            }
+            GoToCraftingBenchStepAction::CraftCondensedResin { .. } => {
+                return Err(
+                    "GoToCraftingBench live execution requires desktop condensed-resin crafting adapter"
+                        .to_string(),
+                );
+            }
+            GoToCraftingBenchStepAction::Log { .. }
+            | GoToCraftingBenchStepAction::Page { .. }
+            | GoToCraftingBenchStepAction::Locator { .. }
+            | GoToCraftingBenchStepAction::GenshinAction { .. }
+            | GoToCraftingBenchStepAction::DetectResin { .. }
+            | GoToCraftingBenchStepAction::ComputeCraftsNeeded { .. }
+            | GoToCraftingBenchStepAction::Input { .. }
+            | GoToCraftingBenchStepAction::CommonJob { .. }
+            | GoToCraftingBenchStepAction::ReturnResult { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn desktop_common_job_pathing_live_preflight(
+    task_name: &str,
+    pathing_json: &str,
+) -> Result<bgi_task::CommonJobPathingPreflightReport, String> {
+    let report = bgi_task::preflight_common_job_pathing_rule(pathing_json).map_err(|error| {
+        format!(
+            "{task_name} live execution failed PathExecutor preflight for {pathing_json}: {error}"
+        )
+    })?;
+    if report.native_pathing_completed {
+        return Err(format!(
+            "{task_name} live execution cannot consume an already-completed PathExecutor report for {pathing_json}"
+        ));
+    }
+    Ok(report)
 }
 
 struct DesktopGoToCraftingBenchRuntime<F, I, C> {
@@ -12251,9 +12315,10 @@ where
         &mut self,
         rule: &GoToCraftingBenchPathingRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        let report = bgi_task::preflight_common_job_pathing_rule(&rule.pathing_json)?;
         Err(TaskError::CommonJobExecution(format!(
-            "GoToCraftingBench live execution requires native PathExecutor adapter for {}",
-            rule.pathing_json
+            "GoToCraftingBench live execution requires desktop PathExecutor movement adapter for {} after validating {} waypoints",
+            rule.pathing_json, report.waypoint_count
         )))
     }
 
@@ -12329,10 +12394,10 @@ fn desktop_go_to_adventurers_guild_live_preflight(
                 }
             }
             GoToAdventurersGuildStepAction::Pathing { rule } => {
-                return Err(format!(
-                    "GoToAdventurersGuild live execution requires native PathExecutor adapter at phase {:?} ({}) for {}",
-                    step.phase, step.label, rule.pathing_json
-                ));
+                desktop_common_job_pathing_live_preflight(
+                    "GoToAdventurersGuild",
+                    &rule.pathing_json,
+                )?;
             }
             GoToAdventurersGuildStepAction::InteractionRetry { .. } => {
                 return Err(format!(
@@ -18000,27 +18065,69 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_adventurers_guild_preflight_rejects_pathing_after_supported_nested_jobs() {
-        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) =
-            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
-        else {
+    fn desktop_go_to_crafting_bench_preflight_reports_interaction_after_pathing_contract() {
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月" })),
+        )
+        .unwrap() else {
+            panic!("expected GoToCraftingBench common job plan");
+        };
+
+        let pathing_report = desktop_common_job_pathing_live_preflight(
+            "GoToCraftingBench",
+            &plan.pathing_rule.pathing_json,
+        )
+        .unwrap();
+        assert!(pathing_report.has_positions);
+        assert!(pathing_report.waypoint_count > 0);
+        assert!(!pathing_report.native_pathing_completed);
+
+        let error = desktop_go_to_crafting_bench_live_preflight(&plan).unwrap_err();
+
+        assert!(error.contains(
+            "GoToCraftingBench live execution requires desktop crafting-bench interaction adapter"
+        ));
+        assert!(!error.contains("native PathExecutor adapter"));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_preflight_reports_catherine_after_pathing_contract() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY,
+            Some(&serde_json::json!({ "country": "蒙德" })),
+        )
+        .unwrap() else {
             panic!("expected GoToAdventurersGuild common job plan");
         };
 
+        let pathing_report = desktop_common_job_pathing_live_preflight(
+            "GoToAdventurersGuild",
+            &plan.pathing_rule.pathing_json,
+        )
+        .unwrap();
+        assert!(pathing_report.has_positions);
+        assert!(pathing_report.waypoint_count > 0);
+        assert!(!pathing_report.native_pathing_completed);
+
         let error = desktop_go_to_adventurers_guild_live_preflight(&plan).unwrap_err();
 
-        assert!(error
-            .contains("GoToAdventurersGuild live execution requires native PathExecutor adapter"));
+        assert!(error.contains(
+            "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter"
+        ));
         assert!(error.contains("Pathing"));
-        assert!(error.contains("path to adventurers guild and press interaction"));
-        assert!(error.contains("GameTask/Common/Element/Assets/Json/冒险家协会_"));
+        assert!(!error.contains("native PathExecutor adapter"));
     }
 
     #[test]
     fn desktop_go_to_adventurers_guild_preflight_skips_unknown_nested_when_static_condition_false()
     {
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut default_plan)) =
-            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+            bgi_task::plan_common_job(
+                bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY,
+                Some(&serde_json::json!({ "country": "蒙德" })),
+            )
+            .unwrap()
         else {
             panic!("expected GoToAdventurersGuild common job plan");
         };
@@ -18032,10 +18139,11 @@ mod tests {
         let default_error =
             desktop_go_to_adventurers_guild_live_preflight(&default_plan).unwrap_err();
 
-        assert!(default_error.contains("native PathExecutor adapter"));
+        assert!(default_error.contains("desktop Catherine interaction adapter"));
         assert!(!default_error.contains("SkippedUnsupportedPartyJob"));
 
         let config = serde_json::json!({
+            "country": "蒙德",
             "onlyDoOnce": true
         });
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut only_once_plan)) =
@@ -18052,7 +18160,7 @@ mod tests {
         let only_once_error =
             desktop_go_to_adventurers_guild_live_preflight(&only_once_plan).unwrap_err();
 
-        assert!(only_once_error.contains("native PathExecutor adapter"));
+        assert!(only_once_error.contains("desktop Catherine interaction adapter"));
         assert!(!only_once_error.contains("SkippedUnsupportedEncounterJob"));
     }
 

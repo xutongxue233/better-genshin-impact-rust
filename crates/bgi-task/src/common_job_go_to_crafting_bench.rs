@@ -615,7 +615,7 @@ pub fn plan_go_to_crafting_bench(
         resin_recognition_rule,
         resin_craft_rule,
         steps,
-        notes: "Legacy crafting-bench pathing, dialogue interaction, condensed-resin recognition, and crafting flow are represented and executable through injectable pathing/OCR/craft hooks; desktop live PathExecutor, one-dragon config loading, OCR, and button click execution remain pending.".to_string(),
+        notes: "Legacy crafting-bench pathing, dialogue interaction, condensed-resin recognition, and crafting flow are represented and executable through injectable pathing/OCR/craft hooks; bundled PathExecutor JSON can be validated through the shared movement-contract preflight, while desktop live movement, one-dragon config loading, OCR, and button click execution remain pending.".to_string(),
     })
 }
 

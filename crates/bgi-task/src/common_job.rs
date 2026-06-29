@@ -25,6 +25,8 @@ mod common_job_linnea_mining;
 mod common_job_lower_head_then_walk_to;
 #[path = "common_job_one_key_expedition.rs"]
 mod common_job_one_key_expedition;
+#[path = "common_job_pathing.rs"]
+mod common_job_pathing;
 #[path = "common_job_relogin.rs"]
 mod common_job_relogin;
 #[path = "common_job_scan_pick_drops.rs"]
@@ -185,6 +187,7 @@ pub use common_job_one_key_expedition::{
     OneKeyExpeditionStepResult, ONE_KEY_EXPEDITION_COLLECT, ONE_KEY_EXPEDITION_RE_DISPATCH,
     ONE_KEY_EXPEDITION_TASK_KEY, ONE_KEY_EXPEDITION_VK_ESCAPE,
 };
+pub use common_job_pathing::{preflight_common_job_pathing_rule, CommonJobPathingPreflightReport};
 pub use common_job_relogin::{
     plan_relogin, ReloginDpiAwarePoint, ReloginExecutionConfig, ReloginExecutionPlan,
     ReloginFailurePolicy, ReloginLocators, ReloginRetryAction, ReloginRetryRule, ReloginStep,

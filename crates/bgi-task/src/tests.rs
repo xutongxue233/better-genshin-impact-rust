@@ -25795,6 +25795,45 @@ fn go_to_adventurers_guild_executor_errors_when_interaction_retry_fails() {
 }
 
 #[test]
+fn common_job_pathing_preflight_reads_bundled_go_to_routes_without_completing_movement() {
+    for pathing_json in [
+        "GameTask/Common/Element/Assets/Json/合成台_璃月.json",
+        "GameTask/Common/Element/Assets/Json/冒险家协会_蒙德.json",
+    ] {
+        let report = preflight_common_job_pathing_rule(pathing_json).unwrap();
+
+        assert_eq!(report.pathing_json, pathing_json);
+        assert!(report
+            .resolved_path
+            .replace('\\', "/")
+            .ends_with(pathing_json));
+        assert!(report.has_positions);
+        assert!(report.segment_count > 0);
+        assert!(report.waypoint_count > 0);
+        assert!(!report.movement_executor_ready);
+        assert!(!report.native_pathing_completed);
+        assert!(report
+            .pending_dependencies
+            .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+        assert!(report
+            .pending_dependencies
+            .contains(&bgi_core::PathingMovementDependency::MovementTermination));
+        assert_eq!(
+            report.movement_contract.waypoint_count,
+            report.waypoint_count
+        );
+        assert!(report.notes.contains("movement contract"));
+    }
+
+    let error = preflight_common_job_pathing_rule("../outside.json").unwrap_err();
+    assert!(matches!(
+        error,
+        TaskError::PathingPlan(message)
+            if message.contains("must be a relative path inside task assets")
+    ));
+}
+
+#[test]
 fn go_to_crafting_bench_plan_preserves_legacy_pathing_interaction_and_condensed_resin_flow() {
     let plan = plan_go_to_crafting_bench(
         Size::new(1920, 1080),

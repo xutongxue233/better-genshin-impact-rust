@@ -47,6 +47,8 @@ pub use pathing::{
     LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType,
     PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
     PathingFarmingExecutionPlan, PathingForceTeleportActionPlan, PathingLogOutputActionPlan,
+    PathingMovementContractPlan, PathingMovementDependency, PathingMovementPhaseContract,
+    PathingMovementSegmentContract, PathingMovementWaypointContract, PathingNativePhaseStatus,
     PathingPoint, PathingPreflightPlan, PathingSegmentPlan, PathingSetTimeActionPlan,
     PathingSummary, PathingTask, PathingWaypointPhase, PathingWaypointPlan, Waypoint,
 };

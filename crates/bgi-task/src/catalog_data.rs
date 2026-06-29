@@ -755,7 +755,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the Adventurers' Guild party switch, encounter reward, navigation, dialogue, and expedition state machine through injectable hooks and invocation live bridge; the desktop common-job route now has condition-aware preflight that skips statically inactive party/encounter branches, recognizes existing nested common-job bridges, and rejects first at the native PathExecutor boundary before Catherine interaction and talk-option drain adapters are wired.",
+        notes: "Rust now preserves and executes the Adventurers' Guild party switch, encounter reward, navigation, dialogue, and expedition state machine through injectable hooks and invocation live bridge; the desktop common-job route now has condition-aware preflight that skips statically inactive party/encounter branches, recognizes existing nested common-job bridges, validates the bundled PathExecutor JSON through the shared movement-contract preflight, and rejects first at the Catherine interaction adapter before talk-option drain adapters are wired.",
     },
     TaskCatalogEntry {
         key: "GoToCraftingBench",
@@ -773,7 +773,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the crafting-bench navigation, dialogue, resin-count, and condensed-resin crafting state machine through injectable hooks and invocation live bridge; the desktop common-job route is wired and explicitly reports the remaining concrete PathExecutor/OCR/click adapter gaps.",
+        notes: "Rust now preserves and executes the crafting-bench navigation, dialogue, resin-count, and condensed-resin crafting state machine through injectable hooks and invocation live bridge; the desktop common-job route validates the bundled PathExecutor JSON through the shared movement-contract preflight and explicitly reports the remaining concrete interaction/OCR/click adapter gaps.",
     },
     TaskCatalogEntry {
         key: "GoToSereniteaPot",
