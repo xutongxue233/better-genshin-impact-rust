@@ -46,9 +46,9 @@ pub use pathing::{
     LinneaMiningDetectionRule, LinneaMiningDetectionSource, LinneaMiningMineRule,
     LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType,
     PathingCommonJobActionPlan, PathingExecutionPlan, PathingFarmingExecutionPlan,
-    PathingLogOutputActionPlan, PathingPoint, PathingPreflightPlan, PathingSegmentPlan,
-    PathingSetTimeActionPlan, PathingSummary, PathingTask, PathingWaypointPhase,
-    PathingWaypointPlan, Waypoint,
+    PathingForceTeleportActionPlan, PathingLogOutputActionPlan, PathingPoint, PathingPreflightPlan,
+    PathingSegmentPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
+    PathingWaypointPhase, PathingWaypointPlan, Waypoint,
 };
 pub use trigger::{initial_triggers, GameUiCategory, TriggerDescriptor};
 pub use ui::{default_navigation, ui_shell_decision, NavigationItem, UiShellDecision};

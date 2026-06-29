@@ -214,6 +214,7 @@ pub enum PathingActionPlan {
     SetTime(PathingSetTimeActionPlan),
     LogOutput(PathingLogOutputActionPlan),
     CommonJob(PathingCommonJobActionPlan),
+    ForceTeleport(PathingForceTeleportActionPlan),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -328,6 +329,15 @@ pub struct PathingCommonJobActionPlan {
     pub action_code: String,
     pub raw_params: Option<String>,
     pub common_job_task_key: String,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingForceTeleportActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub force_teleport: bool,
     pub executor_ready: bool,
     pub notes: String,
 }
@@ -707,6 +717,10 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
         Some(PathingActionPlan::CommonJob(
             plan_common_job_pathing_action("wonderland_cycle", action_params, "WonderlandCycle"),
         ))
+    } else if action.eq_ignore_ascii_case("force_tp") {
+        Some(PathingActionPlan::ForceTeleport(
+            plan_force_teleport_action(action_params),
+        ))
     } else {
         None
     }
@@ -797,6 +811,17 @@ fn plan_common_job_pathing_action(
         notes: format!(
             "Pathing {action_code} action is mapped to the {common_job_task_key} common-job executor contract; legacy action_params are preserved but not consumed by this handler."
         ),
+    }
+}
+
+fn plan_force_teleport_action(action_params: Option<&str>) -> PathingForceTeleportActionPlan {
+    PathingForceTeleportActionPlan {
+        action_code: "force_tp".to_string(),
+        raw_params: action_params.map(ToOwned::to_owned),
+        force_teleport: true,
+        executor_ready: false,
+        notes: "Pathing force_tp action is represented as a force-teleport intent for the HandleTeleport phase; native TpTask dispatch and navigation seed updates remain pending."
+            .to_string(),
     }
 }
 

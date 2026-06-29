@@ -20600,6 +20600,61 @@ fn auto_pathing_action_boundary_reports_log_output_and_runs_common_jobs() {
 }
 
 #[test]
+fn auto_pathing_action_boundary_reports_force_tp_teleport_intent() {
+    let root = unique_test_root("auto-pathing-force-tp");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("force_tp_route.json"),
+        r#"{
+                "info": { "name": "force tp route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 9282.7, "y": -2163.58, "type": "teleport", "move_mode": "walk", "action": "force_tp", "action_params": "" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/force_tp_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            panic!("force_tp teleport phase must not call common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 0);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.unsupported_actions, 0);
+    assert_eq!(report.invalid_actions, 0);
+
+    let waypoint_report = report
+        .waypoint_reports
+        .iter()
+        .find(|waypoint| waypoint.action.as_deref() == Some("force_tp"))
+        .expect("expected force_tp waypoint report");
+    assert!(waypoint_report.action_report.is_none());
+
+    let teleport_phase = waypoint_report
+        .phase_reports
+        .iter()
+        .find(|phase| phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport)
+        .expect("expected HandleTeleport phase report");
+    assert_eq!(teleport_phase.status, PathingBoundaryStatus::Unsupported);
+    assert!(teleport_phase.reason.contains("force_tp teleport intent"));
+    assert!(teleport_phase.reason.contains("native TpTask dispatch"));
+    assert!(teleport_phase.reason.contains("force_teleport=true"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_runtime_report_stops_on_unsupported_phase_without_success_end() {
     let root = unique_test_root("auto-pathing-runtime-unsupported");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");

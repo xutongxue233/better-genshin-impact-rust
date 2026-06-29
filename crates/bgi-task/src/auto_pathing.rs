@@ -622,7 +622,7 @@ where
                         reason,
                     }
                 } else {
-                    pathing_phase_boundary_report(*phase)
+                    pathing_phase_boundary_report(*phase, waypoint)
                 };
 
                 if phase_report.status == PathingBoundaryStatus::Unsupported {
@@ -649,39 +649,60 @@ where
     Ok(report)
 }
 
-fn pathing_phase_boundary_report(phase: PathingWaypointPhase) -> PathingPhaseBoundaryReport {
+fn pathing_phase_boundary_report(
+    phase: PathingWaypointPhase,
+    waypoint: &PathingWaypointPlan,
+) -> PathingPhaseBoundaryReport {
     let (status, reason) = match phase {
         PathingWaypointPhase::RecoverWhenLowHp => (
             PathingBoundaryStatus::Unsupported,
-            "low-HP recovery detection and food dispatch are still native-pending",
+            "low-HP recovery detection and food dispatch are still native-pending".to_string(),
         ),
-        PathingWaypointPhase::HandleTeleport => (
-            PathingBoundaryStatus::Unsupported,
-            "teleport handling still depends on the native map/QuickTeleport stack",
-        ),
+        PathingWaypointPhase::HandleTeleport => {
+            if let Some(PathingActionPlan::ForceTeleport(force_teleport)) =
+                waypoint.action_plan.as_ref()
+            {
+                (
+                    PathingBoundaryStatus::Unsupported,
+                    format!(
+                        "force_tp teleport intent to ({:.3}, {:.3}) is represented in Rust with force_teleport={}, but native TpTask dispatch and navigation seed updates remain pending",
+                        waypoint.route_point.x, waypoint.route_point.y, force_teleport.force_teleport
+                    ),
+                )
+            } else {
+                (
+                    PathingBoundaryStatus::Unsupported,
+                    "teleport handling still depends on the native map/QuickTeleport stack"
+                        .to_string(),
+                )
+            }
+        }
         PathingWaypointPhase::FaceTo => (
             PathingBoundaryStatus::Unsupported,
-            "camera orientation dispatch is not implemented in the Rust pathing boundary",
+            "camera orientation dispatch is not implemented in the Rust pathing boundary"
+                .to_string(),
         ),
         PathingWaypointPhase::MoveTo | PathingWaypointPhase::MoveCloseTo => (
             PathingBoundaryStatus::Unsupported,
-            "path movement and close-range adjustment are not implemented in the Rust pathing boundary",
+            "path movement and close-range adjustment are not implemented in the Rust pathing boundary"
+                .to_string(),
         ),
         PathingWaypointPhase::BeforeMoveToTarget
         | PathingWaypointPhase::BeforeMoveCloseToTarget => (
             PathingBoundaryStatus::Reported,
-            "legacy hook phase recorded; no native side effect is required in the Rust boundary",
+            "legacy hook phase recorded; no native side effect is required in the Rust boundary"
+                .to_string(),
         ),
         PathingWaypointPhase::RunAction => (
             PathingBoundaryStatus::Skipped,
-            "run-action phase requires action-specific dispatch",
+            "run-action phase requires action-specific dispatch".to_string(),
         ),
     };
 
     PathingPhaseBoundaryReport {
         phase,
         status,
-        reason: reason.to_string(),
+        reason,
     }
 }
 
@@ -704,6 +725,16 @@ where
         Some(PathingActionPlan::CommonJob(common_job)) => {
             execute_common_job_pathing_action(common_job, capture_size, live_executor)
         }
+        Some(PathingActionPlan::ForceTeleport(_)) => Ok(PathingActionBoundaryReport {
+            action_code: "force_tp".to_string(),
+            status: PathingBoundaryStatus::Unsupported,
+            message:
+                "force_tp is handled by the HandleTeleport phase; native TpTask dispatch remains pending"
+                    .to_string(),
+            common_job_task_key: None,
+            common_job_plan: None,
+            common_job_live_execution: None,
+        }),
         Some(PathingActionPlan::LinneaMining(_)) => Ok(PathingActionBoundaryReport {
             action_code: "linnea_mining".to_string(),
             status: PathingBoundaryStatus::Unsupported,

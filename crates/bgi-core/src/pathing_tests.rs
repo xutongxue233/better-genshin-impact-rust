@@ -463,6 +463,61 @@ fn pathing_execution_plan_models_log_and_common_job_actions() {
 }
 
 #[test]
+fn pathing_execution_plan_models_force_tp_as_teleport_intent() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "force teleport route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 9282.7, "y": -2163.58, "type": "teleport", "move_mode": "walk", "action": "force_tp", "action_params": "" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+    let waypoint = &plan.segments[0].waypoints[0];
+
+    assert_eq!(
+        waypoint.declared_action_use,
+        Some(PathingActionUseWaypointType::Custom)
+    );
+    assert_eq!(
+        waypoint.phases,
+        vec![
+            PathingWaypointPhase::RecoverWhenLowHp,
+            PathingWaypointPhase::HandleTeleport
+        ]
+    );
+    assert!(!waypoint.phases.contains(&PathingWaypointPhase::RunAction));
+
+    let Some(PathingActionPlan::ForceTeleport(force_tp)) = &waypoint.action_plan else {
+        panic!("expected force_tp teleport intent plan");
+    };
+    assert_eq!(force_tp.action_code, "force_tp");
+    assert_eq!(force_tp.raw_params.as_deref(), Some(""));
+    assert!(force_tp.force_teleport);
+    assert!(!force_tp.executor_ready);
+    assert!(force_tp.notes.contains("HandleTeleport"));
+
+    let teleport_contract = &plan.movement_contract.segments[0].waypoints[0];
+    let handle_teleport_contract = teleport_contract
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::HandleTeleport)
+        .expect("expected HandleTeleport contract");
+    assert_eq!(
+        handle_teleport_contract.target_point,
+        Some(PathingPoint {
+            x: 9282.7,
+            y: -2163.58
+        })
+    );
+    assert!(handle_teleport_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::Teleport));
+}
+
+#[test]
 fn empty_pathing_execution_plan_skips_preflight_like_legacy_executor() {
     let task = PathingTask::from_json(
         r#"{
