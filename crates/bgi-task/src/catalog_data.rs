@@ -178,7 +178,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoGeniusInvokation config, strategy source resolution, strategy script parsing, character/action plans, card/dice/template/OCR/click/wait rules, skip-main-UI launch semantics, legacy exception boundaries, and an injectable duel executor/report surface for startup, dice, action, wait, exception, cancellation, and cleanup flows; desktop live capture, template matching, OCR, input dispatch, default card JSON fallback, and TCG live adapters remain pending.",
+        notes: "Rust models AutoGeniusInvokation config, strategy source resolution, strategy script parsing, character/action plans, card/dice/template/OCR/click/wait rules, skip-main-UI launch semantics, legacy exception boundaries, and an injectable duel executor/report surface for startup, dice, action, wait, exception, cancellation, and cleanup flows; the desktop generic independent live route now returns an explicit capture/OCR/template/card-recognition/input/duel-state/strategy/reward/notification adapter gap instead of silently declining execution, while real TCG live adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoWood",
@@ -240,7 +240,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoDomain config/params, domain entry retries, Sunday reward selection, combat/tree/reward/resin/artifact-salvage phases, template locators, stop/retry rules, and an injectable executor for entry, fight, reward, resin, artifact-salvage handoff, cancellation, and cleanup; desktop live capture, map teleport, OCR/template matching, input dispatch, CombatScenes, YOLO tree detection, reward recognition, and artifact salvage adapters remain pending.",
+        notes: "Rust models AutoDomain config/params, domain entry retries, Sunday reward selection, combat/tree/reward/resin/artifact-salvage phases, template locators, stop/retry rules, and an injectable executor for entry, fight, reward, resin, artifact-salvage handoff, cancellation, and cleanup; the desktop generic independent live route now returns an explicit capture/map-teleport/OCR/template/input/CombatScenes/YOLO/reward/artifact-salvage adapter gap instead of silently declining execution, while real desktop adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoTrack",
@@ -278,7 +278,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models the obsolete AutoTrackPath way2.json input, TpConfig defaults, waypoint plans, teleport/minimap wait, mouse-angle calibration, point tracking, motion refresh, jump loop, semaphore, cancellation, cleanup rules, and an injectable executor with action reports; desktop live TpTask, mini-map capture, map matching, orientation computation, mouse/key input, overlay, and cancellation adapters remain pending.",
+        notes: "Rust models the obsolete AutoTrackPath way2.json input, TpConfig defaults, waypoint plans, teleport/minimap wait, mouse-angle calibration, point tracking, motion refresh, jump loop, semaphore, cancellation, cleanup rules, and an injectable executor with action reports; the desktop generic independent live route now returns an explicit TpTask/mini-map capture/map matching/orientation/input/overlay/cancellation adapter gap instead of silently declining execution, while real desktop adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoMusicGame",
@@ -325,7 +325,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoBoss config/params, supported boss data, required route files, original/supplemental resin gates, AutoFight handoff, reward navigation/claim, revive retry, post-fight repositioning, and an injectable executor for route/combat/reward/cancellation/cleanup outcomes; desktop live capture, OCR/template matching, pathing/key-mouse execution, CombatScenes, reward recognition, notifications, and cancellation adapters remain pending.",
+        notes: "Rust models AutoBoss config/params, supported boss data, required route files, original/supplemental resin gates, AutoFight handoff, reward navigation/claim, revive retry, post-fight repositioning, and an injectable executor for route/combat/reward/cancellation/cleanup outcomes; the desktop generic independent live route now returns an explicit capture/OCR/template/pathing/key-mouse/CombatScenes/reward/notification/cancellation adapter gap instead of silently declining execution, while real desktop adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoLeyLineOutcrop",
@@ -345,7 +345,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoLeyLineOutcrop config/params, static country and node route data, handbook/manual-map discovery semantics, BFS path selection, target/rerun route derivation, AutoFight handoff, OCR finish rules, resin exhaustion/recheck, reward resin priority, friendship-team switching, post-reward drop scan, custom-mark overlay cleanup, and an injectable executor for route/fight/reward/rerun/cancellation flows; desktop live capture, OCR/template execution, TpTask/PathExecutor, key-mouse dispatch, CombatScenes, ScanPickTask, mask overlay, and notifications remain pending.",
+        notes: "Rust models AutoLeyLineOutcrop config/params, static country and node route data, handbook/manual-map discovery semantics, BFS path selection, target/rerun route derivation, AutoFight handoff, OCR finish rules, resin exhaustion/recheck, reward resin priority, friendship-team switching, post-reward drop scan, custom-mark overlay cleanup, and an injectable executor for route/fight/reward/rerun/cancellation flows; the desktop generic independent live route now returns an explicit capture/OCR/template/TpTask/PathExecutor/key-mouse/CombatScenes/ScanPickTask/mask-overlay/notification adapter gap instead of silently declining execution, while real desktop adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoStygianOnslaught",
@@ -365,7 +365,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoStygianOnslaught config/defaults, combat script path selection, Stygian finite-state graph, event-menu navigation, teleport/domain entrance detection, hard-mode selection, fixed boss coordinates, in-page preset-team switching, Stygian combat loop boundaries, domain-end OCR rule, leyline flower interaction, resin usage semantics, exit-domain flow, quick-only AutoArtifactSalvage handoff, and an injectable executor/report surface for navigation, combat, reward, exit, artifact salvage, cancellation, and cleanup flows; desktop live capture, OCR/template detection, combat command loop, input dispatch, notifications, and reward/resin adapters remain pending.",
+        notes: "Rust models AutoStygianOnslaught config/defaults, combat script path selection, Stygian finite-state graph, event-menu navigation, teleport/domain entrance detection, hard-mode selection, fixed boss coordinates, in-page preset-team switching, Stygian combat loop boundaries, domain-end OCR rule, leyline flower interaction, resin usage semantics, exit-domain flow, quick-only AutoArtifactSalvage handoff, and an injectable executor/report surface for navigation, combat, reward, exit, artifact salvage, cancellation, and cleanup flows; the desktop generic independent live route now returns an explicit capture/OCR/template/combat-command/input/reward/resin/artifact-salvage/notification adapter gap instead of silently declining execution, while real desktop adapters remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoFishing",

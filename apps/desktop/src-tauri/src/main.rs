@@ -163,13 +163,15 @@ use bgi_task::{
     TeleportTargetPlan, UseRedeemCodeExecutionConfig, UseRedeemCodeExecutionPlan,
     UseRedeemCodeExecutionReport, UseRedeemCodeRuntime, WalkToFExecutionPlan,
     WalkToFExecutionReport, WonderlandCycleExecutionPlan, WonderlandCycleExecutionReport,
-    AUTO_MUSIC_GAME_TASK_KEY, AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH, AUTO_OPEN_CHEST_TASK_KEY,
-    AUTO_PICK_PICK_KEY_ASSET, AUTO_TRACK_DEFAULT_CAPTURE_WIDTH, AUTO_TRACK_TASK_KEY,
-    AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY, COMMON_BTN_WHITE_CONFIRM,
-    QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
-    QUICK_TELEPORT_MAP_SCALE_BUTTON, QUICK_TELEPORT_MAP_SETTINGS_BUTTON,
-    RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY,
-    USE_REDEEM_CODE_TASK_KEY,
+    AUTO_BOSS_TASK_KEY, AUTO_DOMAIN_TASK_KEY, AUTO_GENIUS_INVOKATION_TASK_KEY,
+    AUTO_LEY_LINE_OUTCROP_TASK_KEY, AUTO_MUSIC_GAME_TASK_KEY,
+    AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH, AUTO_OPEN_CHEST_TASK_KEY, AUTO_PICK_PICK_KEY_ASSET,
+    AUTO_STYGIAN_ONSLAUGHT_TASK_KEY, AUTO_TRACK_DEFAULT_CAPTURE_WIDTH, AUTO_TRACK_PATH_TASK_KEY,
+    AUTO_TRACK_TASK_KEY, AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY,
+    COMMON_BTN_WHITE_CONFIRM, QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY,
+    QUICK_SERENITEA_POT_TASK_KEY, QUICK_TELEPORT_MAP_SCALE_BUTTON,
+    QUICK_TELEPORT_MAP_SETTINGS_BUTTON, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS,
+    RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
 };
 use bgi_vision::{
     convert_bgr_image, crop_bgr_image, in_range_mask, recognition_type_infos,
@@ -4572,13 +4574,17 @@ fn execute_desktop_common_job_live_result(
                 "{} live execution completed: completed={}, executed_steps={}, skipped_steps={}",
                 task_name, completed, executed_steps, skipped_steps
             );
+            result.live_completed = Some(completed);
             result.common_job_live_execution = Some(report);
         }
-        Ok(None) => {}
+        Ok(None) => {
+            result.live_completed = None;
+        }
         Err(error) => {
             result.status = TaskInvocationExecutionStatus::Invalid;
             result.executed = false;
             result.message = format!("{task_key} live execution failed: {error}");
+            result.live_completed = None;
             result.common_job_live_execution = None;
         }
     }
@@ -4596,16 +4602,21 @@ fn execute_desktop_script_dispatcher_live_result(
     let task_key = plan.task_key().to_string();
     match execute_desktop_script_dispatcher_live_plan(config, game_window, cancellation, &plan) {
         Ok(Some(report)) => {
+            let completed = report.completed();
             result.status = TaskInvocationExecutionStatus::Ready;
             result.executed = true;
             result.message = desktop_script_dispatcher_live_summary(&report);
+            result.live_completed = Some(completed);
             result.script_dispatcher_live_execution = Some(report);
         }
-        Ok(None) => {}
+        Ok(None) => {
+            result.live_completed = None;
+        }
         Err(error) => {
             result.status = TaskInvocationExecutionStatus::Invalid;
             result.executed = false;
             result.message = format!("{task_key} live execution failed: {error}");
+            result.live_completed = None;
             result.script_dispatcher_live_execution = None;
         }
     }
@@ -6846,6 +6857,30 @@ fn execute_desktop_independent_task_live_plan(
                 "AutoFight full fight-loop live execution requires native CombatScenes, team recognition, skill cooldown, burst readiness, command-loop dispatch, cleanup, and post-fight pickup adapters; use mode=finishProbe for the migrated finish-detection probe boundary".to_string(),
             )),
         },
+        Some(AUTO_DOMAIN_TASK_KEY) => Err(desktop_independent_live_adapter_gap(
+            AUTO_DOMAIN_TASK_KEY,
+            "capture, map teleport, OCR/template matching, input dispatch, CombatScenes, YOLO tree detection, reward recognition, artifact-salvage handoff, cancellation, and notification",
+        )),
+        Some(AUTO_GENIUS_INVOKATION_TASK_KEY) => Err(desktop_independent_live_adapter_gap(
+            AUTO_GENIUS_INVOKATION_TASK_KEY,
+            "capture, OCR/template matching, card recognition, input dispatch, duel-state tracking, script/strategy execution, reward handling, and notification",
+        )),
+        Some(AUTO_TRACK_PATH_TASK_KEY) => Err(desktop_independent_live_adapter_gap(
+            AUTO_TRACK_PATH_TASK_KEY,
+            "TpTask, mini-map capture, map matching, orientation computation, mouse/key input, overlay, and cancellation",
+        )),
+        Some(AUTO_BOSS_TASK_KEY) => Err(desktop_independent_live_adapter_gap(
+            AUTO_BOSS_TASK_KEY,
+            "capture, OCR/template matching, pathing/key-mouse execution, CombatScenes, reward recognition, notification, and cancellation",
+        )),
+        Some(AUTO_LEY_LINE_OUTCROP_TASK_KEY) => Err(desktop_independent_live_adapter_gap(
+            AUTO_LEY_LINE_OUTCROP_TASK_KEY,
+            "capture, OCR/template execution, TpTask/PathExecutor, key-mouse dispatch, CombatScenes, ScanPickTask, mask overlay, and notification",
+        )),
+        Some(AUTO_STYGIAN_ONSLAUGHT_TASK_KEY) => Err(desktop_independent_live_adapter_gap(
+            AUTO_STYGIAN_ONSLAUGHT_TASK_KEY,
+            "capture, OCR/template detection, combat command loop, input dispatch, reward/resin handling, artifact-salvage handoff, and notification",
+        )),
         Some("AutoArtifactSalvage") => Err(TaskError::CommonJobExecution(
             "AutoArtifactSalvage desktop live adapter remains pending: capture, OCR, OpenCV, ONNX, input/click, overlay, ClearScript-compatible filtering, and destructive confirmation adapters are not wired".to_string(),
         )),
@@ -6988,6 +7023,12 @@ fn execute_desktop_independent_task_live_plan(
         }
         _ => Ok(None),
     }
+}
+
+fn desktop_independent_live_adapter_gap(task_key: &str, pending_adapters: &str) -> TaskError {
+    TaskError::CommonJobExecution(format!(
+        "{task_key} desktop live adapter remains pending: {pending_adapters} adapters are not wired"
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19632,6 +19673,60 @@ mod tests {
                     && message.contains("overlay")
                     && message.contains("ONNX")
         ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_orchestration_adapter_gaps() {
+        let cases: [(&str, &[&str]); 6] = [
+            (
+                AUTO_DOMAIN_TASK_KEY,
+                &["capture", "map teleport", "CombatScenes", "YOLO"],
+            ),
+            (
+                AUTO_GENIUS_INVOKATION_TASK_KEY,
+                &["capture", "card recognition", "duel-state"],
+            ),
+            (
+                AUTO_TRACK_PATH_TASK_KEY,
+                &["TpTask", "mini-map capture", "orientation"],
+            ),
+            (
+                AUTO_BOSS_TASK_KEY,
+                &["capture", "pathing/key-mouse", "CombatScenes"],
+            ),
+            (
+                AUTO_LEY_LINE_OUTCROP_TASK_KEY,
+                &["TpTask/PathExecutor", "CombatScenes", "ScanPickTask"],
+            ),
+            (
+                AUTO_STYGIAN_ONSLAUGHT_TASK_KEY,
+                &["combat command loop", "reward/resin", "artifact-salvage"],
+            ),
+        ];
+
+        for (task_key, expected_terms) in cases {
+            let plan = desktop_independent_task_invocation_plan(task_key);
+
+            let error = execute_desktop_independent_task_live_plan(
+                Path::new("."),
+                &AppConfig::default(),
+                None,
+                Arc::new(InputCancellationToken::new()),
+                &plan,
+            )
+            .unwrap_err();
+
+            let TaskError::CommonJobExecution(message) = error else {
+                panic!("expected common-job execution gap for {task_key}");
+            };
+            assert!(
+                message.contains(&format!("{task_key} desktop live adapter remains pending")),
+                "{message}"
+            );
+            for expected in expected_terms {
+                assert!(message.contains(expected), "{message}");
+            }
+        }
     }
 
     #[test]

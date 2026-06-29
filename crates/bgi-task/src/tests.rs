@@ -16473,6 +16473,7 @@ fn task_invocation_execution_with_live_executor_runs_return_main_ui() {
     assert_eq!(calls, 1);
     assert!(result.executed);
     assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert_eq!(result.live_completed, Some(true));
     assert!(result.message.contains("completed=true"));
     let Some(CommonJobLiveExecutionReport::ReturnMainUi(report)) = result.common_job_live_execution
     else {
@@ -16674,6 +16675,7 @@ fn task_invocation_execution_with_live_executors_runs_auto_fishing_script_dispat
     assert_eq!(script_dispatcher_calls, 1);
     assert!(result.executed);
     assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert_eq!(result.live_completed, Some(true));
     assert!(result
         .message
         .contains("AutoFishing live execution completed"));
@@ -16736,6 +16738,7 @@ fn task_invocation_execution_with_all_live_executors_runs_independent_task_plan(
     assert_eq!(independent_task_calls, 1);
     assert!(result.executed);
     assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert_eq!(result.live_completed, Some(true));
     assert!(result.message.contains("QuickBuy live execution completed"));
     assert!(result.message.contains("completed=true"));
     let Some(IndependentTaskLiveExecutionReport::QuickBuy(report)) =
@@ -16747,6 +16750,64 @@ fn task_invocation_execution_with_all_live_executors_runs_independent_task_plan(
         report.state.result,
         Some(QuickBuyExecutionResult::Completed)
     );
+}
+
+#[test]
+fn task_invocation_live_completion_distinguishes_partial_independent_boundary() {
+    let mut dispatcher = DispatcherRuntime::default();
+    let plan = TaskInvocationPlan {
+        kind: TaskInvocationKind::RunIndependentTask,
+        task_key: Some("AutoPathing".to_string()),
+        catalog_entry: find_task_catalog_entry("AutoPathing"),
+        interval_ms: None,
+        clears_existing_triggers: false,
+        config: Some(serde_json::json!({
+            "route": "liyue/live_log_route.json"
+        })),
+        uses_linked_cancellation: true,
+    };
+
+    let result = execute_task_invocation_plan_with_all_live_executors(
+        &mut dispatcher,
+        plan,
+        &mut |_plan| Ok(None),
+        &mut |_plan| Ok(None),
+        &mut |plan| {
+            assert_eq!(plan.task_key.as_deref(), Some("AutoPathing"));
+            Ok(Some(
+                IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(
+                    AutoPathingActionBoundaryReport {
+                        source: "test",
+                        route: "liyue/live_log_route.json".to_string(),
+                        normalized_path: PathBuf::from(
+                            "User/AutoPathing/liyue/live_log_route.json",
+                        ),
+                        boundary_completed: true,
+                        native_pathing_completed: false,
+                        executed_actions: 0,
+                        skipped_actions: 0,
+                        unsupported_actions: 0,
+                        invalid_actions: 0,
+                        unsupported_phases: 1,
+                        waypoint_reports: Vec::new(),
+                        notes: "action boundary only".to_string(),
+                    },
+                ),
+            ))
+        },
+    );
+
+    assert!(result.executed);
+    assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert_eq!(result.live_completed, Some(false));
+    assert!(result.message.contains("completed=false"));
+    let Some(IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report)) =
+        result.independent_task_live_execution
+    else {
+        panic!("expected AutoPathing action-boundary live report");
+    };
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
 }
 
 #[test]
@@ -16804,6 +16865,7 @@ fn task_invocation_execution_with_all_live_executors_runs_auto_wood_independent_
     assert_eq!(independent_task_calls, 1);
     assert!(result.executed);
     assert_eq!(result.status, TaskInvocationExecutionStatus::Ready);
+    assert_eq!(result.live_completed, Some(true));
     assert!(result.message.contains("AutoWood live execution completed"));
     assert!(result.message.contains("completed=true"));
     assert!(result.message.contains("skipped_steps=1"));

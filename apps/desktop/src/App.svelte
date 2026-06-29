@@ -1062,6 +1062,7 @@
     status: string;
     message: string;
     executed: boolean;
+    live_completed: boolean | null;
   };
 
   type JavaScriptTaskExecution = {
@@ -3161,6 +3162,8 @@
     const executionResults = taskExecutionResults(execution);
     const nativePending = executionResults.filter((result) => result.status === "NativePending").length;
     const runtimeOnly = executionResults.filter((result) => result.status === "RuntimeOnly").length;
+    const liveCompleted = executionResults.filter((result) => result.live_completed === true).length;
+    const livePartial = executionResults.filter((result) => result.live_completed === false).length;
     return {
       title: "Task Invocations",
       meta: `${execution?.mode ?? "PlanOnly"} · ${total} planned${invocations.errors.length > 0 ? ` · ${invocations.errors.length} errors` : ""}`,
@@ -3169,6 +3172,8 @@
         { label: "Genshin", value: `${invocations.genshin.length}` },
         { label: "Pending", value: `${nativePending}` },
         { label: "Runtime", value: `${runtimeOnly}` },
+        { label: "Live Done", value: `${liveCompleted}` },
+        { label: "Live Partial", value: `${livePartial}` },
         {
           label: "First",
           value: firstPlans.map((plan) => plan.task_key ?? plan.kind).join(", ") || "-",

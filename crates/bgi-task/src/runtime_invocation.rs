@@ -441,7 +441,7 @@ impl ScriptDispatcherLiveExecutionReport {
         }
     }
 
-    fn completed(&self) -> bool {
+    pub fn completed(&self) -> bool {
         match self {
             ScriptDispatcherLiveExecutionReport::AutoCook(report) => {
                 report.status != AutoCookExecutionStatus::IterationLimitReached
@@ -825,6 +825,7 @@ pub struct TaskInvocationExecutionResult {
     pub realtime_trigger_live_execution: Option<RealtimeTriggerLiveExecutionReport>,
     pub script_dispatcher_execution_plan: Option<ScriptDispatcherExecutionPlan>,
     pub script_dispatcher_live_execution: Option<ScriptDispatcherLiveExecutionReport>,
+    pub live_completed: Option<bool>,
     pub executed: bool,
 }
 
@@ -1116,6 +1117,7 @@ pub fn evaluate_task_invocation_plan_with_context(
         realtime_trigger_live_execution: None,
         script_dispatcher_execution_plan,
         script_dispatcher_live_execution: None,
+        live_completed: None,
         executed,
     }
 }
@@ -1425,9 +1427,11 @@ fn execute_common_job_live_if_available<F>(
             result.message = format!(
                 "{task_name} live execution completed: completed={completed}, executed_steps={executed_steps}, skipped_steps={skipped_steps}"
             );
+            result.live_completed = Some(completed);
             result.common_job_live_execution = Some(report);
         }
         Ok(None) => {
+            result.live_completed = None;
             result.common_job_live_execution = None;
         }
         Err(error) => {
@@ -1435,6 +1439,7 @@ fn execute_common_job_live_if_available<F>(
             result.status = TaskInvocationExecutionStatus::Invalid;
             result.executed = false;
             result.message = format!("{task_name} live execution failed: {error}");
+            result.live_completed = None;
             result.common_job_live_execution = None;
         }
     }
@@ -1471,9 +1476,11 @@ fn execute_script_dispatcher_live_if_available<F>(
             result.executed = true;
             result.message =
                 format!("{task_name} live execution completed: completed={completed}, {summary}");
+            result.live_completed = Some(completed);
             result.script_dispatcher_live_execution = Some(report);
         }
         Ok(None) => {
+            result.live_completed = None;
             result.script_dispatcher_live_execution = None;
         }
         Err(error) => {
@@ -1481,6 +1488,7 @@ fn execute_script_dispatcher_live_if_available<F>(
             result.status = TaskInvocationExecutionStatus::Invalid;
             result.executed = false;
             result.message = format!("{task_name} live execution failed: {error}");
+            result.live_completed = None;
             result.script_dispatcher_live_execution = None;
         }
     }
@@ -1511,9 +1519,11 @@ pub fn execute_independent_task_live_if_available<F>(
             result.message = format!(
                 "{task_name} live execution completed: completed={completed}, executed_steps={executed_steps}, skipped_steps={skipped_steps}"
             );
+            result.live_completed = Some(completed);
             result.independent_task_live_execution = Some(report);
         }
         Ok(None) => {
+            result.live_completed = None;
             result.independent_task_live_execution = None;
         }
         Err(error) => {
@@ -1524,6 +1534,7 @@ pub fn execute_independent_task_live_if_available<F>(
             result.status = TaskInvocationExecutionStatus::Invalid;
             result.executed = false;
             result.message = format!("{task_key} live execution failed: {error}");
+            result.live_completed = None;
             result.independent_task_live_execution = None;
         }
     }
