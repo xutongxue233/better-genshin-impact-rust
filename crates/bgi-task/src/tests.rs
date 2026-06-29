@@ -20074,7 +20074,7 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
     assert_eq!(turn_entry.hotkey_fields, &["turnAroundHotkey"]);
     assert!(turn_entry
         .notes
-        .contains("desktop hotkey bridge still needs to consume this Rust plan"));
+        .contains("desktop independent-task live route now consumes this plan"));
 
     let enhance_entry = find_task_catalog_entry(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY).unwrap();
     assert_eq!(enhance_entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);

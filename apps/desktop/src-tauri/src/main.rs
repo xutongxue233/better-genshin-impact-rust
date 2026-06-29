@@ -27,8 +27,8 @@ use bgi_core::{
 use bgi_hotkey::Hotkey;
 use bgi_input::{
     currently_pressed_keys, input_events_for_action, input_events_for_key,
-    post_message_events_for_action, release_pressed_keys_sequence, InputSequence, KeyActionType,
-    MouseButton, PostMessageMode,
+    post_message_events_for_action, release_pressed_keys_sequence, send_events_with_cancellation,
+    InputEvent, InputSequence, KeyActionType, MouseButton, PostMessageMode,
 };
 use bgi_script::{
     add_key_mouse_script_project, add_pathing_script_project, add_script_group_project,
@@ -71,22 +71,22 @@ use bgi_task::{
     execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
     execute_claim_mail_rewards_live, execute_go_to_crafting_bench_plan,
     execute_independent_task_live_if_available, execute_independent_task_with_cancel,
-    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
-    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
-    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
-    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
-    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
-    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
-    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat,
-    plan_auto_music_game, plan_auto_open_chest, plan_auto_pick, plan_auto_wood, plan_quick_buy,
-    plan_quick_serenitea_pot, plan_quick_teleport, plan_return_main_ui, plan_wonderland_cycle,
-    redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick,
-    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
-    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
-    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
-    AutoEatExecutionConfig, AutoEatExecutionPlan, AutoEatFoodExecutionPlan,
-    AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime, AutoEatRuntime,
-    AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
+    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
+    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
+    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
+    execute_team_context_combat_script_inputs, execute_teleport_plan, execute_use_redeem_code_plan,
+    execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
+    extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
+    plan_auto_eat, plan_auto_music_game, plan_auto_open_chest, plan_auto_pick, plan_auto_wood,
+    plan_quick_buy, plan_quick_serenitea_pot, plan_quick_teleport, plan_return_main_ui,
+    plan_turn_around_macro, plan_wonderland_cycle, redeem_code_entries_from_strings,
+    runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
+    switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
+    AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
+    AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
+    AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
+    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoMusicAlbumExecutionReport, AutoMusicAlbumPageStatus, AutoMusicAlbumRuntime,
@@ -133,6 +133,8 @@ use bgi_task::{
     GoToSereniteaPotStepAction, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
     GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
     IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
+    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
     OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
     PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
     QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
@@ -162,7 +164,7 @@ use bgi_task::{
     AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY, COMMON_BTN_WHITE_CONFIRM,
     QUICK_BUY_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY, QUICK_TELEPORT_MAP_SCALE_BUTTON,
     QUICK_TELEPORT_MAP_SETTINGS_BUTTON, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS,
-    RETURN_MAIN_UI_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
+    RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
 };
 use bgi_vision::{
     convert_bgr_image, crop_bgr_image, in_range_mask, recognition_type_infos,
@@ -6875,6 +6877,17 @@ fn execute_desktop_independent_task_live_plan(
                 execution.result,
             )))
         }
+        Some(TURN_AROUND_MACRO_TASK_KEY) => {
+            let report = execute_desktop_turn_around_macro_live_plan(
+                game_window,
+                plan.config.as_ref(),
+                cancellation,
+            )
+            .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(IndependentTaskLiveExecutionReport::TurnAroundMacro(
+                report,
+            )))
+        }
         Some(AUTO_MUSIC_GAME_TASK_KEY) => {
             match desktop_auto_music_game_route_mode(plan.config.as_ref())? {
                 DesktopAutoMusicGameRouteMode::Performance => {
@@ -6916,6 +6929,95 @@ fn execute_desktop_independent_task_live_plan(
             )))
         }
         _ => Ok(None),
+    }
+}
+
+fn execute_desktop_turn_around_macro_live_plan(
+    game_window: Option<&GameWindowMatch>,
+    plan_config: Option<&Value>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<MacroHotkeyExecutionReport, String> {
+    let window = game_window.ok_or_else(|| {
+        "TurnAroundMacro live execution requires a detected game window".to_string()
+    })?;
+    let mut config = MacroHotkeyExecutionConfig::from_value(plan_config);
+    config.capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_turn_around_macro(config);
+    execute_desktop_macro_hotkey_live(&plan, cancellation)
+}
+
+fn execute_desktop_macro_hotkey_live(
+    plan: &MacroHotkeyExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<MacroHotkeyExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err(format!("{} live execution cancelled", plan.task_key));
+    }
+    let mut runtime = DesktopMacroHotkeyRuntime { cancellation };
+    execute_macro_hotkey_plan(plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopMacroHotkeyRuntime {
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopMacroHotkeyRuntime {
+    fn dispatch_events(&self, events: &[InputEvent]) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "MacroHotkey live execution cancelled".to_string(),
+            ));
+        }
+        send_events_with_cancellation(events, self.cancellation.as_ref())
+            .map(|_| ())
+            .map_err(|error| {
+                TaskError::CommonJobExecution(format!("MacroHotkey input dispatch failed: {error}"))
+            })
+    }
+}
+
+impl MacroHotkeyRuntime for DesktopMacroHotkeyRuntime {
+    fn macro_hotkey_preflight(
+        &mut self,
+        _rule: &MacroHotkeyPreflightRule,
+    ) -> bgi_task::Result<bool> {
+        Err(TaskError::CommonJobExecution(
+            "MacroHotkey desktop preflight adapter is not wired".to_string(),
+        ))
+    }
+
+    fn move_macro_hotkey_mouse_by(&mut self, dx: i64, dy: i64) -> bgi_task::Result<()> {
+        let dx = i32::try_from(dx).map_err(|_| {
+            TaskError::CommonJobExecution(format!("MacroHotkey mouse dx {dx} is out of range"))
+        })?;
+        let dy = i32::try_from(dy).map_err(|_| {
+            TaskError::CommonJobExecution(format!("MacroHotkey mouse dy {dy} is out of range"))
+        })?;
+        self.dispatch_events(&[InputEvent::MouseMoveRelative { dx, dy }])
+    }
+
+    fn click_macro_hotkey_capture_point(
+        &mut self,
+        _point: &MacroHotkeyScreenPoint,
+    ) -> bgi_task::Result<()> {
+        Err(TaskError::CommonJobExecution(
+            "MacroHotkey desktop capture-point click adapter is not wired".to_string(),
+        ))
+    }
+
+    fn move_macro_hotkey_capture_point(
+        &mut self,
+        _point: &MacroHotkeyScreenPoint,
+    ) -> bgi_task::Result<()> {
+        Err(TaskError::CommonJobExecution(
+            "MacroHotkey desktop capture-point move adapter is not wired".to_string(),
+        ))
+    }
+
+    fn wait_macro_hotkey(&mut self, delay_ms: u64) -> bgi_task::Result<()> {
+        self.dispatch_events(&[InputEvent::Delay {
+            milliseconds: delay_ms,
+        }])
     }
 }
 
@@ -18776,6 +18878,32 @@ mod tests {
             error,
             TaskError::CommonJobExecution(message)
                 if message.contains("QuickSereniteaPot live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_independent_task_live_plan_reports_turn_around_macro_missing_game_window() {
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: TURN_AROUND_MACRO_TASK_KEY.to_string(),
+                config: serde_json::json!({}),
+                uses_linked_cancellation: true,
+            },
+        )
+        .unwrap();
+        let error = execute_desktop_independent_task_live_plan(
+            Path::new("."),
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("TurnAroundMacro live execution requires a detected game window")
         ));
     }
 

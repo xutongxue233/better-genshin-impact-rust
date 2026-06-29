@@ -52,7 +52,9 @@ use crate::game_loading::{
     plan_game_loading, GameLoadingExecutionConfig, GameLoadingExecutionPlan, GAME_LOADING_TASK_KEY,
 };
 use crate::get_grid_icons::{GetGridIconsExecutionReport, GetGridIconsRuntimeActionStatus};
-use crate::macro_hotkeys::{QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY};
+use crate::macro_hotkeys::{
+    MacroHotkeyExecutionReport, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY,
+};
 use crate::map_mask::{
     plan_map_mask, MapMaskExecutionConfig, MapMaskExecutionPlan, MAP_MASK_TASK_KEY,
 };
@@ -463,6 +465,7 @@ pub enum IndependentTaskLiveExecutionReport {
     AutoTrackPath(AutoTrackPathExecutionReport),
     AutoWood(AutoWoodExecutionReport),
     GetGridIcons(GetGridIconsExecutionReport),
+    TurnAroundMacro(MacroHotkeyExecutionReport),
     QuickBuy(QuickBuyExecutionReport),
     QuickSereniteaPot(QuickSereniteaPotExecutionReport),
     UseRedeemCode(UseRedeemCodeExecutionReport),
@@ -486,6 +489,7 @@ impl IndependentTaskLiveExecutionReport {
             IndependentTaskLiveExecutionReport::AutoTrackPath(_) => "AutoTrackPath",
             IndependentTaskLiveExecutionReport::AutoWood(_) => "AutoWood",
             IndependentTaskLiveExecutionReport::GetGridIcons(_) => "GetGridIcons",
+            IndependentTaskLiveExecutionReport::TurnAroundMacro(_) => "TurnAroundMacro",
             IndependentTaskLiveExecutionReport::QuickBuy(_) => "QuickBuy",
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(_) => "QuickSereniteaPot",
             IndependentTaskLiveExecutionReport::UseRedeemCode(_) => "UseRedeemCode",
@@ -515,6 +519,7 @@ impl IndependentTaskLiveExecutionReport {
             }
             IndependentTaskLiveExecutionReport::AutoWood(report) => report.completed,
             IndependentTaskLiveExecutionReport::GetGridIcons(report) => report.completed,
+            IndependentTaskLiveExecutionReport::TurnAroundMacro(report) => report.completed,
             IndependentTaskLiveExecutionReport::QuickBuy(report) => report.completed,
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(report) => report.completed,
             IndependentTaskLiveExecutionReport::UseRedeemCode(report) => report.completed,
@@ -564,6 +569,9 @@ impl IndependentTaskLiveExecutionReport {
                 .iter()
                 .filter(|action| action.status != GetGridIconsRuntimeActionStatus::Skipped)
                 .count(),
+            IndependentTaskLiveExecutionReport::TurnAroundMacro(report) => {
+                report.executed_steps.len()
+            }
             IndependentTaskLiveExecutionReport::QuickBuy(report) => report.executed_steps.len(),
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(report) => {
                 report.executed_steps.len()
@@ -611,6 +619,9 @@ impl IndependentTaskLiveExecutionReport {
                 .iter()
                 .filter(|action| action.status == GetGridIconsRuntimeActionStatus::Skipped)
                 .count(),
+            IndependentTaskLiveExecutionReport::TurnAroundMacro(report) => {
+                report.skipped_steps.len()
+            }
             IndependentTaskLiveExecutionReport::QuickBuy(report) => report.skipped_steps.len(),
             IndependentTaskLiveExecutionReport::QuickSereniteaPot(report) => {
                 report.skipped_steps.len()

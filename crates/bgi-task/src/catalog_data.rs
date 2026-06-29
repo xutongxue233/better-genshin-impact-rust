@@ -421,7 +421,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the TurnAroundMacro hotkey plan through injectable runtime hooks, preserving the legacy zero-to-one mouse interval rewrite, relative mouse move, and runaroundInterval wait; desktop hotkey bridge still needs to consume this Rust plan before the legacy macro path can be retired.",
+        notes: "Rust models and can execute the TurnAroundMacro hotkey plan through injectable runtime hooks, preserving the legacy zero-to-one mouse interval rewrite, relative mouse move, and runaroundInterval wait; the desktop independent-task live route now consumes this plan through cancellable SendInput dispatch, while legacy hotkey registration retirement and real-game regression remain pending.",
     },
     TaskCatalogEntry {
         key: "QuickEnhanceArtifactMacro",
