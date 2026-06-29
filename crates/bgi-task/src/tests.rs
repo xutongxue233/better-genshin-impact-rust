@@ -16782,8 +16782,18 @@ fn task_invocation_live_completion_distinguishes_partial_independent_boundary() 
                         normalized_path: PathBuf::from(
                             "User/AutoPathing/liyue/live_log_route.json",
                         ),
+                        completion_scope:
+                            AutoPathingActionBoundaryCompletionScope::ActionBoundaryOnly,
                         boundary_completed: true,
+                        movement_attempted: false,
+                        movement_completion_status:
+                            AutoPathingMovementCompletionStatus::NativePending,
                         native_pathing_completed: false,
+                        movement_executor_ready: false,
+                        movement_contract_version: 1,
+                        movement_pending_dependencies: Vec::new(),
+                        movement_segment_count: 0,
+                        movement_waypoint_count: 0,
                         executed_actions: 0,
                         skipped_actions: 0,
                         unsupported_actions: 0,
@@ -20501,8 +20511,33 @@ fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phase
     .unwrap();
 
     assert_eq!(calls, vec!["Teleport", "SetTime"]);
+    assert_eq!(
+        report.completion_scope,
+        AutoPathingActionBoundaryCompletionScope::ActionBoundaryOnly
+    );
     assert!(report.boundary_completed);
+    assert!(!report.movement_attempted);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::NativePending
+    );
     assert!(!report.native_pathing_completed);
+    assert!(!report.movement_executor_ready);
+    assert_eq!(report.movement_contract_version, 1);
+    assert_eq!(
+        report.movement_segment_count,
+        plan.execution_plan.segment_count
+    );
+    assert_eq!(
+        report.movement_waypoint_count,
+        plan.execution_plan.waypoint_count
+    );
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::MovementTermination));
     assert_eq!(report.executed_actions, 1);
     assert_eq!(report.invalid_actions, 0);
     assert!(report.unsupported_phases >= 3);

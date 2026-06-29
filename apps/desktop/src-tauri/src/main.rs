@@ -7153,8 +7153,13 @@ fn execute_desktop_common_job_live_plan(
             .map(CommonJobLiveExecutionReport::GoToCraftingBench)
         }
         CommonJobExecutionPlan::GoToAdventurersGuild(plan) => {
-            execute_desktop_go_to_adventurers_guild_live(plan, Arc::clone(&cancellation))
-                .map(CommonJobLiveExecutionReport::GoToAdventurersGuild)
+            execute_desktop_go_to_adventurers_guild_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::GoToAdventurersGuild)
         }
         CommonJobExecutionPlan::GoToSereniteaPot(plan) => execute_desktop_go_to_serenitea_pot_live(
             config,
@@ -12364,12 +12369,28 @@ where
 }
 
 fn execute_desktop_go_to_adventurers_guild_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
     plan: &GoToAdventurersGuildExecutionPlan,
     cancellation: Arc<InputCancellationToken>,
 ) -> Result<bgi_task::GoToAdventurersGuildExecutionReport, String> {
     if cancellation.is_cancelled() {
         return Err("GoToAdventurersGuild live execution cancelled".to_string());
     }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "GoToAdventurersGuild")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "GoToAdventurersGuild live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let _frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "GoToAdventurersGuild live execution has no capture frame source".to_string()
+    })?;
     desktop_go_to_adventurers_guild_live_preflight(plan)?;
     Err(
         "GoToAdventurersGuild live execution requires desktop runtime adapter wiring after preflight"
@@ -18117,6 +18138,58 @@ mod tests {
         ));
         assert!(error.contains("Pathing"));
         assert!(!error.contains("native PathExecutor adapter"));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_live_preflights_capture_before_catherine_adapter() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY,
+            Some(&serde_json::json!({ "country": "蒙德" })),
+        )
+        .unwrap() else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+
+        let size_error = execute_desktop_go_to_adventurers_guild_live(
+            &AppConfig::default(),
+            &desktop_test_game_window(1280, 720),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(size_error.contains(
+            "GoToAdventurersGuild live execution requires plan capture size 1920x1080 to match current capture size 1280x720"
+        ));
+        assert!(!size_error.contains("Catherine interaction adapter"));
+
+        let wgc_config = AppConfig {
+            capture_mode: bgi_core::CaptureMode::WindowsGraphicsCapture,
+            ..AppConfig::default()
+        };
+        let capture_backend_error = execute_desktop_go_to_adventurers_guild_live(
+            &wgc_config,
+            &desktop_test_game_window(1920, 1080),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(capture_backend_error
+            .contains("GoToAdventurersGuild live execution requires the BitBlt capture backend"));
+        assert!(!capture_backend_error.contains("Catherine interaction adapter"));
+
+        let adapter_error = execute_desktop_go_to_adventurers_guild_live(
+            &AppConfig::default(),
+            &desktop_test_game_window(1920, 1080),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(adapter_error.contains(
+            "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter"
+        ));
     }
 
     #[test]

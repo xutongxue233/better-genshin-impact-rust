@@ -4,8 +4,9 @@ use crate::{
 };
 use bgi_core::{
     read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingCoordinateSpace,
-    PathingExecutionPlan, PathingLogOutputActionPlan, PathingPoint, PathingPreflightPlan,
-    PathingSetTimeActionPlan, PathingSummary, PathingWaypointPhase, PathingWaypointPlan,
+    PathingExecutionPlan, PathingLogOutputActionPlan, PathingMovementDependency, PathingPoint,
+    PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingWaypointPhase,
+    PathingWaypointPlan,
 };
 use bgi_vision::Size;
 use serde::{Deserialize, Serialize};
@@ -43,8 +44,16 @@ pub struct AutoPathingActionBoundaryReport {
     pub source: &'static str,
     pub route: String,
     pub normalized_path: PathBuf,
+    pub completion_scope: AutoPathingActionBoundaryCompletionScope,
     pub boundary_completed: bool,
+    pub movement_attempted: bool,
+    pub movement_completion_status: AutoPathingMovementCompletionStatus,
     pub native_pathing_completed: bool,
+    pub movement_executor_ready: bool,
+    pub movement_contract_version: u8,
+    pub movement_pending_dependencies: Vec<PathingMovementDependency>,
+    pub movement_segment_count: usize,
+    pub movement_waypoint_count: usize,
     pub executed_actions: usize,
     pub skipped_actions: usize,
     pub unsupported_actions: usize,
@@ -52,6 +61,20 @@ pub struct AutoPathingActionBoundaryReport {
     pub unsupported_phases: usize,
     pub waypoint_reports: Vec<PathingWaypointBoundaryReport>,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoPathingActionBoundaryCompletionScope {
+    ActionBoundaryOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoPathingMovementCompletionStatus {
+    NotAttempted,
+    NativePending,
+    Completed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -590,12 +613,23 @@ pub fn execute_auto_pathing_action_boundary_with_live_executor<F>(
 where
     F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
 {
+    let movement_contract = &plan.execution_plan.movement_contract;
     let mut report = AutoPathingActionBoundaryReport {
         source: plan.source,
         route: plan.route.clone(),
         normalized_path: plan.normalized_path.clone(),
+        completion_scope: AutoPathingActionBoundaryCompletionScope::ActionBoundaryOnly,
         boundary_completed: false,
+        movement_attempted: false,
+        movement_completion_status: auto_pathing_movement_completion_status(
+            movement_contract.movement_executor_ready,
+        ),
         native_pathing_completed: false,
+        movement_executor_ready: movement_contract.movement_executor_ready,
+        movement_contract_version: movement_contract.contract_version,
+        movement_pending_dependencies: movement_contract.pending_dependencies.clone(),
+        movement_segment_count: movement_contract.segment_count,
+        movement_waypoint_count: movement_contract.waypoint_count,
         executed_actions: 0,
         skipped_actions: 0,
         unsupported_actions: 0,
@@ -674,6 +708,16 @@ where
     report.boundary_completed = true;
     report.native_pathing_completed = false;
     Ok(report)
+}
+
+fn auto_pathing_movement_completion_status(
+    movement_executor_ready: bool,
+) -> AutoPathingMovementCompletionStatus {
+    if movement_executor_ready {
+        AutoPathingMovementCompletionStatus::NotAttempted
+    } else {
+        AutoPathingMovementCompletionStatus::NativePending
+    }
 }
 
 fn pathing_phase_boundary_report(
