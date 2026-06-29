@@ -142,6 +142,25 @@ fn pathing_execution_plan_splits_segments_like_legacy_executor() {
     assert!(plan.farming.allow_farming_count);
     assert_eq!(plan.farming.primary_target, "elite");
     assert_eq!(plan.farming.elite_mob_count, 2.0);
+    assert_eq!(plan.movement_contract.contract_version, 1);
+    assert!(!plan.movement_contract.movement_executor_ready);
+    assert!(!plan.movement_contract.native_pathing_completed);
+    assert_eq!(plan.movement_contract.map_name, "Teyvat");
+    assert_eq!(
+        plan.movement_contract.map_match_method.as_deref(),
+        Some("featureMatch")
+    );
+    assert_eq!(plan.movement_contract.segment_count, 2);
+    assert_eq!(plan.movement_contract.waypoint_count, 5);
+    assert!(plan.movement_contract.release_input_after_segment_attempt);
+    assert!(plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::CoordinateConversion));
+    assert!(plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::InputDispatch));
 
     assert_eq!(plan.segments[0].waypoint_count, 2);
     assert!(!plan.segments[0].starts_with_teleport);
@@ -175,6 +194,41 @@ fn pathing_execution_plan_splits_segments_like_legacy_executor() {
     assert!(target.effective_target_point);
     assert!(target.phases.contains(&PathingWaypointPhase::MoveCloseTo));
     assert!(target.phases.contains(&PathingWaypointPhase::RunAction));
+    let target_contract = &plan.movement_contract.segments[0].waypoints[1];
+    assert_eq!(target_contract.route_point, PathingPoint { x: 3.0, y: 4.0 });
+    assert_eq!(target_contract.track_point, None);
+    assert!(target_contract.track_conversion_pending);
+    let before_move_contract = target_contract
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::BeforeMoveToTarget)
+        .unwrap();
+    assert_eq!(
+        before_move_contract.native_status,
+        PathingNativePhaseStatus::ReadyByRuntime
+    );
+    assert!(before_move_contract.pending_dependencies.is_empty());
+    let move_close_contract = target_contract
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::MoveCloseTo)
+        .unwrap();
+    assert_eq!(
+        move_close_contract.target_point,
+        Some(PathingPoint { x: 3.0, y: 4.0 })
+    );
+    assert_eq!(
+        move_close_contract.coordinate_space,
+        Some(PathingCoordinateSpace::RouteJson)
+    );
+    assert!(move_close_contract.requires_track_conversion);
+    assert_eq!(
+        move_close_contract.native_status,
+        PathingNativePhaseStatus::Pending
+    );
+    assert!(move_close_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::MovementTermination));
 
     let teleport = &plan.segments[1].waypoints[0];
     assert_eq!(
@@ -184,6 +238,16 @@ fn pathing_execution_plan_splits_segments_like_legacy_executor() {
             PathingWaypointPhase::HandleTeleport
         ]
     );
+    let teleport_contract = &plan.movement_contract.segments[1].waypoints[0];
+    assert!(teleport_contract
+        .phase_contracts
+        .iter()
+        .any(
+            |contract| contract.phase == PathingWaypointPhase::HandleTeleport
+                && contract
+                    .pending_dependencies
+                    .contains(&PathingMovementDependency::Teleport)
+        ));
 
     let orientation = &plan.segments[1].waypoints[1];
     assert!(orientation.phases.contains(&PathingWaypointPhase::FaceTo));
@@ -379,5 +443,11 @@ fn empty_pathing_execution_plan_skips_preflight_like_legacy_executor() {
     assert!(!plan.preflight.convert_waypoints_for_track);
     assert_eq!(plan.preflight.delay_before_warm_up_ms, 0);
     assert!(!plan.preflight.warm_up_navigation);
+    assert!(!plan.movement_contract.movement_executor_ready);
+    assert!(!plan.movement_contract.native_pathing_completed);
+    assert!(plan.movement_contract.pending_dependencies.is_empty());
+    assert_eq!(plan.movement_contract.segment_count, 0);
+    assert_eq!(plan.movement_contract.waypoint_count, 0);
+    assert_eq!(plan.movement_contract.segments.len(), 0);
     assert_eq!(plan.segments, Vec::<PathingSegmentPlan>::new());
 }

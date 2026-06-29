@@ -3186,6 +3186,23 @@ where
     }
 }
 
+impl<B, F, I, C> OneKeyExpeditionRuntime for TemplateCommonJobRuntime<B, F, I, C>
+where
+    B: VisionBackend,
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver + ReloginPlatformDriver,
+    C: CommonJobClock,
+{
+    fn activate_one_key_expedition_window(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        ReloginPlatformDriver::focus_game_window(&mut self.input_driver)?;
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn clear_one_key_expedition_vision_drawings(&mut self) -> Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
 impl<B, F, I, C> TemplateCommonJobRuntime<B, F, I, C>
 where
     B: VisionBackend,
@@ -4067,6 +4084,31 @@ where
         executed_steps,
         skipped_steps,
     })
+}
+
+pub fn execute_one_key_expedition_live<F, I, C>(
+    plan: &OneKeyExpeditionExecutionPlan,
+    frame_source: F,
+    input_driver: I,
+    clock: C,
+) -> Result<OneKeyExpeditionExecutionReport>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver + ReloginPlatformDriver,
+    C: CommonJobClock,
+{
+    if plan.capture_size != RETURN_MAIN_UI_LIVE_CAPTURE_SIZE {
+        return Err(TaskError::CommonJobExecution(format!(
+            "OneKeyExpedition live template runtime currently supports {}x{} capture frames only; got {}x{}",
+            RETURN_MAIN_UI_LIVE_CAPTURE_SIZE.width,
+            RETURN_MAIN_UI_LIVE_CAPTURE_SIZE.height,
+            plan.capture_size.width,
+            plan.capture_size.height
+        )));
+    }
+    let mut runtime =
+        PureTemplateCommonJobRuntime::with_task_assets(frame_source, input_driver, clock);
+    execute_one_key_expedition_plan(plan, &mut runtime)
 }
 
 pub fn execute_go_to_crafting_bench_plan<R>(
@@ -7769,8 +7811,15 @@ fn apply_go_to_crafting_bench_outcome(
     state: &mut GoToCraftingBenchExecutorState,
 ) -> Result<()> {
     match &step.action {
-        GoToCraftingBenchStepAction::Pathing { .. } => {
-            state.pathing_completed = Some(go_to_crafting_bench_outcome_as_match(outcome, step)?);
+        GoToCraftingBenchStepAction::Pathing { rule } => {
+            let completed = go_to_crafting_bench_outcome_as_match(outcome, step)?;
+            state.pathing_completed = Some(completed);
+            if !completed && rule.fail_when_task_missing {
+                return Err(TaskError::CommonJobExecution(format!(
+                    "GoToCraftingBench pathing failed for {}",
+                    rule.pathing_json
+                )));
+            }
         }
         GoToCraftingBenchStepAction::InteractionRetry { rule } => {
             let succeeded = go_to_crafting_bench_outcome_as_match(outcome, step)?;
@@ -7810,6 +7859,11 @@ fn apply_go_to_crafting_bench_outcome(
                 Some(go_to_crafting_bench_outcome_as_match(outcome, step)?);
         }
         GoToCraftingBenchStepAction::ReturnResult { result } => {
+            if state.resin_count_recognition_failed {
+                return Err(TaskError::CommonJobExecution(
+                    "GoToCraftingBench resin-count OCR failed".to_string(),
+                ));
+            }
             state.result = Some(*result);
         }
         _ => {}

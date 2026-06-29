@@ -1770,6 +1770,39 @@ fn auto_pick_plan_preserves_legacy_template_ocr_and_decision_rules() {
     assert!(!scaled.decision_rule.fuzzy_black_list_enabled);
     assert!(scaled.config_rule.white_list_enabled);
     assert!(scaled.decision_rule.white_list_enabled);
+
+    for asset_name in ["E.png", "F.png", "G.png", "L.png", "icon_settings.png"] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join("AutoPick")
+            .join("Assets")
+            .join("1920x1080")
+            .join(asset_name)
+            .exists());
+    }
+}
+
+#[test]
+fn bundled_game_task_assets_cover_migrated_runtime_files() {
+    for relative_path in [
+        "Common/Element/Assets/Json/合成台_稻妻.json",
+        "Common/Element/Assets/Json/合成台_枫丹.json",
+        "Common/Element/Assets/Json/合成台_璃月.json",
+        "Common/Element/Assets/Json/合成台_蒙德.json",
+        "Common/Element/Assets/Json/冒险家协会_稻妻.json",
+        "Common/Element/Assets/Json/冒险家协会_枫丹.json",
+        "Common/Element/Assets/Json/冒险家协会_璃月.json",
+        "Common/Element/Assets/Json/冒险家协会_蒙德.json",
+        "Common/Element/Assets/Json/冒险家协会_挪德卡莱.json",
+        "Common/Element/Assets/Json/冒险家协会_须弥.json",
+        "LogParse/Assets/log.css",
+        "LogParse/Assets/log.js",
+    ] {
+        assert!(task_asset_root()
+            .join("GameTask")
+            .join(relative_path)
+            .exists());
+    }
 }
 
 #[test]
@@ -3669,7 +3702,7 @@ fn auto_cook_plan_preserves_legacy_ui_color_peak_and_input_rules() {
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("legacy C# hotkey/dispatcher entrypoints")));
+        .any(|item| item.contains("legacy desktop hotkey/dispatcher entrypoints")));
     assert!(plan
         .pending_native
         .iter()
@@ -6446,7 +6479,11 @@ fn auto_fish_plan_preserves_legacy_trigger_templates_bite_and_bar_rules() {
     assert_eq!(plan.trigger_rule.priority, 15);
     assert!(!plan.trigger_rule.initial_exclusive);
     assert!(plan.trigger_rule.exclusive_when_exit_button_detected);
-    assert!(!plan.trigger_rule.dynamic_add_trigger_supported_by_csharp);
+    assert!(
+        !plan
+            .trigger_rule
+            .dynamic_add_trigger_supported_by_desktop_bridge
+    );
     assert_eq!(plan.trigger_rule.tick_throttle_ms, 67);
     assert!(plan.trigger_rule.creates_bgi_fish_yolo_predictor);
     assert_eq!(
@@ -9997,7 +10034,7 @@ fn map_mask_plan_preserves_legacy_big_map_mini_map_provider_and_overlay_rules() 
     assert!(plan
         .overlay_rule
         .path_auto_record_status
-        .contains("native TODO"));
+        .contains("native route-recording TODO"));
 
     assert!(plan.steps.iter().any(|step| {
         step.phase == MapMaskTickPhase::BigMapStability
@@ -20037,7 +20074,7 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
     assert_eq!(turn_entry.hotkey_fields, &["turnAroundHotkey"]);
     assert!(turn_entry
         .notes
-        .contains("WPF hotkey bridge still needs to consume this Rust plan"));
+        .contains("desktop hotkey bridge still needs to consume this Rust plan"));
 
     let enhance_entry = find_task_catalog_entry(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY).unwrap();
     assert_eq!(enhance_entry.launch_policy, TaskLaunchPolicy::HotkeyCommand);
@@ -20048,7 +20085,7 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
     assert_eq!(enhance_entry.hotkey_fields, &["enhanceArtifactHotkey"]);
     assert!(enhance_entry
         .notes
-        .contains("WPF hotkey bridge and toast/preflight adapter still need"));
+        .contains("desktop hotkey bridge and toast/preflight adapter still need"));
 
     let descriptors = independent_tasks();
     assert!(descriptors.iter().any(|task| {
@@ -24953,6 +24990,54 @@ fn one_key_expedition_executor_finishes_without_escape_when_redispatch_missing()
     assert_eq!(runtime.clear_vision_drawings_calls, 1);
 }
 
+#[test]
+fn one_key_expedition_live_rejects_unsupported_capture_size_before_io() {
+    let capture_size = Size::new(1280, 720);
+    let plan = plan_one_key_expedition(capture_size).unwrap();
+    let frame_source = QueueFrameSource::new([blank_frame(capture_size)]);
+    let input_driver = TestCommonJobInputDriver::default();
+    let clock = TestCommonJobClock::default();
+
+    let error =
+        execute_one_key_expedition_live(&plan, frame_source, input_driver, clock).unwrap_err();
+
+    assert!(
+        matches!(error, TaskError::CommonJobExecution(message) if message.contains("1920x1080"))
+    );
+}
+
+#[test]
+fn one_key_expedition_template_runtime_uses_platform_focus_hook() {
+    let plan = plan_one_key_expedition(Size::new(1920, 1080)).unwrap();
+    let template = varied_template();
+    let backend = PureRustVisionBackend::new().with_template(
+        plan.collect_locator
+            .recognition_object
+            .template
+            .template_asset
+            .clone()
+            .unwrap(),
+        template,
+    );
+    let mut runtime = TemplateCommonJobRuntime::new(
+        backend,
+        QueueFrameSource::new((0..20).map(|_| blank_frame(Size::new(1920, 1080)))),
+        TestCommonJobInputDriver::default(),
+        TestCommonJobClock::default(),
+    );
+
+    let report = execute_one_key_expedition_plan(&plan, &mut runtime).unwrap();
+    let (_, frame_source, input_driver, _, _) = runtime.into_parts();
+
+    assert!(!report.completed);
+    assert_eq!(
+        report.state.result,
+        Some(OneKeyExpeditionStepResult::CollectAllMissing)
+    );
+    assert!(frame_source.captures > 0);
+    assert_eq!(input_driver.focus_calls, 1);
+}
+
 #[derive(Debug, Default)]
 struct FakeGoToAdventurersGuildRuntime {
     common_job_outcomes: VecDeque<GoToAdventurersGuildNestedOutcome>,
@@ -25799,6 +25884,58 @@ fn go_to_crafting_bench_executor_recognizes_counts_and_crafts_needed_amount() {
     assert_eq!(runtime.interaction_calls.len(), 1);
     assert_eq!(runtime.resin_count_calls, 1);
     assert_eq!(runtime.craft_calls, vec![2]);
+}
+
+#[test]
+fn go_to_crafting_bench_executor_errors_when_required_pathing_fails() {
+    let plan = plan_go_to_crafting_bench(
+        Size::new(1920, 1080),
+        "璃月",
+        GoToCraftingBenchLocalizedTexts::default(),
+        120,
+        0,
+    )
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToCraftingBenchRuntime::new().with_pathing_matches([false]);
+
+    let error = execute_go_to_crafting_bench_plan(&plan, &key_bindings, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message)
+            if message.contains("GoToCraftingBench pathing failed")
+    ));
+    assert_eq!(runtime.pathing_calls.len(), 1);
+}
+
+#[test]
+fn go_to_crafting_bench_executor_errors_when_resin_ocr_fails() {
+    let plan = plan_go_to_crafting_bench(
+        Size::new(1920, 1080),
+        "璃月",
+        GoToCraftingBenchLocalizedTexts::default(),
+        120,
+        0,
+    )
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToCraftingBenchRuntime::new()
+        .with_locator_matches([false, true, true])
+        .with_pathing_matches([true])
+        .with_interaction_matches([true])
+        .with_select_page_matches([true])
+        .with_resin_count_outcomes([None]);
+
+    let error = execute_go_to_crafting_bench_plan(&plan, &key_bindings, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message)
+            if message.contains("GoToCraftingBench resin-count OCR failed")
+    ));
+    assert_eq!(runtime.resin_count_calls, 1);
+    assert!(runtime.craft_calls.is_empty());
 }
 
 #[test]

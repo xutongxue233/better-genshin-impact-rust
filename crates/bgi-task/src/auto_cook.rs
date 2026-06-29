@@ -403,7 +403,7 @@ pub fn plan_auto_cook(config: AutoCookExecutionConfig) -> AutoCookExecutionPlan 
         steps: auto_cook_steps(),
         executor_ready: true,
         pending_native: vec![
-            "desktop manual command and generic script-dispatcher live route cover BitBlt capture, ElementAssets template matching, white-confirm click, SendInput Space, exact BGR/RGB color counting, and cancellation-aware delays; legacy C# hotkey/dispatcher entrypoints remain to be retired".to_string(),
+            "desktop manual command and generic script-dispatcher live route cover BitBlt capture, ElementAssets template matching, white-confirm click, SendInput Space, exact BGR/RGB color counting, and cancellation-aware delays; legacy desktop hotkey/dispatcher entrypoints remain to be retired".to_string(),
         ],
     }
 }

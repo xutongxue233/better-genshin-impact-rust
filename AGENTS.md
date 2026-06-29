@@ -1,86 +1,57 @@
-本项目使用了 WPF-UI、 CommunityToolkit.Mvvm、Microsoft.Xaml.Behaviors.Wpf 来实现 MVVM 架构。在编写代码的时候请注意：
+# 项目规则
 
-### 主要依赖框架
-#### UI 框架
-- **WPF-UI (4.0.2)** - 现代化 WPF UI 框架
-- **gong-wpf-dragdrop(3.2.1)** - 拖拽框架
+始终使用中文回复。
 
-#### MVVM 框架
-- **CommunityToolkit.Mvvm (8.2.2)** - 微软官方 MVVM 工具包
-  - 所有 ViewModel 必须继承自 `ObservableObject`
-  - 使用 `[ObservableProperty]` 特性自动生成属性
-  - 使用 `[RelayCommand]` 特性自动生成命令
-- **Microsoft.Xaml.Behaviors.Wpf(1.1.122)** - WPF 行为扩展库
-  - 请尽量使用 Behaviors 库来实现交互，避免不符合 MVVM 规范的交互事件触发方式。
+本仓库主线正在从旧 C#/.NET 实现迁移到完整 Rust 实现。迁移事实源以 `Docs/rust-migration.md` 为准；旧 C# 代码只作为行为参考，不能因为 Rust 占位实现存在就删除。
 
-### 其他框架使用要求
-1. 请优先使用 Newtonsoft.Json 作为json序列化工具，但是如果这个模型已经被System.Text.Json序列化过了，那么就直接使用System.Text.Json反序列化。
-2. 所有简单的对话框弹出需求优先使用 ThemedMessageBox 弹出。而不是 WPF 自带的 MessageBox。
+## 默认技术栈
 
-## MVVM 架构规则
+- 根目录是 Rust workspace，优先按 `Cargo.toml` 和各 crate 的现有边界组织代码。
+- 桌面应用位于 `apps/desktop`，前端是 Tauri 2 + Svelte + TypeScript，后端入口在 `apps/desktop/src-tauri`。
+- Rust 侧主要 crate 包括 `bgi-core`、`bgi-script`、`bgi-script-engine`、`bgi-input`、`bgi-hotkey`、`bgi-capture`、`bgi-vision`、`bgi-task`、`bgi-cli`。
+- 任务资产默认放在 `crates/bgi-task/assets`；发布包应保持安装根目录同时包含 `GameTask` 和 `Assets`，让运行时路径解析稳定。
 
-### 基础架构
+## Rust/Tauri 编写规范
 
-### ViewModel 编写规范
+- 优先复用现有 crate、模块、类型和错误处理风格，不为局部需求引入跨层依赖。
+- 共享业务逻辑放在 Rust crate 中；桌面命令层只做参数转换、运行时适配、取消控制和错误映射。
+- JSON 序列化优先使用项目现有的 `serde`/`serde_json` 模型和兼容层。
+- Tauri/Svelte UI 遵循现有页面、组件、状态管理和命令调用方式，不引入 WPF/MVVM/XAML 约束。
+- 需要从旧实现迁移行为时，先把 C# 行为转换成 Rust 测试或计划模型，再接入真实运行时。
 
-1. **继承规则**
-   ```csharp
-   public partial class ExampleViewModel : ViewModel
-   {
-       [ObservableProperty]
-       private string _title = "";
-       
-       [RelayCommand]
-       private void DoSomething()
-       {
-           // 实现逻辑
-       }
-   }
-   ```
+## 旧 C# 代码规则
 
-2. **属性命名**
-   - 私有字段使用下划线前缀: `_fieldName`
-   - 公共属性使用 PascalCase: `PropertyName`
-   - 使用 `[ObservableProperty]` 自动生成属性
+- `BetterGenshinImpact/`、`Fischless.*`、`Test/` 是 legacy 参考代码。只有任务明确要求修改这些目录时，才应用旧 WPF/.NET 规范。
+- 修改 legacy WPF/C# 文件时，ViewModel 继续遵循 CommunityToolkit.Mvvm、`ObservableObject`、`[ObservableProperty]`、`[RelayCommand]`。
+- 修改 legacy WPF/C# 文件时，交互优先使用 Microsoft.Xaml.Behaviors.Wpf，简单对话框优先使用 ThemedMessageBox。
+- 修改 legacy C# JSON 模型时，优先保持原有 Newtonsoft.Json 或 System.Text.Json 兼容策略。
+- 删除旧 C# 代码必须满足 `Docs/rust-migration.md` 的 parity gate；不要在未证明功能等价前移除旧工程或旧资产来源。
 
-3. **命令实现**
-   - 使用 `[RelayCommand]` 特性
-   - 异步命令使用 `[RelayCommand]` + `async Task`
-
-### View 编写规范
-
-1. **代码后置**
-   ```csharp
-   public partial class ExamplePage : UserControl
-   {
-       public ExampleViewModel ViewModel { get; }
-       
-       public ExamplePage(ExampleViewModel viewModel)
-       {
-           ViewModel = viewModel;
-           DataContext = this;
-           InitializeComponent();
-       }
-   }
-   ```
-
-2. **XAML 绑定**
-   - 使用 `{Binding}` 语法绑定 ViewModel 属性
-   - 命令绑定: `Command="{Binding ExampleCommand}"`
-   - 避免在 XAML 中编写复杂逻辑
-
-### 依赖注入规范
-
-1. **服务注册**
-   ```csharp
-   // 在 App.xaml.cs 中注册
-   services.AddView<ExamplePage, ExampleViewModel>();
-   services.AddSingleton<IExampleService, ExampleService>();
-   ```
+## 验证要求
 
 最后，程序能够编译就认为成功，无需实际运行程序。
 
-编译指令参考，如果出现程序占用场景，直接放弃编译验证即可
+默认验证优先使用：
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+pnpm -C apps/desktop build
 ```
+
+需要验证桌面发布包时再运行：
+
+```powershell
+pnpm -C apps/desktop install --frozen-lockfile
+pnpm -C apps/desktop build
+cargo build -p bettergi-desktop --release
+```
+
+只有明确修改 legacy C#/.NET 代码时，才补充运行：
+
+```powershell
 dotnet build BetterGenshinImpact.sln -c Debug
 ```
+
+如果出现程序占用导致 legacy 编译无法完成，可以放弃该 legacy 编译验证并说明原因。

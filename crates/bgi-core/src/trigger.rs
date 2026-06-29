@@ -143,7 +143,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initial_triggers_are_sorted_like_csharp_manager() {
+    fn initial_triggers_are_sorted_like_legacy_manager() {
         let triggers = initial_triggers();
         assert_eq!(triggers.first().unwrap().key, "RecognitionTest");
         assert_eq!(triggers[2].key, "AutoPick");

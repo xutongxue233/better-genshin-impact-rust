@@ -306,7 +306,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::SoloTask,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Route JSON model is ported; action handlers, navigation, suspend/resume, and teleport execution are pending.",
+        notes: "Route JSON model is ported with PathExecutor-style segmentation, preflight, waypoint phases, and a planning-only movement contract that records coordinate conversion, position observation, camera/input dispatch, teleport, recovery, trap escape, action-handler, and termination dependencies; action handlers, navigation, suspend/resume, and native movement/teleport execution remain pending.",
     },
     TaskCatalogEntry {
         key: "AutoBoss",
@@ -393,7 +393,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::ScriptDispatcher,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoCook config, script-dispatcher invocation, cook UI/recover/confirm locators, exact color-count cooking bar rule, peak/drop state machine, injectable loop executor/report, and Space key action plan; desktop manual command and generic script-dispatcher live route now cover BitBlt capture, ElementAssets template matching, white-confirm click, SendInput Space, exact BGR/RGB color counting, and cancellation-aware delays; legacy C# hotkey/dispatcher entrypoints remain to be retired.",
+        notes: "Rust models AutoCook config, script-dispatcher invocation, cook UI/recover/confirm locators, exact color-count cooking bar rule, peak/drop state machine, injectable loop executor/report, and Space key action plan; desktop manual command and generic script-dispatcher live route now cover BitBlt capture, ElementAssets template matching, white-confirm click, SendInput Space, exact BGR/RGB color counting, and cancellation-aware delays; legacy desktop hotkey/dispatcher entrypoints remain to be retired.",
     },
     TaskCatalogEntry {
         key: "AutoArtifactSalvage",
@@ -421,7 +421,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the TurnAroundMacro hotkey plan through injectable runtime hooks, preserving the legacy zero-to-one mouse interval rewrite, relative mouse move, and runaroundInterval wait; WPF hotkey bridge still needs to consume this Rust plan before the C# macro can be retired.",
+        notes: "Rust models and can execute the TurnAroundMacro hotkey plan through injectable runtime hooks, preserving the legacy zero-to-one mouse interval rewrite, relative mouse move, and runaroundInterval wait; desktop hotkey bridge still needs to consume this Rust plan before the legacy macro path can be retired.",
     },
     TaskCatalogEntry {
         key: "QuickEnhanceArtifactMacro",
@@ -435,7 +435,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the QuickEnhanceArtifactMacro hotkey plan through injectable runtime hooks, preserving the initialized-context guard, fixed 1080p click sequence, enhanceWaitDelay addition, and final cursor move; WPF hotkey bridge and toast/preflight adapter still need to consume this Rust plan before the C# macro can be retired.",
+        notes: "Rust models and can execute the QuickEnhanceArtifactMacro hotkey plan through injectable runtime hooks, preserving the initialized-context guard, fixed 1080p click sequence, enhanceWaitDelay addition, and final cursor move; desktop hotkey bridge and toast/preflight adapter still need to consume this Rust plan before the legacy macro path can be retired.",
     },
     TaskCatalogEntry {
         key: "QuickBuy",
@@ -544,7 +544,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the inventory tab, grid enumeration, icon classification, count OCR, weapon-ore prescroll, and single/multiple result-contract state machine through injectable hooks and invocation live bridge; desktop concrete capture/OpenCV/ONNX/OCR/input adapters and script return integration remain pending.",
+        notes: "Rust now preserves and executes the inventory tab, grid enumeration, icon classification, count OCR, weapon-ore prescroll, and single/multiple result-contract state machine through injectable hooks and invocation live bridge; desktop common-job live routing reaches this boundary and explicitly rejects the missing inventory grid/OpenCV/ONNX/OCR/input adapters instead of falling through as unsupported, while script return integration remains pending.",
     },
     TaskCatalogEntry {
         key: "Teleport",
@@ -755,7 +755,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the Adventurers' Guild party switch, encounter reward, navigation, dialogue, and expedition state machine through injectable hooks and invocation live bridge while desktop concrete pathing/OCR/click adapters remain pending.",
+        notes: "Rust now preserves and executes the Adventurers' Guild party switch, encounter reward, navigation, dialogue, and expedition state machine through injectable hooks and invocation live bridge; the desktop common-job route is wired but rejects before nested side effects until native PathExecutor and Catherine interaction adapters are available.",
     },
     TaskCatalogEntry {
         key: "GoToCraftingBench",
@@ -773,7 +773,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the crafting-bench navigation, dialogue, resin-count, and condensed-resin crafting state machine through injectable hooks and invocation live bridge; desktop concrete pathing/OCR/click adapters remain pending.",
+        notes: "Rust now preserves and executes the crafting-bench navigation, dialogue, resin-count, and condensed-resin crafting state machine through injectable hooks and invocation live bridge; the desktop common-job route is wired and explicitly reports the remaining concrete PathExecutor/OCR/click adapter gaps.",
     },
     TaskCatalogEntry {
         key: "GoToSereniteaPot",
@@ -795,7 +795,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the Serenitea Pot entry, A Yuan search, reward, realm-depot purchase, finish, and cleanup state machine through injectable hooks and invocation live bridge while desktop concrete map/OCR/click/shop adapters remain pending.",
+        notes: "Rust now preserves and executes the Serenitea Pot entry, A Yuan search, reward, realm-depot purchase, finish, and cleanup state machine through injectable hooks and invocation live bridge; desktop common-job live routing reaches this boundary and explicitly rejects map-entry, bag-entry, A Yuan, reward, shop, and finish side effects until concrete map/OCR/click/shop adapters are wired.",
     },
     TaskCatalogEntry {
         key: "Relogin",

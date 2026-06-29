@@ -137,42 +137,71 @@ jobs:
             New-Item -Path $distDir -ItemType Directory -Force
             Copy-Item "target/release/bettergi-desktop.exe" "$distDir/BetterGI.exe" -Force
             Get-ChildItem -Path "target/release" -Filter "*.dll" -File | Copy-Item -Destination $distDir -Force
-            Copy-Item "crates/bgi-task/assets" "$distDir/assets" -Recurse -Force
+            Copy-Item "crates/bgi-task/assets/*" $distDir -Recurse -Force
       # 下载前面构建好的web内容
       - uses: actions/download-artifact@v4
         with:
           name: web_map_editor
-          path: dist/BetterGI/assets/Assets/Map/Editor
+          path: dist/BetterGI/Assets/Map/Editor
       - uses: actions/download-artifact@v4
         with:
           name: web_scripts_list
-          path: dist/BetterGI/assets/Assets/Web/ScriptRepo
-      # 下载构建 repo 的内容补充数据
-      - uses: actions/checkout@v4
-        with:
-          repository: babalae/bettergi-publish
-          path: publish
-      # - name: 🗜️ Extract Map
-      #   run: |
-      #       cd publish
-      #       # Extract zst files
-      #       Get-ChildItem -Filter *.zst | ForEach-Object {
-      #           if ($_.PSIsContainer -eq $false) {
-      #               $file = $_.Name
-      #               $output_file = "..\dist\BetterGI\assets\Assets\Map\$($file -replace '.zst$', '')"
-      #               & zstd -d $file -o $output_file
-      #               Write-Host "$file -> $output_file"
-      #           }
-      #       }
-      #       # Extract zip files
-      #       Get-ChildItem -Filter *.zip | ForEach-Object {
-      #           if ($_.PSIsContainer -eq $false) {
-      #               $file = $_.FullName
-      #               $destination = "..\dist\BetterGI\assets\Assets\Map"
-      #               Expand-Archive -Path $file -DestinationPath $destination -Force
-      #               Write-Host "$file -> $destination"
-      #           }
-      #       }
+          path: dist/BetterGI/Assets/Web/ScriptRepo
+      - name: 📦 Download runtime asset packages
+        run: |
+            $distDir = "dist/BetterGI"
+            $assetRoot = Join-Path $distDir "Assets"
+            $packageRoot = "dist/nuget-assets"
+            New-Item -Path $assetRoot -ItemType Directory -Force | Out-Null
+            New-Item -Path $packageRoot -ItemType Directory -Force | Out-Null
+
+            $packages = @(
+              @{ Id = "BetterGI.Assets.Map"; Version = "1.0.19" },
+              @{ Id = "BetterGI.Assets.Model"; Version = "1.0.25" },
+              @{ Id = "BetterGI.Assets.Other"; Version = "1.0.15" }
+            )
+
+            foreach ($package in $packages) {
+              $id = $package.Id
+              $version = $package.Version
+              $idLower = $id.ToLowerInvariant()
+              $archivePath = Join-Path $packageRoot "$id.$version.zip"
+              $extractDir = Join-Path $packageRoot "$id.$version"
+              $url = "https://api.nuget.org/v3-flatcontainer/$idLower/$version/$idLower.$version.nupkg"
+
+              Invoke-WebRequest -Uri $url -OutFile $archivePath
+              Expand-Archive -Path $archivePath -DestinationPath $extractDir -Force
+
+              $contentAssets = Join-Path $extractDir "contentFiles/any/any/Assets"
+              if (!(Test-Path -Path $contentAssets -PathType Container)) {
+                Write-Error "Asset package $id $version does not contain contentFiles/any/any/Assets"
+                exit 1
+              }
+
+              Copy-Item -Path (Join-Path $contentAssets "*") -Destination $assetRoot -Recurse -Force
+            }
+      - name: 🔍 Verify portable release assets
+        run: |
+            $distDir = "dist/BetterGI"
+            $requiredFiles = @(
+              "GameTask/AutoPick/Assets/1920x1080/F.png",
+              "Assets/Config/Pick/default_pick_black_lists.json",
+              "Assets/Config/Skip/default_pause_options.json",
+              "Assets/Model/Item/gridIcon.onnx",
+              "Assets/Model/World/bgi_world.onnx",
+              "Assets/Map/Teyvat/Teyvat_0_256_SIFT.kp.bin",
+              "Assets/Map/Teyvat/Teyvat_0_256_SIFT.mat.png",
+              "Assets/Map/Editor/index.html",
+              "Assets/Web/ScriptRepo/index.html"
+            )
+
+            foreach ($relativePath in $requiredFiles) {
+              $fullPath = Join-Path $distDir $relativePath
+              if (!(Test-Path -Path $fullPath -PathType Leaf)) {
+                Write-Error "Portable release is missing required asset: $relativePath"
+                exit 1
+              }
+            }
       # 生成更新器
       - name: 📥 Download kachina-builder release
         if: ${{ github.event.inputs.kachina-channel == 'release' }}

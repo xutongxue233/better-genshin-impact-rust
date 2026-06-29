@@ -523,7 +523,7 @@ pub fn plan_map_mask(config: MapMaskExecutionConfig) -> MapMaskExecutionPlan {
             clears_big_map_points_outside_big_map: true,
             clears_mini_map_points_outside_main_ui: true,
             path_auto_record_status: if config_rule.path_auto_record_enabled {
-                "configured but native TODO in C#".to_string()
+                "configured but native route-recording TODO remains".to_string()
             } else {
                 "disabled".to_string()
             },
@@ -536,7 +536,7 @@ pub fn plan_map_mask(config: MapMaskExecutionConfig) -> MapMaskExecutionPlan {
                 .to_string(),
             "desktop adapters for MiniMapPreprocessor, FastSqDiffMatcher, TemplateMatchSubPix, live capture Mat/grayscale cache, and worker queue coordination".to_string(),
             "desktop adapters for WPF MaskWindow/points canvas rendering and MihoyoMap/KongyingTavern/HoYoLab point API cache/icon loading".to_string(),
-            "PathAutoRecordEnabled route recording integration, which is still TODO in C#"
+            "PathAutoRecordEnabled route recording integration, which still needs a native Rust adapter"
                 .to_string(),
         ],
     }

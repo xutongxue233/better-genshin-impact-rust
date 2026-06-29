@@ -69,8 +69,9 @@ use bgi_task::{
     execute_auto_track_plan, execute_auto_wood_plan, execute_blessing_of_the_welkin_moon_live,
     execute_check_rewards_plan, execute_choose_talk_option_plan,
     execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
-    execute_claim_mail_rewards_live, execute_independent_task_live_if_available,
-    execute_independent_task_with_cancel, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
+    execute_claim_mail_rewards_live, execute_go_to_crafting_bench_plan,
+    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
+    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
     execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
     execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
     execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
@@ -122,22 +123,29 @@ use bgi_task::{
     CombatTeamPlaybackExecution, CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource,
     CommonJobInputDriver, CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome,
     CommonJobStepAction, CountInventoryGridIconMatch, CountInventoryGridItemFrame,
+    CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
     CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
-    GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule,
-    GridScrollRule, GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
-    IndependentTaskLiveExecutionReport, PartyTextClickYAnchor, PureTemplateCommonJobRuntime,
-    QuickBuyClickTarget, QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport,
-    QuickBuyPreflightRule, QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
-    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
-    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
-    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
-    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
-    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
-    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
-    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
-    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
-    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
-    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildStepAction,
+    GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
+    GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
+    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
+    GoToCraftingBenchRuntime, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
+    GoToSereniteaPotStepAction, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
+    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
+    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
+    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
+    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
+    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
+    QuickSereniteaPotExecutionReport, QuickSereniteaPotInteractionOutcome,
+    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
+    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
+    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
+    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
+    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
+    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
+    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
+    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScriptDispatcherExecutionPlan, ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan,
     SetTimeExecutionReport, ShellConfig, ShellExecutionResult, SwitchPartyChooseMenuRule,
     SwitchPartyConfirmRule, SwitchPartyExecutionPlan, SwitchPartyExecutionReport,
@@ -6633,6 +6641,7 @@ fn execute_desktop_common_job_live_plan(
     if !matches!(
         plan,
         CommonJobExecutionPlan::ReturnMainUi(_)
+            | CommonJobExecutionPlan::CountInventoryItem(_)
             | CommonJobExecutionPlan::SetTime(_)
             | CommonJobExecutionPlan::ChooseTalkOption(_)
             | CommonJobExecutionPlan::CheckRewards(_)
@@ -6644,6 +6653,10 @@ fn execute_desktop_common_job_live_plan(
             | CommonJobExecutionPlan::Relogin(_)
             | CommonJobExecutionPlan::SwitchParty(_)
             | CommonJobExecutionPlan::Teleport(_)
+            | CommonJobExecutionPlan::OneKeyExpedition(_)
+            | CommonJobExecutionPlan::GoToCraftingBench(_)
+            | CommonJobExecutionPlan::GoToAdventurersGuild(_)
+            | CommonJobExecutionPlan::GoToSereniteaPot(_)
             | CommonJobExecutionPlan::WalkToF(_)
     ) {
         return Ok(None);
@@ -6660,6 +6673,15 @@ fn execute_desktop_common_job_live_plan(
         CommonJobExecutionPlan::ReturnMainUi(plan) => {
             execute_desktop_return_main_ui_live(config, window, plan, Arc::clone(&cancellation))
                 .map(CommonJobLiveExecutionReport::ReturnMainUi)
+        }
+        CommonJobExecutionPlan::CountInventoryItem(plan) => {
+            execute_desktop_count_inventory_item_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::CountInventoryItem)
         }
         CommonJobExecutionPlan::SetTime(plan) => {
             execute_desktop_set_time_live(config, window, plan, Arc::clone(&cancellation))
@@ -6720,6 +6742,30 @@ fn execute_desktop_common_job_live_plan(
             execute_desktop_teleport_live(config, window, plan, Arc::clone(&cancellation))
                 .map(CommonJobLiveExecutionReport::Teleport)
         }
+        CommonJobExecutionPlan::OneKeyExpedition(plan) => {
+            execute_desktop_one_key_expedition_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::OneKeyExpedition)
+        }
+        CommonJobExecutionPlan::GoToCraftingBench(plan) => {
+            execute_desktop_go_to_crafting_bench_live(
+                config,
+                window,
+                plan,
+                Arc::clone(&cancellation),
+            )
+            .map(CommonJobLiveExecutionReport::GoToCraftingBench)
+        }
+        CommonJobExecutionPlan::GoToAdventurersGuild(plan) => {
+            execute_desktop_go_to_adventurers_guild_live(plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::GoToAdventurersGuild)
+        }
+        CommonJobExecutionPlan::GoToSereniteaPot(plan) => execute_desktop_go_to_serenitea_pot_live(
+            config,
+            window,
+            plan,
+            Arc::clone(&cancellation),
+        )
+        .map(CommonJobLiveExecutionReport::GoToSereniteaPot),
         CommonJobExecutionPlan::WalkToF(plan) => {
             execute_desktop_walk_to_f_live(config, window, plan, Arc::clone(&cancellation))
                 .map(CommonJobLiveExecutionReport::WalkToF)
@@ -10943,6 +10989,32 @@ fn desktop_common_job_global_input(
     ))
 }
 
+fn execute_desktop_count_inventory_item_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &CountInventoryItemExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<CountInventoryItemExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("CountInventoryItem live execution cancelled".to_string());
+    }
+    let (_global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "CountInventoryItem")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "CountInventoryItem live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    Err(
+        "CountInventoryItem live execution requires desktop inventory grid/ONNX/OCR/click adapters"
+            .to_string(),
+    )
+}
+
 fn execute_desktop_return_main_ui_live(
     config: &AppConfig,
     window: &GameWindowMatch,
@@ -11000,6 +11072,292 @@ fn execute_desktop_set_time_live(
         CancellableCommonJobClock::new(cancellation),
     )
     .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_one_key_expedition_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &OneKeyExpeditionExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<OneKeyExpeditionExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("OneKeyExpedition live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "OneKeyExpedition")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "OneKeyExpedition live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "OneKeyExpedition live execution has no capture frame source".to_string())?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    execute_one_key_expedition_live(
+        plan,
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn execute_desktop_go_to_crafting_bench_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &GoToCraftingBenchExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<GoToCraftingBenchExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("GoToCraftingBench live execution cancelled".to_string());
+    }
+    let (global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "GoToCraftingBench")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "GoToCraftingBench live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "GoToCraftingBench live execution has no capture frame source".to_string()
+    })?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(cancellation),
+    );
+    let mut runtime = DesktopGoToCraftingBenchRuntime::new(common_runtime);
+    execute_go_to_crafting_bench_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopGoToCraftingBenchRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+}
+
+impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
+    fn new(common: PureTemplateCommonJobRuntime<F, I, C>) -> Self {
+        Self { common }
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopGoToCraftingBenchRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> GoToCraftingBenchRuntime for DesktopGoToCraftingBenchRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn execute_crafting_bench_pathing(
+        &mut self,
+        rule: &GoToCraftingBenchPathingRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(format!(
+            "GoToCraftingBench live execution requires native PathExecutor adapter for {}",
+            rule.pathing_json
+        )))
+    }
+
+    fn retry_crafting_bench_interaction(
+        &mut self,
+        _rule: &GoToCraftingBenchInteractionRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToCraftingBench live execution requires desktop crafting-bench interaction adapter"
+                .to_string(),
+        ))
+    }
+
+    fn select_last_crafting_bench_talk_option_until_end(
+        &mut self,
+        _until_locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToCraftingBench live execution requires desktop talk-option selection adapter"
+                .to_string(),
+        ))
+    }
+
+    fn recognize_crafting_bench_resin_counts(
+        &mut self,
+        _rule: &GoToCraftingBenchResinRecognitionRule,
+    ) -> bgi_task::Result<Option<GoToCraftingBenchResinCounts>> {
+        Err(TaskError::CommonJobExecution(
+            "GoToCraftingBench live execution requires desktop resin-count OCR adapter".to_string(),
+        ))
+    }
+
+    fn craft_condensed_resin(
+        &mut self,
+        _rule: &GoToCraftingBenchResinCraftRule,
+        _crafts_needed: u8,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToCraftingBench live execution requires desktop condensed-resin crafting adapter"
+                .to_string(),
+        ))
+    }
+}
+
+fn execute_desktop_go_to_adventurers_guild_live(
+    plan: &GoToAdventurersGuildExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<bgi_task::GoToAdventurersGuildExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("GoToAdventurersGuild live execution cancelled".to_string());
+    }
+    desktop_go_to_adventurers_guild_live_preflight(plan)?;
+    Err(
+        "GoToAdventurersGuild live execution requires desktop nested common-job adapter plumbing"
+            .to_string(),
+    )
+}
+
+fn desktop_go_to_adventurers_guild_live_preflight(
+    plan: &GoToAdventurersGuildExecutionPlan,
+) -> Result<(), String> {
+    for step in &plan.steps {
+        match &step.action {
+            GoToAdventurersGuildStepAction::Pathing { rule } => {
+                return Err(format!(
+                    "GoToAdventurersGuild live execution requires native PathExecutor adapter for {}",
+                    rule.pathing_json
+                ));
+            }
+            GoToAdventurersGuildStepAction::InteractionRetry { .. } => {
+                return Err(
+                    "GoToAdventurersGuild live execution requires desktop Catherine interaction adapter"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn execute_desktop_go_to_serenitea_pot_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &GoToSereniteaPotExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<GoToSereniteaPotExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("GoToSereniteaPot live execution cancelled".to_string());
+    }
+    let (_global_input, capture_size) =
+        desktop_common_job_global_input(config, window, "GoToSereniteaPot")?;
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "GoToSereniteaPot live execution requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    desktop_go_to_serenitea_pot_live_preflight(plan)?;
+    Err(
+        "GoToSereniteaPot live execution requires desktop nested common-job adapter plumbing"
+            .to_string(),
+    )
+}
+
+fn desktop_go_to_serenitea_pot_live_preflight(
+    plan: &GoToSereniteaPotExecutionPlan,
+) -> Result<(), String> {
+    for step in &plan.steps {
+        match &step.action {
+            GoToSereniteaPotStepAction::MapEntry { .. } => {
+                return Err(
+                    "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
+                        .to_string(),
+                );
+            }
+            GoToSereniteaPotStepAction::BagEntry { .. } => {
+                return Err(
+                    "GoToSereniteaPot live execution requires desktop Serenitea Pot bag-entry adapter"
+                        .to_string(),
+                );
+            }
+            GoToSereniteaPotStepAction::FindAYuan { .. } => {
+                return Err(
+                    "GoToSereniteaPot live execution requires desktop A Yuan interaction adapter"
+                        .to_string(),
+                );
+            }
+            GoToSereniteaPotStepAction::Reward { .. } => {
+                return Err(
+                    "GoToSereniteaPot live execution requires desktop Serenitea Pot reward adapter"
+                        .to_string(),
+                );
+            }
+            GoToSereniteaPotStepAction::ShopPurchase { .. } => {
+                return Err(
+                    "GoToSereniteaPot live execution requires desktop realm-depot shop adapter"
+                        .to_string(),
+                );
+            }
+            GoToSereniteaPotStepAction::Finish { .. } => {
+                return Err(
+                    "GoToSereniteaPot live execution requires desktop Serenitea Pot finish adapter"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn execute_desktop_choose_talk_option_live(
@@ -13875,14 +14233,18 @@ fn desktop_teleport_genshin_rect_to_image_rect(
     let rule = desktop_teleport_map_coordinate_rule(map_name)?;
     let center = desktop_teleport_genshin_point_to_image_point(map_name, rect.center())?;
     Some(DesktopTeleportMapRect {
-        x: desktop_teleport_dotnet_round(center.x - rect.width / 2.0 * rule.block_width_scale),
-        y: desktop_teleport_dotnet_round(center.y - rect.height / 2.0 * rule.block_width_scale),
-        width: desktop_teleport_dotnet_round(rect.width * rule.block_width_scale),
-        height: desktop_teleport_dotnet_round(rect.height * rule.block_width_scale),
+        x: desktop_teleport_midpoint_even_round(
+            center.x - rect.width / 2.0 * rule.block_width_scale,
+        ),
+        y: desktop_teleport_midpoint_even_round(
+            center.y - rect.height / 2.0 * rule.block_width_scale,
+        ),
+        width: desktop_teleport_midpoint_even_round(rect.width * rule.block_width_scale),
+        height: desktop_teleport_midpoint_even_round(rect.height * rule.block_width_scale),
     })
 }
 
-fn desktop_teleport_dotnet_round(value: f64) -> f64 {
+fn desktop_teleport_midpoint_even_round(value: f64) -> f64 {
     if !value.is_finite() {
         return value;
     }
@@ -15748,15 +16110,9 @@ mod tests {
 
     #[test]
     fn desktop_common_job_live_plan_skips_unsupported_common_jobs() {
-        let plan = bgi_task::plan_common_job(
-            bgi_task::COUNT_INVENTORY_ITEM_TASK_KEY,
-            Some(&serde_json::json!({
-                "gridScreenName": "Materials",
-                "itemName": "晶核"
-            })),
-        )
-        .unwrap()
-        .unwrap();
+        let plan = bgi_task::plan_common_job(bgi_task::LINNEA_MINING_TASK_KEY, None)
+            .unwrap()
+            .unwrap();
 
         let result = execute_desktop_common_job_live_plan(
             &AppConfig::default(),
@@ -15854,6 +16210,30 @@ mod tests {
             error,
             TaskError::CommonJobExecution(message)
                 if message.contains("ClaimMailRewards live execution requires a detected game window")
+        ));
+
+        let count_inventory_item = bgi_task::plan_common_job(
+            bgi_task::COUNT_INVENTORY_ITEM_TASK_KEY,
+            Some(&serde_json::json!({
+                "gridScreenName": "Materials",
+                "itemName": "晶核"
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &count_inventory_item,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("CountInventoryItem live execution requires a detected game window")
         ));
 
         let claim_battle_pass_rewards =
@@ -15994,6 +16374,112 @@ mod tests {
             error,
             TaskError::CommonJobExecution(message)
                 if message.contains("Teleport live execution requires a detected game window")
+        ));
+
+        let one_key_expedition =
+            bgi_task::plan_common_job(bgi_task::ONE_KEY_EXPEDITION_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &one_key_expedition,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("OneKeyExpedition live execution requires a detected game window")
+        ));
+
+        let go_to_crafting_bench =
+            bgi_task::plan_common_job(bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &go_to_crafting_bench,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("GoToCraftingBench live execution requires a detected game window")
+        ));
+
+        let go_to_adventurers_guild =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &go_to_adventurers_guild,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("GoToAdventurersGuild live execution requires a detected game window")
+        ));
+
+        let go_to_serenitea_pot =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, None)
+                .unwrap()
+                .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &go_to_serenitea_pot,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("GoToSereniteaPot live execution requires a detected game window")
+        ));
+    }
+
+    #[test]
+    fn desktop_go_to_adventurers_guild_live_preflight_rejects_before_nested_jobs() {
+        let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToAdventurersGuild common job plan");
+        };
+
+        let error = desktop_go_to_adventurers_guild_live_preflight(&plan).unwrap_err();
+
+        assert!(error
+            .contains("GoToAdventurersGuild live execution requires native PathExecutor adapter"));
+        assert!(error.contains("GameTask/Common/Element/Assets/Json/冒险家协会_"));
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_live_preflight_rejects_before_side_effects() {
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+
+        let error = desktop_go_to_serenitea_pot_live_preflight(&plan).unwrap_err();
+
+        assert!(error.contains(
+            "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
         ));
     }
 
@@ -16603,13 +17089,13 @@ mod tests {
     }
 
     #[test]
-    fn desktop_teleport_dotnet_round_matches_midpoint_to_even() {
-        assert_eq!(desktop_teleport_dotnet_round(2046.5), 2046.0);
-        assert_eq!(desktop_teleport_dotnet_round(2047.5), 2048.0);
-        assert_eq!(desktop_teleport_dotnet_round(-1.5), -2.0);
-        assert_eq!(desktop_teleport_dotnet_round(-2.5), -2.0);
-        assert_eq!(desktop_teleport_dotnet_round(12.49), 12.0);
-        assert_eq!(desktop_teleport_dotnet_round(12.51), 13.0);
+    fn desktop_teleport_midpoint_even_round_matches_midpoint_to_even() {
+        assert_eq!(desktop_teleport_midpoint_even_round(2046.5), 2046.0);
+        assert_eq!(desktop_teleport_midpoint_even_round(2047.5), 2048.0);
+        assert_eq!(desktop_teleport_midpoint_even_round(-1.5), -2.0);
+        assert_eq!(desktop_teleport_midpoint_even_round(-2.5), -2.0);
+        assert_eq!(desktop_teleport_midpoint_even_round(12.49), 12.0);
+        assert_eq!(desktop_teleport_midpoint_even_round(12.51), 13.0);
     }
 
     #[test]

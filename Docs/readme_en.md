@@ -10,7 +10,7 @@
 <br/>
 
 <div align="center">
-  <a href="https://dotnet.microsoft.com/zh-cn/download/dotnet/latest/runtime"><img alt="Windows" src="https://img.shields.io/badge/platform-Windows-blue?logo=windowsxp&style=flat-square&color=1E9BFA" /></a>
+  <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Windows" src="https://img.shields.io/badge/platform-Windows-blue?logo=windowsxp&style=flat-square&color=1E9BFA" /></a>
   <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/babalae/better-genshin-impact/total?logo=github&style=flat-square&color=1E9BFA"></a>
   <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Release" src="https://img.shields.io/github/v/release/babalae/better-genshin-impact?logo=visualstudio&style=flat-square&color=1E9BFA"></a>
 </div>
@@ -86,7 +86,6 @@ Latest builds: [![](https://github.com/babalae/better-genshin-impact/actions/wor
 ## Usage
 **Requirements:**
 - Windows 10/11 (64-bit)
-- [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (auto-prompted if missing)
 
 **⚠️ Notes:**
 1. Restart the app after changing window size/resolution/monitor.
@@ -112,7 +111,6 @@ Special thanks to these projects:
 * [Yap](https://github.com/Alex-Beng/Yap)
 * [genshin-woodmen](https://github.com/genshin-matrix/genshin-woodmen)
 * [Fischless](https://github.com/genshin-matrix/Fischless)
-* [MicaSetup](https://github.com/lemutec/MicaSetup)
 * [cvAutoTrack](https://github.com/GengGode/cvAutoTrack)
 * [genshin_impact_assistant](https://github.com/infstellar/genshin_impact_assistant)
 * [HutaoFisher](https://github.com/myHuTao-qwq/HutaoFisher)
@@ -122,9 +120,7 @@ Special thanks to these projects:
 Core contributors: [@Lightczx](https://github.com/Lightczx), [@emako](https://github.com/emako)
 
 ## Development
-Formatting: [CodeMaid.config](CodeMaid.config), [Settings.XamlStyler](Settings.XamlStyler)
-
-[Build instructions](BetterGenshinImpact/README.md)
+Formatting and build entry points: `cargo fmt --all`, [Cargo.toml](../Cargo.toml), [apps/desktop/package.json](../apps/desktop/package.json), [rust-migration.md](rust-migration.md)
 
 ## License
 ![GPL-v3](https://www.gnu.org/graphics/gplv3-127x51.png)

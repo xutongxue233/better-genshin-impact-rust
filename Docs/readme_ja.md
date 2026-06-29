@@ -10,7 +10,7 @@
 <br/>
 
 <div align="center">
-  <a href="https://dotnet.microsoft.com/zh-cn/download/dotnet/latest/runtime"><img alt="Windows" src="https://img.shields.io/badge/platform-Windows-blue?logo=windowsxp&style=flat-square&color=1E9BFA" /></a>
+  <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Windows" src="https://img.shields.io/badge/platform-Windows-blue?logo=windowsxp&style=flat-square&color=1E9BFA" /></a>
   <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="ダウンロード数" src="https://img.shields.io/github/downloads/babalae/better-genshin-impact/total?logo=github&style=flat-square&color=1E9BFA"></a>
   <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Release" src="https://img.shields.io/github/v/release/babalae/better-genshin-impact?logo=visualstudio&style=flat-square&color=1E9BFA"></a>
 </div>
@@ -86,7 +86,6 @@ BetterGI は、コンピュータービジョン技術で Genshin Impact をよ�
 ## 使い方
 **要件:**
 - Windows 10/11 (64-bit)
-- [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (不足していれば自動で案内されます)
 
 **⚠️ 注意:**
 1. 画面サイズ/解像度/モニターを変更したらアプリを再起動してください。
@@ -112,7 +111,6 @@ BetterGI は、コンピュータービジョン技術で Genshin Impact をよ�
 * [Yap](https://github.com/Alex-Beng/Yap)
 * [genshin-woodmen](https://github.com/genshin-matrix/genshin-woodmen)
 * [Fischless](https://github.com/genshin-matrix/Fischless)
-* [MicaSetup](https://github.com/lemutec/MicaSetup)
 * [cvAutoTrack](https://github.com/GengGode/cvAutoTrack)
 * [genshin_impact_assistant](https://github.com/infstellar/genshin_impact_assistant)
 * [HutaoFisher](https://github.com/myHuTao-qwq/HutaoFisher)
@@ -122,9 +120,7 @@ BetterGI は、コンピュータービジョン技術で Genshin Impact をよ�
 コア貢献者: [@Lightczx](https://github.com/Lightczx), [@emako](https://github.com/emako)
 
 ## 開発
-整形: [CodeMaid.config](CodeMaid.config), [Settings.XamlStyler](Settings.XamlStyler)
-
-[ビルド手順](BetterGenshinImpact/README.md)
+整形とビルド入口: `cargo fmt --all`, [Cargo.toml](../Cargo.toml), [apps/desktop/package.json](../apps/desktop/package.json), [rust-migration.md](rust-migration.md)
 
 ## ライセンス
 GPLv3

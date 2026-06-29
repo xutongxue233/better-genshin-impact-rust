@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn default_config_keeps_csharp_defaults_for_first_ported_fields() {
+fn default_config_keeps_legacy_defaults_for_first_ported_fields() {
     let config = AppConfig::default();
     assert_eq!(config.trigger_interval, 50);
     assert!(config.auto_fix_win11_bit_blt);

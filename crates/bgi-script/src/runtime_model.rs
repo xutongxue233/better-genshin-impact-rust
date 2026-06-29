@@ -49,7 +49,7 @@ pub fn script_engines() -> Vec<ScriptEngineDescriptor> {
             kind: ScriptEngineKind::ClearScriptV8,
             port_state: ScriptEnginePortState::LegacyReference,
             legacy_reference: "Microsoft.ClearScript.V8",
-            notes: "Current C# engine reference; not part of the final Rust runtime.",
+            notes: "Legacy engine reference; not part of the final Rust runtime.",
         },
         ScriptEngineDescriptor {
             kind: ScriptEngineKind::RustJavaScript,

@@ -16,6 +16,7 @@ pub struct PathingExecutionPlan {
     pub expected_fight_count: usize,
     pub autopick_realtime_trigger_enabled: bool,
     pub preflight: PathingPreflightPlan,
+    pub movement_contract: PathingMovementContractPlan,
     pub farming: PathingFarmingExecutionPlan,
     pub segments: Vec<PathingSegmentPlan>,
 }
@@ -52,6 +53,81 @@ impl PathingPreflightPlan {
             release_input_after_segment_attempt: has_positions,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementContractPlan {
+    pub contract_version: u8,
+    pub movement_executor_ready: bool,
+    pub native_pathing_completed: bool,
+    pub pending_dependencies: Vec<PathingMovementDependency>,
+    pub map_name: String,
+    pub map_match_method: Option<String>,
+    pub preflight: PathingPreflightPlan,
+    pub release_input_after_segment_attempt: bool,
+    pub segment_count: usize,
+    pub waypoint_count: usize,
+    pub segments: Vec<PathingMovementSegmentContract>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathingMovementDependency {
+    CoordinateConversion,
+    MapMatching,
+    PositionObservation,
+    CameraRotation,
+    InputDispatch,
+    Teleport,
+    LowHpRecovery,
+    TrapEscape,
+    ActionHandlers,
+    MovementTermination,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementSegmentContract {
+    pub segment_index: usize,
+    pub retry_times: u8,
+    pub starts_with_teleport: bool,
+    pub seed_previous_position: Option<PathingPoint>,
+    pub seed_previous_position_coordinate_space: Option<PathingCoordinateSpace>,
+    pub seed_previous_position_requires_track_conversion: bool,
+    pub release_input_after_attempt: bool,
+    pub waypoints: Vec<PathingMovementWaypointContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementWaypointContract {
+    pub global_index: usize,
+    pub segment_index: usize,
+    pub segment_waypoint_index: usize,
+    pub waypoint_type: String,
+    pub move_mode: String,
+    pub action: Option<String>,
+    pub action_params: Option<String>,
+    pub route_point: PathingPoint,
+    pub track_point: Option<PathingPoint>,
+    pub track_conversion_pending: bool,
+    pub effective_target_point: bool,
+    pub phase_contracts: Vec<PathingMovementPhaseContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementPhaseContract {
+    pub phase: PathingWaypointPhase,
+    pub target_point: Option<PathingPoint>,
+    pub coordinate_space: Option<PathingCoordinateSpace>,
+    pub requires_track_conversion: bool,
+    pub native_status: PathingNativePhaseStatus,
+    pub pending_dependencies: Vec<PathingMovementDependency>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathingNativePhaseStatus {
+    Pending,
+    ReadyByRuntime,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -268,6 +344,7 @@ const PATH_EXECUTOR_RETRY_TIMES: u8 = 2;
 impl PathingTask {
     pub fn execution_plan(&self) -> PathingExecutionPlan {
         let segments = split_waypoints_for_track(&self.positions);
+        let preflight = PathingPreflightPlan::for_task(self);
         let expected_fight_count = self
             .positions
             .iter()
@@ -293,7 +370,13 @@ impl PathingTask {
                 &self.config.realtime_triggers,
                 "AutoPick",
             ),
-            preflight: PathingPreflightPlan::for_task(self),
+            preflight: preflight.clone(),
+            movement_contract: PathingMovementContractPlan::from_segments(
+                &self.info.map_name,
+                self.info.map_match_method.as_deref(),
+                &preflight,
+                &segments,
+            ),
             farming: PathingFarmingExecutionPlan::from_task(self, expected_fight_count),
             segments,
         }
@@ -370,6 +453,176 @@ fn push_pathing_segment(
         retry_times: PATH_EXECUTOR_RETRY_TIMES,
         waypoints,
     });
+}
+
+impl PathingMovementContractPlan {
+    fn from_segments(
+        map_name: &str,
+        map_match_method: Option<&str>,
+        preflight: &PathingPreflightPlan,
+        segments: &[PathingSegmentPlan],
+    ) -> Self {
+        let pending_dependencies = if segments.is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                PathingMovementDependency::CoordinateConversion,
+                PathingMovementDependency::MapMatching,
+                PathingMovementDependency::PositionObservation,
+                PathingMovementDependency::CameraRotation,
+                PathingMovementDependency::InputDispatch,
+                PathingMovementDependency::Teleport,
+                PathingMovementDependency::LowHpRecovery,
+                PathingMovementDependency::TrapEscape,
+                PathingMovementDependency::ActionHandlers,
+                PathingMovementDependency::MovementTermination,
+            ]
+        };
+
+        Self {
+            contract_version: 1,
+            movement_executor_ready: false,
+            native_pathing_completed: false,
+            pending_dependencies,
+            map_name: map_name.to_string(),
+            map_match_method: map_match_method.map(ToOwned::to_owned),
+            preflight: preflight.clone(),
+            release_input_after_segment_attempt: preflight.release_input_after_segment_attempt,
+            segment_count: segments.len(),
+            waypoint_count: segments.iter().map(|segment| segment.waypoints.len()).sum(),
+            segments: segments
+                .iter()
+                .map(|segment| {
+                    PathingMovementSegmentContract::from_segment(
+                        segment,
+                        preflight.release_input_after_segment_attempt,
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+impl PathingMovementSegmentContract {
+    fn from_segment(segment: &PathingSegmentPlan, release_input_after_attempt: bool) -> Self {
+        Self {
+            segment_index: segment.segment_index,
+            retry_times: segment.retry_times,
+            starts_with_teleport: segment.starts_with_teleport,
+            seed_previous_position: segment.seed_previous_position,
+            seed_previous_position_coordinate_space: segment
+                .seed_previous_position_coordinate_space,
+            seed_previous_position_requires_track_conversion: segment
+                .seed_previous_position_requires_track_conversion,
+            release_input_after_attempt,
+            waypoints: segment
+                .waypoints
+                .iter()
+                .map(PathingMovementWaypointContract::from_waypoint)
+                .collect(),
+        }
+    }
+}
+
+impl PathingMovementWaypointContract {
+    fn from_waypoint(waypoint: &PathingWaypointPlan) -> Self {
+        Self {
+            global_index: waypoint.global_index,
+            segment_index: waypoint.segment_index,
+            segment_waypoint_index: waypoint.segment_waypoint_index,
+            waypoint_type: waypoint.waypoint_type.clone(),
+            move_mode: waypoint.move_mode.clone(),
+            action: waypoint.action.clone(),
+            action_params: waypoint.action_params.clone(),
+            route_point: waypoint.route_point,
+            track_point: waypoint.track_point,
+            track_conversion_pending: waypoint.track_conversion_pending,
+            effective_target_point: waypoint.effective_target_point,
+            phase_contracts: waypoint
+                .phases
+                .iter()
+                .map(|phase| PathingMovementPhaseContract::from_phase(*phase, waypoint))
+                .collect(),
+        }
+    }
+}
+
+impl PathingMovementPhaseContract {
+    fn from_phase(phase: PathingWaypointPhase, waypoint: &PathingWaypointPlan) -> Self {
+        let target_point = pathing_phase_target_point(phase, waypoint);
+        let coordinate_space = target_point.map(|_| {
+            if waypoint.track_point.is_some() {
+                PathingCoordinateSpace::LegacyTrackMap
+            } else {
+                PathingCoordinateSpace::RouteJson
+            }
+        });
+        Self {
+            phase,
+            target_point,
+            coordinate_space,
+            requires_track_conversion: target_point.is_some() && waypoint.track_conversion_pending,
+            native_status: pathing_phase_native_status(phase),
+            pending_dependencies: pathing_phase_pending_dependencies(phase),
+        }
+    }
+}
+
+fn pathing_phase_target_point(
+    phase: PathingWaypointPhase,
+    waypoint: &PathingWaypointPlan,
+) -> Option<PathingPoint> {
+    match phase {
+        PathingWaypointPhase::HandleTeleport
+        | PathingWaypointPhase::FaceTo
+        | PathingWaypointPhase::MoveTo
+        | PathingWaypointPhase::MoveCloseTo
+        | PathingWaypointPhase::RunAction => {
+            Some(waypoint.track_point.unwrap_or(waypoint.route_point))
+        }
+        PathingWaypointPhase::RecoverWhenLowHp
+        | PathingWaypointPhase::BeforeMoveToTarget
+        | PathingWaypointPhase::BeforeMoveCloseToTarget => None,
+    }
+}
+
+fn pathing_phase_native_status(phase: PathingWaypointPhase) -> PathingNativePhaseStatus {
+    match phase {
+        PathingWaypointPhase::BeforeMoveToTarget
+        | PathingWaypointPhase::BeforeMoveCloseToTarget => PathingNativePhaseStatus::ReadyByRuntime,
+        _ => PathingNativePhaseStatus::Pending,
+    }
+}
+
+fn pathing_phase_pending_dependencies(
+    phase: PathingWaypointPhase,
+) -> Vec<PathingMovementDependency> {
+    match phase {
+        PathingWaypointPhase::RecoverWhenLowHp => vec![
+            PathingMovementDependency::LowHpRecovery,
+            PathingMovementDependency::PositionObservation,
+        ],
+        PathingWaypointPhase::HandleTeleport => vec![
+            PathingMovementDependency::Teleport,
+            PathingMovementDependency::MapMatching,
+            PathingMovementDependency::CoordinateConversion,
+        ],
+        PathingWaypointPhase::BeforeMoveToTarget
+        | PathingWaypointPhase::BeforeMoveCloseToTarget => Vec::new(),
+        PathingWaypointPhase::FaceTo => vec![
+            PathingMovementDependency::CoordinateConversion,
+            PathingMovementDependency::PositionObservation,
+            PathingMovementDependency::CameraRotation,
+        ],
+        PathingWaypointPhase::MoveTo | PathingWaypointPhase::MoveCloseTo => vec![
+            PathingMovementDependency::CoordinateConversion,
+            PathingMovementDependency::PositionObservation,
+            PathingMovementDependency::InputDispatch,
+            PathingMovementDependency::MovementTermination,
+            PathingMovementDependency::TrapEscape,
+        ],
+        PathingWaypointPhase::RunAction => vec![PathingMovementDependency::ActionHandlers],
+    }
 }
 
 impl PathingWaypointPlan {

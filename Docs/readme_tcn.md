@@ -10,7 +10,7 @@
 <br/>
 
 <div align="center">
-  <a href="https://dotnet.microsoft.com/zh-cn/download/dotnet/latest/runtime"><img alt="Windows" src="https://img.shields.io/badge/platform-Windows-blue?logo=windowsxp&style=flat-square&color=1E9BFA" /></a>
+  <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Windows" src="https://img.shields.io/badge/platform-Windows-blue?logo=windowsxp&style=flat-square&color=1E9BFA" /></a>
   <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="下載數" src="https://img.shields.io/github/downloads/babalae/better-genshin-impact/total?logo=github&style=flat-square&color=1E9BFA"></a>
   <a href="https://github.com/babalae/better-genshin-impact/releases"><img alt="Release" src="https://img.shields.io/github/v/release/babalae/better-genshin-impact?logo=visualstudio&style=flat-square&color=1E9BFA"></a>
 </div>
@@ -91,7 +91,6 @@ BetterGI · 更好的原神， 一個基於電腦視覺技術，意圖讓原神�
 
 你的系統需要滿足以下條件：
 * Windows 10 或更高版本的64位系統
-* [.NET 8 運行時](https://dotnet.microsoft.com/zh-cn/download/dotnet/latest/runtime) （沒有的話，啟動程式，系統會提示下載安裝）
 
 **⚠️注意：**
 1. 視窗大小變化、切換遊戲解析度、切換顯示器的時候請重啟本軟件。
@@ -118,7 +117,6 @@ BetterGI · 更好的原神， 一個基於電腦視覺技術，意圖讓原神�
 * [Yap](https://github.com/Alex-Beng/Yap)
 * [genshin-woodmen](https://github.com/genshin-matrix/genshin-woodmen)
 * [Fischless](https://github.com/genshin-matrix/Fischless)
-* [MicaSetup](https://github.com/lemutec/MicaSetup)
 * [cvAutoTrack](https://github.com/GengGode/cvAutoTrack)
 * [genshin_impact_assistant](https://github.com/infstellar/genshin_impact_assistant)
 * [HutaoFisher](https://github.com/myHuTao-qwq/HutaoFisher)
@@ -129,9 +127,7 @@ BetterGI · 更好的原神， 一個基於電腦視覺技術，意圖讓原神�
 
 ## 開發者
 
-格式化：[CodeMaid.config](CodeMaid.config)、[Settings.XamlStyler](Settings.XamlStyler)；<br>
-
-[如何編譯項目？](BetterGenshinImpact/README.md)
+格式化與構建入口：`cargo fmt --all`、[Cargo.toml](../Cargo.toml)、[apps/desktop/package.json](../apps/desktop/package.json)、[rust-migration.md](rust-migration.md)
 
 ## 許可證
 
