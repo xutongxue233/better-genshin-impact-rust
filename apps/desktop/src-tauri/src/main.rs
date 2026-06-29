@@ -130,25 +130,26 @@ use bgi_task::{
     GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
     GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
     GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
-    GoToCraftingBenchRuntime, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
-    GoToSereniteaPotStepAction, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
-    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
-    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
-    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
-    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
-    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
-    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
-    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
-    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
-    QuickSereniteaPotExecutionReport, QuickSereniteaPotInteractionOutcome,
-    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
-    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
-    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
-    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
-    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
-    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
-    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
-    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan,
+    GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition,
+    GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule,
+    GridScrollRule, GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
+    IndependentTaskLiveExecutionReport, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
+    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
+    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
+    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
+    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
+    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
+    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
+    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
+    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
+    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
+    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
+    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
+    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
+    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
+    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
+    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScriptDispatcherExecutionPlan, ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan,
     SetTimeExecutionReport, ShellConfig, ShellExecutionResult, SwitchPartyChooseMenuRule,
     SwitchPartyConfirmRule, SwitchPartyExecutionPlan, SwitchPartyExecutionReport,
@@ -11446,6 +11447,9 @@ fn desktop_go_to_serenitea_pot_live_preflight(
     plan: &GoToSereniteaPotExecutionPlan,
 ) -> Result<(), String> {
     for step in &plan.steps {
+        if !desktop_go_to_serenitea_pot_preflight_condition_applies(plan, step.condition) {
+            continue;
+        }
         match &step.action {
             GoToSereniteaPotStepAction::MapEntry { .. } => {
                 return Err(
@@ -11487,6 +11491,24 @@ fn desktop_go_to_serenitea_pot_live_preflight(
         }
     }
     Ok(())
+}
+
+fn desktop_go_to_serenitea_pot_preflight_condition_applies(
+    plan: &GoToSereniteaPotExecutionPlan,
+    condition: GoToSereniteaPotStepCondition,
+) -> bool {
+    match condition {
+        GoToSereniteaPotStepCondition::WhenMapTeleportConfigured => {
+            plan.entry_mode == GoToSereniteaPotEntryMode::MapTeleport
+        }
+        GoToSereniteaPotStepCondition::WhenBagGadgetConfigured => {
+            plan.entry_mode == GoToSereniteaPotEntryMode::BagGadget
+        }
+        GoToSereniteaPotStepCondition::WhenShopConfiguredAndDue => {
+            !plan.secret_treasure_objects.is_empty()
+        }
+        _ => true,
+    }
 }
 
 fn execute_desktop_choose_talk_option_live(
@@ -16609,6 +16631,53 @@ mod tests {
 
         assert!(error.contains(
             "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
+        ));
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_live_preflight_respects_bag_gadget_entry() {
+        let config = serde_json::json!({
+            "sereniteaPotTpType": "尘歌壶道具"
+        });
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, Some(&config))
+                .unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+
+        let error = desktop_go_to_serenitea_pot_live_preflight(&plan).unwrap_err();
+
+        assert!(error.contains(
+            "GoToSereniteaPot live execution requires desktop Serenitea Pot bag-entry adapter"
+        ));
+        assert!(!error.contains("map-entry adapter"));
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_preflight_skips_empty_shop_config_statically() {
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(empty_shop_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+        let shop_config = serde_json::json!({
+            "secretTreasureObjects": ["摩拉"]
+        });
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(configured_shop_plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, Some(&shop_config))
+                .unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+
+        assert!(!desktop_go_to_serenitea_pot_preflight_condition_applies(
+            &empty_shop_plan,
+            GoToSereniteaPotStepCondition::WhenShopConfiguredAndDue
+        ));
+        assert!(desktop_go_to_serenitea_pot_preflight_condition_applies(
+            &configured_shop_plan,
+            GoToSereniteaPotStepCondition::WhenShopConfiguredAndDue
         ));
     }
 

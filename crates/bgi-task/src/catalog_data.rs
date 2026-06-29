@@ -795,7 +795,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the Serenitea Pot entry, A Yuan search, reward, realm-depot purchase, finish, and cleanup state machine through injectable hooks and invocation live bridge; desktop common-job live routing reaches this boundary and explicitly rejects map-entry, bag-entry, A Yuan, reward, shop, and finish side effects until concrete map/OCR/click/shop adapters are wired.",
+        notes: "Rust now preserves and executes the Serenitea Pot entry, A Yuan search, reward, realm-depot purchase, finish, and cleanup state machine through injectable hooks and invocation live bridge; desktop common-job live routing reaches this boundary with entry-mode-aware preflight and explicitly rejects only the configured map-entry or bag-entry path before A Yuan, reward, shop, and finish side effects until concrete map/OCR/click/shop adapters are wired.",
     },
     TaskCatalogEntry {
         key: "Relogin",
