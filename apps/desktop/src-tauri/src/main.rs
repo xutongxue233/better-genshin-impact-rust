@@ -131,6 +131,7 @@ use bgi_task::{
     CommonJobInputDriver, CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome,
     CommonJobStepAction, CountInventoryGridIconMatch, CountInventoryGridItemFrame,
     CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
+    CountInventoryItemStepAction, CountInventoryItemStepCondition,
     CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
     GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildStepAction,
     GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
@@ -11881,10 +11882,115 @@ fn execute_desktop_count_inventory_item_live(
         plan.capture_size,
         &cancellation,
     )?;
+    desktop_count_inventory_item_live_preflight(plan)?;
     Err(
-        "CountInventoryItem live execution requires desktop inventory grid/ONNX/OCR/click adapters"
+        "CountInventoryItem live execution requires desktop runtime adapter wiring after preflight"
             .to_string(),
     )
+}
+
+fn desktop_count_inventory_item_live_preflight(
+    plan: &CountInventoryItemExecutionPlan,
+) -> Result<(), String> {
+    for step in &plan.steps {
+        if !desktop_count_inventory_item_preflight_condition_applies(plan, step.condition) {
+            continue;
+        }
+
+        match &step.action {
+            CountInventoryItemStepAction::CommonJob { task_key }
+                if task_key == RETURN_MAIN_UI_TASK_KEY => {}
+            CountInventoryItemStepAction::CommonJob { task_key } => {
+                return Err(format!(
+                    "CountInventoryItem live execution requires desktop nested common-job adapter for {task_key}"
+                ));
+            }
+            CountInventoryItemStepAction::GenshinAction { action }
+                if *action == GenshinAction::OpenInventory =>
+            {
+                return Err(
+                    "CountInventoryItem live execution requires desktop inventory-opening adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::GenshinAction { action } => {
+                return Err(format!(
+                    "CountInventoryItem live execution requires desktop Genshin action adapter for {action:?}"
+                ));
+            }
+            CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop expired-item prompt adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::OpenInventoryTab { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop inventory tab adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::PreScrollWeaponOre { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop weapon-ore prescroll adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::EnumerateGridItems { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::CropGridIcon { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop grid icon crop adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::InferGridIcon { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop GridIcon inference adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::OcrGridItemCount { .. } => {
+                return Err(
+                    "CountInventoryItem live execution requires desktop item-count OCR adapter"
+                        .to_string(),
+                );
+            }
+            CountInventoryItemStepAction::ReturnResult { .. }
+            | CountInventoryItemStepAction::ClearVisionDrawings
+            | CountInventoryItemStepAction::Log { .. } => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn desktop_count_inventory_item_preflight_condition_applies(
+    plan: &CountInventoryItemExecutionPlan,
+    condition: CountInventoryItemStepCondition,
+) -> bool {
+    match condition {
+        CountInventoryItemStepCondition::Always
+        | CountInventoryItemStepCondition::WhenExpiredItemPromptDetected
+        | CountInventoryItemStepCondition::WhenInventoryTabUnchecked
+        | CountInventoryItemStepCondition::WhenStillOnMainUi
+        | CountInventoryItemStepCondition::WhenClassifierMatchesTarget
+        | CountInventoryItemStepCondition::WhenAllRequestedItemsFound
+        | CountInventoryItemStepCondition::WhenScanComplete => true,
+        CountInventoryItemStepCondition::WhenWeaponOreRequested => plan
+            .search_mode
+            .needs_weapon_ore_prescroll(&plan.grid_screen_name),
+    }
 }
 
 fn execute_desktop_return_main_ui_live(
@@ -20225,6 +20331,65 @@ mod tests {
             TaskError::CommonJobExecution(message)
                 if message.contains("AutoEatFood inventory-food live execution requires plan capture size 1920x1080 to match current capture size 1280x720")
                     && !message.contains("inventory grid/ONNX/OCR/click adapters")
+        ));
+    }
+
+    #[test]
+    fn desktop_count_inventory_item_preflight_reports_next_adapter_boundary() {
+        let count_plan = bgi_task::plan_common_job(
+            bgi_task::COUNT_INVENTORY_ITEM_TASK_KEY,
+            Some(&serde_json::json!({
+                "gridScreenName": "Materials",
+                "itemName": "晶核"
+            })),
+        )
+        .unwrap()
+        .unwrap();
+        let CommonJobExecutionPlan::CountInventoryItem(plan) = count_plan else {
+            panic!("expected CountInventoryItem plan");
+        };
+
+        let open_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
+        assert!(open_error.contains(
+            "CountInventoryItem live execution requires desktop inventory-opening adapter"
+        ));
+        assert!(!open_error.contains("grid/ONNX/OCR/click adapters"));
+
+        let mut after_open = plan.clone();
+        after_open.steps.retain(|step| {
+            !matches!(
+                step.action,
+                CountInventoryItemStepAction::GenshinAction {
+                    action: GenshinAction::OpenInventory
+                }
+            )
+        });
+        let prompt_error = desktop_count_inventory_item_live_preflight(&after_open).unwrap_err();
+        assert!(prompt_error.contains(
+            "CountInventoryItem live execution requires desktop expired-item prompt adapter"
+        ));
+
+        let mut after_prompt = after_open.clone();
+        after_prompt.steps.retain(|step| {
+            !matches!(
+                step.action,
+                CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
+            )
+        });
+        let tab_error = desktop_count_inventory_item_live_preflight(&after_prompt).unwrap_err();
+        assert!(tab_error
+            .contains("CountInventoryItem live execution requires desktop inventory tab adapter"));
+
+        let mut after_tab = after_prompt.clone();
+        after_tab.steps.retain(|step| {
+            !matches!(
+                step.action,
+                CountInventoryItemStepAction::OpenInventoryTab { .. }
+            )
+        });
+        let classifier_error = desktop_count_inventory_item_live_preflight(&after_tab).unwrap_err();
+        assert!(classifier_error.contains(
+            "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
         ));
     }
 

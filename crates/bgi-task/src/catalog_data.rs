@@ -544,7 +544,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the inventory tab, grid enumeration, icon classification, count OCR, weapon-ore prescroll, and single/multiple result-contract state machine through injectable hooks and invocation live bridge; desktop common-job live routing and AutoEatFood inventory execution share game-window, BitBlt, and capture-size preflight before explicitly rejecting the missing inventory grid/input/ONNX/OCR/click adapters instead of falling through as unsupported, while script return integration remains pending.",
+        notes: "Rust now preserves and executes the inventory tab, grid enumeration, icon classification, count OCR, weapon-ore prescroll, and single/multiple result-contract state machine through injectable hooks and invocation live bridge; desktop common-job live routing and AutoEatFood inventory execution share game-window, BitBlt, and capture-size preflight, and CountInventoryItem now reports the first active missing inventory adapter from the plan instead of collapsing inventory open, prompt, tab, GridIcon, grid, input, ONNX, OCR, and click gaps into one unsupported error, while script return integration remains pending.",
     },
     TaskCatalogEntry {
         key: "Teleport",

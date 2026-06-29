@@ -566,7 +566,7 @@ pub fn plan_count_inventory_item(
         weapon_ore_prescroll_rule,
         result_contract,
         steps,
-        notes: "Inventory open/tab selection, grid constants, icon crop, ONNX prototype matching, count OCR, weapon-ore prescroll, and single/multiple result contracts are modeled and executable as a Rust state machine through injectable hooks; live capture, OpenCV grid enumeration, ONNX inference, Paddle OCR, mouse/keyboard input, and script return object execution remain pending.".to_string(),
+        notes: "Inventory open/tab selection, grid constants, icon crop, ONNX prototype matching, count OCR, weapon-ore prescroll, and single/multiple result contracts are modeled and executable as a Rust state machine through injectable hooks; desktop live routing now performs shared game-window, BitBlt, and capture-size preflight and reports the first active missing inventory adapter from the plan, while live OpenInventory/tab input, OpenCV grid enumeration, ONNX inference, Paddle OCR, and script return object execution remain pending.".to_string(),
     })
 }
 
