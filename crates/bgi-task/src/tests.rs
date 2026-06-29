@@ -6695,7 +6695,7 @@ fn auto_fish_plan_preserves_legacy_trigger_templates_bite_and_bar_rules() {
     assert!(plan
         .pending_native
         .iter()
-        .any(|item| item.contains("capture/template/text/contour/input/overlay")));
+        .any(|item| item.contains("desktop live adapter now covers BitBlt capture")));
     assert!(plan
         .pending_native
         .iter()

@@ -631,8 +631,7 @@ pub fn plan_auto_fish(config: AutoFishExecutionConfig) -> AutoFishExecutionPlan 
         steps: auto_fish_steps(),
         executor_ready: true,
         pending_native: vec![
-            "desktop live adapters for capture/template/text/contour/input/overlay injection"
-                .to_string(),
+            "desktop live adapter now covers BitBlt capture, fishing UI/lift-rod template matching, SendInput left-button actions, and no-op overlay cleanup; white text block detection, Paddle OCR, fish-box contour, and fishing-bar contour adapters remain pending".to_string(),
             "BgiFish YOLO predictor construction and bait selection remain in full AutoFishingTask"
                 .to_string(),
             "RodNet inference and full AutoFishingTask throw-rod branch remain native-pending"
@@ -1489,7 +1488,7 @@ mod auto_fish_tests {
         assert!(plan
             .pending_native
             .iter()
-            .any(|item| item.contains("desktop live adapters")));
+            .any(|item| item.contains("desktop live adapter now covers BitBlt capture")));
         assert!(plan
             .pending_native
             .iter()

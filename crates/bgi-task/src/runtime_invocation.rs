@@ -17,7 +17,8 @@ use crate::auto_eat::{
 };
 use crate::auto_fight::AutoFightFinishDetectionLiveExecution;
 use crate::auto_fish::{
-    plan_auto_fish, AutoFishExecutionConfig, AutoFishExecutionPlan, AUTO_FISH_TASK_KEY,
+    plan_auto_fish, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishTickExecutionReport,
+    AUTO_FISH_TASK_KEY,
 };
 use crate::auto_fishing_task::{
     plan_auto_fishing_task, AutoFishingTaskExecutionConfig, AutoFishingTaskExecutionPlan,
@@ -324,6 +325,7 @@ impl RealtimeTriggerExecutionPlan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RealtimeTriggerLiveExecutionReport {
     AutoEat(AutoEatTickExecutionReport),
+    AutoFish(AutoFishTickExecutionReport),
     AutoPick(AutoPickTickExecutionReport),
     QuickTeleport(QuickTeleportTickExecutionReport),
 }
@@ -332,6 +334,7 @@ impl RealtimeTriggerLiveExecutionReport {
     fn task_name(&self) -> &'static str {
         match self {
             RealtimeTriggerLiveExecutionReport::AutoEat(_) => "AutoEat",
+            RealtimeTriggerLiveExecutionReport::AutoFish(_) => "AutoFish",
             RealtimeTriggerLiveExecutionReport::AutoPick(_) => "AutoPick",
             RealtimeTriggerLiveExecutionReport::QuickTeleport(_) => "QuickTeleport",
         }
@@ -346,6 +349,14 @@ impl RealtimeTriggerLiveExecutionReport {
                 report.decision.recovery_available,
                 report.decision.resurrection_available,
                 report.dispatched_actions.len()
+            ),
+            RealtimeTriggerLiveExecutionReport::AutoFish(report) => format!(
+                "processed={}, skip_reason={:?}, stage_before={:?}, stage_after={:?}, runtime_actions={}",
+                report.decision.processed,
+                report.decision.skip_reason,
+                report.decision.stage_before,
+                report.decision.stage_after,
+                report.runtime_actions.len()
             ),
             RealtimeTriggerLiveExecutionReport::AutoPick(report) => format!(
                 "action={:?}, executed_actions={}",
@@ -1265,6 +1276,7 @@ pub fn execute_realtime_trigger_live_if_available<F>(
     if !matches!(
         plan,
         RealtimeTriggerExecutionPlan::AutoEat(_)
+            | RealtimeTriggerExecutionPlan::AutoFish(_)
             | RealtimeTriggerExecutionPlan::AutoPick(_)
             | RealtimeTriggerExecutionPlan::QuickTeleport(_)
     ) {

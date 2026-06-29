@@ -65,24 +65,25 @@ use bgi_task::{
     detect_active_combat_avatar_index_from_default_rects_with_arrow,
     evaluate_auto_pathing_resolution_preflight, execute_auto_cook_plan, execute_auto_eat_food_plan,
     execute_auto_eat_tick_plan, execute_auto_fight_finish_detection_live_probe,
-    execute_auto_music_album_plan, execute_auto_music_performance_plan,
-    execute_auto_open_chest_plan, execute_auto_pathing_action_boundary_with_live_executor,
-    execute_auto_pick_tick_plan, execute_auto_track_plan, execute_auto_wood_plan,
-    execute_blessing_of_the_welkin_moon_live, execute_check_rewards_plan,
-    execute_choose_talk_option_plan, execute_claim_battle_pass_rewards_plan,
-    execute_claim_encounter_points_rewards_plan, execute_claim_mail_rewards_live,
-    execute_go_to_crafting_bench_plan, execute_independent_task_live_if_available,
-    execute_independent_task_with_cancel, execute_macro_hotkey_plan,
-    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
-    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
-    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
-    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
-    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
-    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
-    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight,
-    plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
-    plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
-    plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
+    execute_auto_fish_tick_plan, execute_auto_music_album_plan,
+    execute_auto_music_performance_plan, execute_auto_open_chest_plan,
+    execute_auto_pathing_action_boundary_with_live_executor, execute_auto_pick_tick_plan,
+    execute_auto_track_plan, execute_auto_wood_plan, execute_blessing_of_the_welkin_moon_live,
+    execute_check_rewards_plan, execute_choose_talk_option_plan,
+    execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
+    execute_claim_mail_rewards_live, execute_go_to_crafting_bench_plan,
+    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
+    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
+    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
+    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
+    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
+    execute_team_context_combat_script_inputs, execute_teleport_plan, execute_use_redeem_code_plan,
+    execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
+    extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
+    plan_auto_eat, plan_auto_fight, plan_auto_fish, plan_auto_music_game, plan_auto_open_chest,
+    plan_auto_pathing, plan_auto_pick, plan_auto_wood, plan_quick_buy,
+    plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot, plan_quick_teleport,
+    plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
     redeem_code_entries_from_strings, runtime_triggers, select_triggers_for_tick,
     switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
     task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
@@ -92,67 +93,69 @@ use bgi_task::{
     AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
-    AutoMusicAlbumExecutionReport, AutoMusicAlbumPageStatus, AutoMusicAlbumRuntime,
-    AutoMusicDifficultyRule, AutoMusicGameExecutionConfig, AutoMusicGameExecutionPlan,
-    AutoMusicGameKeyLane, AutoMusicLaneBlueSample, AutoMusicPerformanceFrame,
-    AutoMusicPerformanceReport, AutoMusicPerformanceRuntime, AutoMusicTemplateLocator,
-    AutoOpenChestAction, AutoOpenChestActionPress, AutoOpenChestExecutionConfig,
-    AutoOpenChestExecutionPlan, AutoOpenChestExecutionReport, AutoOpenChestObservation,
-    AutoOpenChestRuntime, AutoPathingActionBoundaryReport, AutoPathingExecutionConfig,
-    AutoPathingExecutionPlan, AutoPathingResolutionPreflightStatus, AutoPickExecutionConfig,
-    AutoPickExecutionPlan, AutoPickRelativeTemplateLocator, AutoPickRuntime, AutoPickRuntimeLists,
-    AutoPickTemplateLocator, AutoPickTickExecutionReport, AutoPickTickObservation,
-    AutoTrackActionPress, AutoTrackExecutionConfig, AutoTrackExecutionPlan,
-    AutoTrackExecutionReport, AutoTrackExecutionState, AutoTrackMainUiObservation,
-    AutoTrackMissionTextObservation, AutoTrackRuntime, AutoTrackRuntimeAction,
-    AutoTrackTeleportCandidate, AutoTrackTeleportObservation, AutoTrackTemplateLocator,
-    AutoTrackTemplateMatch, AutoTrackTrackingObservation, AutoWoodCleanupOutcome,
-    AutoWoodDelayOutcome, AutoWoodDelayReason, AutoWoodExecutionConfig, AutoWoodExecutionPlan,
-    AutoWoodExecutionReport, AutoWoodGadgetOutcome, AutoWoodGarbageCollectionOutcome,
-    AutoWoodInputAction, AutoWoodInputOutcome, AutoWoodOcrOutcome, AutoWoodRefreshOutcome,
-    AutoWoodRefreshStrategy, AutoWoodRuntime, AutoWoodRuntimeRoundContext, AutoWoodStartupOutcome,
-    AutoWoodTemplateLocator, AutoWoodThirdPartyLoginMode, AutoWoodThirdPartyLoginOutcome,
-    AutoWoodWindowOutcome, BattlePassClaimAllRule, BattlePassClaimScope,
-    BattlePassRewardTextCandidate, BlessingOfTheWelkinMoonExecutionPlan,
-    BlessingOfTheWelkinMoonExecutionReport, CancellableCommonJobClock, CheckRewardsExecutionPlan,
-    CheckRewardsExecutionReport, CheckRewardsRuntime, CheckRewardsTextCandidate,
-    ChooseTalkOptionCandidate, ChooseTalkOptionExecutionPlan, ChooseTalkOptionExecutionReport,
-    ChooseTalkOptionOcrRule, ChooseTalkOptionOrangeRule, ChooseTalkOptionRuntime,
-    ClaimBattlePassRewardsExecutionPlan, ClaimBattlePassRewardsExecutionReport,
-    ClaimBattlePassRewardsRuntime, ClaimEncounterPointsRewardsExecutionPlan,
-    ClaimEncounterPointsRewardsExecutionReport, ClaimEncounterPointsRewardsOcrRule,
-    ClaimEncounterPointsRewardsRuntime, ClaimEncounterPointsRewardsTextCandidate,
-    ClaimMailRewardsExecutionPlan, ClaimMailRewardsExecutionReport,
-    CombatActiveAvatarDetectionResult, CombatCommandPlaybackMode, CombatTeamPlaybackExecution,
-    CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource, CommonJobInputDriver,
-    CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome, CommonJobStepAction,
-    CountInventoryGridIconMatch, CountInventoryGridItemFrame, CountInventoryItemExecutionPlan,
-    CountInventoryItemExecutionReport, CountInventoryOpenInventoryOutcome,
-    CountInventoryOpenInventoryRule, DispatcherRuntime, GoToAdventurersGuildExecutionPlan,
-    GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
-    GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
-    GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
-    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
-    GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan,
-    GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition,
-    GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule,
-    GridScrollRule, GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
-    IndependentTaskLiveExecutionReport, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
-    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
-    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
-    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
-    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
-    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
-    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
-    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
-    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
-    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
-    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
-    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
-    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
-    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
-    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
-    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
+    AutoFishOverlayAction, AutoFishRuntime, AutoFishTemplateLocator, AutoFishTickExecutionReport,
+    AutoFishTriggerState, AutoMusicAlbumExecutionReport, AutoMusicAlbumPageStatus,
+    AutoMusicAlbumRuntime, AutoMusicDifficultyRule, AutoMusicGameExecutionConfig,
+    AutoMusicGameExecutionPlan, AutoMusicGameKeyLane, AutoMusicLaneBlueSample,
+    AutoMusicPerformanceFrame, AutoMusicPerformanceReport, AutoMusicPerformanceRuntime,
+    AutoMusicTemplateLocator, AutoOpenChestAction, AutoOpenChestActionPress,
+    AutoOpenChestExecutionConfig, AutoOpenChestExecutionPlan, AutoOpenChestExecutionReport,
+    AutoOpenChestObservation, AutoOpenChestRuntime, AutoPathingActionBoundaryReport,
+    AutoPathingExecutionConfig, AutoPathingExecutionPlan, AutoPathingResolutionPreflightStatus,
+    AutoPickExecutionConfig, AutoPickExecutionPlan, AutoPickRelativeTemplateLocator,
+    AutoPickRuntime, AutoPickRuntimeLists, AutoPickTemplateLocator, AutoPickTickExecutionReport,
+    AutoPickTickObservation, AutoTrackActionPress, AutoTrackExecutionConfig,
+    AutoTrackExecutionPlan, AutoTrackExecutionReport, AutoTrackExecutionState,
+    AutoTrackMainUiObservation, AutoTrackMissionTextObservation, AutoTrackRuntime,
+    AutoTrackRuntimeAction, AutoTrackTeleportCandidate, AutoTrackTeleportObservation,
+    AutoTrackTemplateLocator, AutoTrackTemplateMatch, AutoTrackTrackingObservation,
+    AutoWoodCleanupOutcome, AutoWoodDelayOutcome, AutoWoodDelayReason, AutoWoodExecutionConfig,
+    AutoWoodExecutionPlan, AutoWoodExecutionReport, AutoWoodGadgetOutcome,
+    AutoWoodGarbageCollectionOutcome, AutoWoodInputAction, AutoWoodInputOutcome,
+    AutoWoodOcrOutcome, AutoWoodRefreshOutcome, AutoWoodRefreshStrategy, AutoWoodRuntime,
+    AutoWoodRuntimeRoundContext, AutoWoodStartupOutcome, AutoWoodTemplateLocator,
+    AutoWoodThirdPartyLoginMode, AutoWoodThirdPartyLoginOutcome, AutoWoodWindowOutcome,
+    BattlePassClaimAllRule, BattlePassClaimScope, BattlePassRewardTextCandidate,
+    BlessingOfTheWelkinMoonExecutionPlan, BlessingOfTheWelkinMoonExecutionReport,
+    CancellableCommonJobClock, CheckRewardsExecutionPlan, CheckRewardsExecutionReport,
+    CheckRewardsRuntime, CheckRewardsTextCandidate, ChooseTalkOptionCandidate,
+    ChooseTalkOptionExecutionPlan, ChooseTalkOptionExecutionReport, ChooseTalkOptionOcrRule,
+    ChooseTalkOptionOrangeRule, ChooseTalkOptionRuntime, ClaimBattlePassRewardsExecutionPlan,
+    ClaimBattlePassRewardsExecutionReport, ClaimBattlePassRewardsRuntime,
+    ClaimEncounterPointsRewardsExecutionPlan, ClaimEncounterPointsRewardsExecutionReport,
+    ClaimEncounterPointsRewardsOcrRule, ClaimEncounterPointsRewardsRuntime,
+    ClaimEncounterPointsRewardsTextCandidate, ClaimMailRewardsExecutionPlan,
+    ClaimMailRewardsExecutionReport, CombatActiveAvatarDetectionResult, CombatCommandPlaybackMode,
+    CombatTeamPlaybackExecution, CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource,
+    CommonJobInputDriver, CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome,
+    CommonJobStepAction, CountInventoryGridIconMatch, CountInventoryGridItemFrame,
+    CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
+    CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
+    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildStepAction,
+    GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
+    GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
+    GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
+    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToSereniteaPotEntryMode,
+    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
+    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
+    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
+    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
+    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
+    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
+    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
+    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
+    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
+    QuickSereniteaPotExecutionReport, QuickSereniteaPotInteractionOutcome,
+    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
+    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
+    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
+    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
+    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
+    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
+    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
+    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScriptDispatcherExecutionPlan, ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan,
     SetTimeExecutionReport, ShellConfig, ShellExecutionResult, SwitchPartyChooseMenuRule,
     SwitchPartyConfirmRule, SwitchPartyExecutionPlan, SwitchPartyExecutionReport,
@@ -583,6 +586,7 @@ struct DesktopTaskRuntimeState {
     dispatcher: Mutex<DispatcherRuntime>,
     runner: Mutex<RunnerRuntime>,
     auto_eat_state: Mutex<AutoEatTriggerState>,
+    auto_fish_state: Mutex<AutoFishTriggerState>,
     quick_teleport_state: Mutex<DesktopQuickTeleportTriggerState>,
     script_cancellation: Arc<InputCancellationToken>,
 }
@@ -593,6 +597,7 @@ impl Default for DesktopTaskRuntimeState {
             dispatcher: Mutex::new(DispatcherRuntime::default()),
             runner: Mutex::new(RunnerRuntime::default()),
             auto_eat_state: Mutex::new(AutoEatTriggerState::default()),
+            auto_fish_state: Mutex::new(AutoFishTriggerState::default()),
             quick_teleport_state: Mutex::new(DesktopQuickTeleportTriggerState::default()),
             script_cancellation: Arc::new(InputCancellationToken::new()),
         }
@@ -867,6 +872,12 @@ struct DesktopAutoCookTaskExecution {
 struct DesktopAutoEatTickExecution {
     task: String,
     result: AutoEatTickExecutionReport,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopAutoFishTickExecution {
+    task: String,
+    result: AutoFishTickExecutionReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -3529,6 +3540,28 @@ fn task_execute_auto_eat_tick(
 }
 
 #[tauri::command]
+fn task_execute_auto_fish_tick(
+    app: tauri::AppHandle,
+    task_state: tauri::State<DesktopTaskRuntimeState>,
+) -> Result<DesktopAutoFishTickExecution, String> {
+    let script_cancellation =
+        start_desktop_script_run(&task_state, "RealtimeTrigger:AutoFish".to_string())?;
+    let execution = (|| {
+        let app_root = app_root(&app)?;
+        let config = read_desktop_config(&app, &app_root);
+        append_desktop_log(&app_root, "INFO", "auto-fish realtime tick requested");
+        execute_desktop_auto_fish_tick_live_plan(
+            &config,
+            find_desktop_game_window(&config).as_ref(),
+            &task_state.auto_fish_state,
+            Arc::clone(&script_cancellation),
+        )
+    })();
+    finish_desktop_script_run(&task_state);
+    execution
+}
+
+#[tauri::command]
 fn task_execute_auto_pick_tick(
     app: tauri::AppHandle,
     task_state: tauri::State<DesktopTaskRuntimeState>,
@@ -4505,6 +4538,25 @@ fn execute_desktop_realtime_trigger_live_result(
             .map_err(TaskError::VisionPlan)?;
             Ok(Some(RealtimeTriggerLiveExecutionReport::AutoEat(report)))
         }
+        RealtimeTriggerExecutionPlan::AutoFish(plan) => {
+            let window = game_window.ok_or_else(|| {
+                TaskError::VisionPlan(
+                    "AutoFish live tick requires a detected game window".to_string(),
+                )
+            })?;
+            let mut state = task_state.auto_fish_state.lock().map_err(|_| {
+                TaskError::VisionPlan("AutoFish trigger state lock poisoned".to_string())
+            })?;
+            let report = execute_desktop_auto_fish_tick_live(
+                config,
+                window,
+                plan,
+                &mut state,
+                Arc::clone(&cancellation),
+            )
+            .map_err(TaskError::VisionPlan)?;
+            Ok(Some(RealtimeTriggerLiveExecutionReport::AutoFish(report)))
+        }
         RealtimeTriggerExecutionPlan::AutoPick(plan) => {
             let window = game_window.ok_or_else(|| {
                 TaskError::VisionPlan(
@@ -4898,6 +4950,252 @@ fn desktop_auto_eat_genshin_action(action: &str) -> Option<GenshinAction> {
     match action.trim() {
         "GIActions.QuickUseGadget" | "QuickUseGadget" => Some(GenshinAction::QuickUseGadget),
         _ => None,
+    }
+}
+
+fn execute_desktop_auto_fish_tick_live_plan(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    state: &Mutex<AutoFishTriggerState>,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<DesktopAutoFishTickExecution, String> {
+    let window = game_window
+        .ok_or_else(|| "AutoFish live tick requires a detected game window".to_string())?;
+    let capture_size = desktop_common_job_capture_size(Some(window));
+    let plan = plan_auto_fish(AutoFishExecutionConfig {
+        capture_size,
+        auto_fishing_config: config.auto_fishing_config.clone(),
+    });
+    let task = plan.task_key.clone();
+    let mut state = state
+        .lock()
+        .map_err(|_| "AutoFish trigger state lock poisoned".to_string())?;
+    let result =
+        execute_desktop_auto_fish_tick_live(config, window, &plan, &mut state, cancellation)?;
+    Ok(DesktopAutoFishTickExecution { task, result })
+}
+
+fn execute_desktop_auto_fish_tick_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &AutoFishExecutionPlan,
+    state: &mut AutoFishTriggerState,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<AutoFishTickExecutionReport, String> {
+    if cancellation.is_cancelled() {
+        return Err("AutoFish live tick cancelled".to_string());
+    }
+    let metrics = window
+        .metrics
+        .ok_or_else(|| "AutoFish live tick requires game window metrics".to_string())?;
+    let capture_size = VisionSize::new(metrics.client_width, metrics.client_height);
+    if plan.capture_size != capture_size {
+        return Err(format!(
+            "AutoFish live tick requires plan capture size {}x{} to match current capture size {}x{}",
+            plan.capture_size.width,
+            plan.capture_size.height,
+            capture_size.width,
+            capture_size.height
+        ));
+    }
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err("AutoFish live tick requires the BitBlt capture backend".to_string());
+    }
+
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings)
+        .map_err(|error| error.to_string())?;
+    let mut runtime = DesktopAutoFishRuntime::new(
+        bgi_task::task_asset_root(),
+        capture_size,
+        capture_source,
+        window.handle.0,
+        cancellation,
+    );
+    execute_auto_fish_tick_plan(plan, state, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopAutoFishRuntime {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    capture_size: VisionSize,
+    capture_source: DesktopGameCaptureFrameSource,
+    window_handle: isize,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopAutoFishRuntime {
+    fn new(
+        template_root: PathBuf,
+        capture_size: VisionSize,
+        capture_source: DesktopGameCaptureFrameSource,
+        window_handle: isize,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            capture_size,
+            capture_source,
+            window_handle,
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::VisionPlan(
+                "AutoFish live tick cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_bgr_image(&self) -> bgi_task::Result<BgrImage> {
+        self.ensure_not_cancelled()?;
+        let frame = self
+            .capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+
+    fn locate_auto_fish_template(
+        &self,
+        capture: &ImageRegion,
+        locator: &AutoFishTemplateLocator,
+    ) -> bgi_task::Result<bool> {
+        let object =
+            desktop_auto_fish_template_object(locator, self.capture_size).map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoFish template object failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        let region = capture
+            .find(&self.vision_backend, &object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoFish template lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist())
+    }
+
+    fn execute_events(&self, events: Vec<InputEvent>) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        bgi_script::GlobalInputExecution::execute_events(
+            events,
+            GlobalInputDispatchMode::SendInput,
+            Some(self.window_handle),
+        )
+        .map(|_| ())
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    }
+}
+
+impl AutoFishRuntime for DesktopAutoFishRuntime {
+    fn auto_fish_now_ms(&mut self, _plan: &AutoFishExecutionPlan) -> bgi_task::Result<u64> {
+        current_time_ms().map_err(TaskError::VisionPlan)
+    }
+
+    fn detect_auto_fish_template(
+        &mut self,
+        locator: &AutoFishTemplateLocator,
+    ) -> bgi_task::Result<bool> {
+        let image = self.capture_bgr_image()?;
+        let capture = ImageRegion::capture(image);
+        self.locate_auto_fish_template(&capture, locator)
+    }
+
+    fn detect_auto_fish_bite_text_block(
+        &mut self,
+        _rule: &AutoFishBiteRule,
+    ) -> bgi_task::Result<bool> {
+        self.ensure_not_cancelled()?;
+        Ok(false)
+    }
+
+    fn ocr_auto_fish_bite_text(
+        &mut self,
+        _rule: &AutoFishBiteRule,
+    ) -> bgi_task::Result<Option<String>> {
+        self.ensure_not_cancelled()?;
+        Ok(None)
+    }
+
+    fn detect_auto_fish_fish_box_rects(
+        &mut self,
+        _plan: &AutoFishExecutionPlan,
+    ) -> bgi_task::Result<Vec<Rect>> {
+        self.ensure_not_cancelled()?;
+        Ok(Vec::new())
+    }
+
+    fn detect_auto_fish_fishing_bar_rects(
+        &mut self,
+        _plan: &AutoFishExecutionPlan,
+        _fish_box_rect: Rect,
+    ) -> bgi_task::Result<Vec<Rect>> {
+        self.ensure_not_cancelled()?;
+        Ok(Vec::new())
+    }
+
+    fn dispatch_auto_fish_input(&mut self, action: AutoFishInputAction) -> bgi_task::Result<()> {
+        self.execute_events(desktop_auto_fish_input_events(action))
+    }
+
+    fn update_auto_fish_overlay(
+        &mut self,
+        _action: &AutoFishOverlayAction,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()
+    }
+}
+
+fn desktop_auto_fish_template_object(
+    locator: &AutoFishTemplateLocator,
+    capture_size: VisionSize,
+) -> bgi_vision::Result<bgi_vision::RecognitionObject> {
+    let image = BvImage::new(&locator.asset)?;
+    let mut object = image.to_recognition_object_for_screen(
+        Some(locator.roi),
+        locator.threshold,
+        capture_size,
+    )?;
+    object.name = Some(locator.name.clone());
+    object.template.mode = locator.match_mode;
+    object.template.use_3_channels = locator.use_3_channels;
+    object.template.draw_on_window = locator.draw_on_window;
+    object.validate()?;
+    Ok(object)
+}
+
+fn desktop_auto_fish_input_events(action: AutoFishInputAction) -> Vec<InputEvent> {
+    match action {
+        AutoFishInputAction::LeftButtonClick => InputSequence::new()
+            .mouse_down(MouseButton::Left)
+            .delay(50)
+            .mouse_up(MouseButton::Left)
+            .delay(50)
+            .events()
+            .to_vec(),
+        AutoFishInputAction::LeftButtonDown => {
+            vec![InputEvent::MouseButtonDown {
+                button: MouseButton::Left,
+            }]
+        }
+        AutoFishInputAction::LeftButtonUp => {
+            vec![InputEvent::MouseButtonUp {
+                button: MouseButton::Left,
+            }]
+        }
     }
 }
 
@@ -16567,6 +16865,7 @@ fn main() {
             task_execute_auto_open_chest,
             task_execute_auto_cook,
             task_execute_auto_eat_tick,
+            task_execute_auto_fish_tick,
             task_execute_auto_pick_tick,
             task_execute_quick_teleport_tick,
             task_execute_auto_music_game_performance,
@@ -18375,6 +18674,118 @@ mod tests {
             .is_empty());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_auto_fish_tick_live_plan_reports_missing_game_window() {
+        let state = Mutex::new(AutoFishTriggerState::default());
+        let error = execute_desktop_auto_fish_tick_live_plan(
+            &AppConfig::default(),
+            None,
+            &state,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("AutoFish live tick requires a detected game window"));
+    }
+
+    #[test]
+    fn desktop_auto_fish_tick_live_requires_bit_blt_before_capture() {
+        let mut config = AppConfig {
+            capture_mode: bgi_core::CaptureMode::WindowsGraphicsCapture,
+            ..AppConfig::default()
+        };
+        config.auto_fishing_config.enabled = true;
+        let window = desktop_test_game_window(1920, 1080);
+        let plan = plan_auto_fish(AutoFishExecutionConfig {
+            capture_size: VisionSize::new(1920, 1080),
+            auto_fishing_config: config.auto_fishing_config.clone(),
+        });
+        let mut state = AutoFishTriggerState::default();
+
+        let error = execute_desktop_auto_fish_tick_live(
+            &config,
+            &window,
+            &plan,
+            &mut state,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("AutoFish live tick requires the BitBlt capture backend"));
+    }
+
+    #[test]
+    fn desktop_auto_fish_input_events_preserve_left_button_actions() {
+        assert_eq!(
+            desktop_auto_fish_input_events(AutoFishInputAction::LeftButtonClick),
+            vec![
+                InputEvent::MouseButtonDown {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 50 },
+                InputEvent::MouseButtonUp {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 50 },
+            ]
+        );
+        assert_eq!(
+            desktop_auto_fish_input_events(AutoFishInputAction::LeftButtonDown),
+            vec![InputEvent::MouseButtonDown {
+                button: MouseButton::Left,
+            }]
+        );
+        assert_eq!(
+            desktop_auto_fish_input_events(AutoFishInputAction::LeftButtonUp),
+            vec![InputEvent::MouseButtonUp {
+                button: MouseButton::Left,
+            }]
+        );
+    }
+
+    #[test]
+    fn desktop_realtime_trigger_live_result_writes_auto_fish_execution_error() {
+        let task_state = DesktopTaskRuntimeState::default();
+        let mut config = AppConfig {
+            capture_mode: bgi_core::CaptureMode::WindowsGraphicsCapture,
+            ..AppConfig::default()
+        };
+        config.auto_fishing_config.enabled = true;
+        let window = desktop_test_game_window(1920, 1080);
+        let mut result = bgi_task::evaluate_task_invocation_plan(
+            bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+                bgi_task::ScriptDispatcherCommandInput::AddRealtimeTimer(
+                    bgi_task::DispatcherTimerInput {
+                        name: "AutoFish".to_string(),
+                        interval_ms: 67,
+                        config: Some(serde_json::json!({
+                            "autoFishingConfig": {
+                                "enabled": true
+                            }
+                        })),
+                        clears_existing_triggers: false,
+                    },
+                ),
+            )
+            .unwrap(),
+            TaskInvocationExecutionMode::ExecuteReady,
+        );
+
+        execute_desktop_realtime_trigger_live_result(
+            Path::new("."),
+            &config,
+            Some(&window),
+            &task_state,
+            Arc::new(InputCancellationToken::new()),
+            &mut result,
+        );
+
+        assert_eq!(result.status, TaskInvocationExecutionStatus::Invalid);
+        assert!(result
+            .message
+            .contains("AutoFish live tick requires the BitBlt capture backend"));
     }
 
     #[test]

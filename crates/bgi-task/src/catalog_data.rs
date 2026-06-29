@@ -127,7 +127,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::RealtimeTick,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models AutoFish realtime trigger metadata, config, AutoFishing templates, exclusive fishing UI gate, semi-auto behavior tree, bite detection, fish-bar contour rules, trigger state, and an injectable tick executor for bite/bar/input/overlay actions; desktop live capture/template/text/contour/input/overlay adapters and full AutoFishingTask throw-rod execution remain pending.",
+        notes: "Rust models AutoFish realtime trigger metadata, config, AutoFishing templates, exclusive fishing UI gate, semi-auto behavior tree, bite detection, fish-bar contour rules, trigger state, and an injectable tick executor for bite/bar/input/overlay actions; desktop live phase 1 now wires BitBlt capture, fishing UI/lift-rod template matching, SendInput left-button actions, persistent trigger state, and no-op overlay cleanup, while white text block detection, Paddle OCR, fish-box/fishing-bar contour adapters, and full AutoFishingTask throw-rod execution remain pending.",
     },
     TaskCatalogEntry {
         key: "SkillCd",
