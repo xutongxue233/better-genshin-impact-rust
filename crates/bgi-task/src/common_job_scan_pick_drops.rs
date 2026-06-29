@@ -388,7 +388,7 @@ pub fn plan_scan_pick_drops(
         search_rule,
         camera_reset_rule,
         steps,
-        notes: "YOLO drop/ore detection, target ordering, search sweep, movement thresholds, camera reset, and cleanup are migrated and executable as a Rust state machine through injectable detection hooks; direct capture, ONNX inference, live input dispatch, and overlay cleanup remain pending."
+        notes: "YOLO drop/ore detection, target ordering, search sweep, movement thresholds, camera reset, and cleanup are migrated and executable as a Rust state machine through injectable detection hooks; desktop live routing now validates game-window, BitBlt, and capture-size boundaries before explicitly rejecting the missing BgiWorld ONNX YOLO and overlay adapters."
             .to_string(),
     })
 }

@@ -619,7 +619,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the post-combat YOLO drop scan, search sweep, movement thresholds, target ordering, camera reset, and cleanup state machine through injectable hooks and invocation live bridge; desktop concrete ONNX/capture/input/overlay adapters remain pending.",
+        notes: "Rust now preserves and executes the post-combat YOLO drop scan, search sweep, movement thresholds, target ordering, camera reset, and cleanup state machine through injectable hooks and invocation live bridge; the desktop common-job live route now validates game-window, BitBlt, and capture-size boundaries before explicitly rejecting the missing BgiWorld ONNX YOLO and overlay adapters.",
     },
     TaskCatalogEntry {
         key: "SwitchParty",

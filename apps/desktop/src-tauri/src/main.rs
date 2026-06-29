@@ -159,13 +159,13 @@ use bgi_task::{
     RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
     ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
     ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
-    ScriptDispatcherExecutionPlan, ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan,
-    SetTimeExecutionReport, ShellConfig, ShellExecutionResult, SwitchPartyChooseMenuRule,
-    SwitchPartyConfirmRule, SwitchPartyExecutionPlan, SwitchPartyExecutionReport,
-    SwitchPartyListScanOutcome, SwitchPartyListScanRule, SwitchPartyRuntime,
-    SwitchPartyTextCandidate, TaskError, TaskInvocationExecutionMode,
-    TaskInvocationExecutionResult, TaskInvocationExecutionStatus, TeleportExecutionPlan,
-    TeleportExecutionReport, TeleportFailurePolicy, TeleportMapPoint,
+    ScanPickDropsExecutionPlan, ScanPickDropsExecutionReport, ScriptDispatcherExecutionPlan,
+    ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan, SetTimeExecutionReport, ShellConfig,
+    ShellExecutionResult, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
+    SwitchPartyExecutionPlan, SwitchPartyExecutionReport, SwitchPartyListScanOutcome,
+    SwitchPartyListScanRule, SwitchPartyRuntime, SwitchPartyTextCandidate, TaskError,
+    TaskInvocationExecutionMode, TaskInvocationExecutionResult, TaskInvocationExecutionStatus,
+    TeleportExecutionPlan, TeleportExecutionReport, TeleportFailurePolicy, TeleportMapPoint,
     TeleportMoveMapCenterDecision, TeleportMoveMapRule, TeleportRuntime, TeleportStepAction,
     TeleportTargetPlan, UseRedeemCodeExecutionConfig, UseRedeemCodeExecutionPlan,
     UseRedeemCodeExecutionReport, UseRedeemCodeRuntime, WalkToFExecutionPlan,
@@ -6978,6 +6978,7 @@ fn execute_desktop_common_job_live_plan(
             | CommonJobExecutionPlan::GoToCraftingBench(_)
             | CommonJobExecutionPlan::GoToAdventurersGuild(_)
             | CommonJobExecutionPlan::GoToSereniteaPot(_)
+            | CommonJobExecutionPlan::ScanPickDrops(_)
             | CommonJobExecutionPlan::LowerHeadThenWalkTo(_)
             | CommonJobExecutionPlan::WalkToF(_)
     ) {
@@ -7088,6 +7089,10 @@ fn execute_desktop_common_job_live_plan(
             Arc::clone(&cancellation),
         )
         .map(CommonJobLiveExecutionReport::GoToSereniteaPot),
+        CommonJobExecutionPlan::ScanPickDrops(plan) => {
+            execute_desktop_scan_pick_drops_live(config, window, plan, Arc::clone(&cancellation))
+                .map(CommonJobLiveExecutionReport::ScanPickDrops)
+        }
         CommonJobExecutionPlan::LowerHeadThenWalkTo(plan) => {
             execute_desktop_lower_head_then_walk_to_live(
                 config,
@@ -11791,7 +11796,7 @@ fn desktop_common_job_global_input(
     ))
 }
 
-fn desktop_inventory_live_preflight(
+fn desktop_common_capture_live_preflight(
     config: &AppConfig,
     game_window: Option<&GameWindowMatch>,
     task_name: &str,
@@ -11826,6 +11831,41 @@ fn desktop_inventory_live_preflight(
         ));
     }
     Ok(capture_size)
+}
+
+fn desktop_inventory_live_preflight(
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    task_name: &str,
+    plan_capture_size: VisionSize,
+    cancellation: &InputCancellationToken,
+) -> Result<VisionSize, String> {
+    desktop_common_capture_live_preflight(
+        config,
+        game_window,
+        task_name,
+        plan_capture_size,
+        cancellation,
+    )
+}
+
+fn execute_desktop_scan_pick_drops_live(
+    config: &AppConfig,
+    window: &GameWindowMatch,
+    plan: &ScanPickDropsExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<ScanPickDropsExecutionReport, String> {
+    desktop_common_capture_live_preflight(
+        config,
+        Some(window),
+        "ScanPickDrops",
+        plan.capture_size,
+        &cancellation,
+    )?;
+    Err(
+        "ScanPickDrops live execution requires desktop BgiWorld ONNX YOLO inference and overlay adapters"
+            .to_string(),
+    )
 }
 
 fn execute_desktop_count_inventory_item_live(
@@ -17659,6 +17699,24 @@ mod tests {
                 if message.contains("GoToSereniteaPot live execution requires a detected game window")
         ));
 
+        let scan_pick_drops = bgi_task::plan_common_job(bgi_task::SCAN_PICK_DROPS_TASK_KEY, None)
+            .unwrap()
+            .unwrap();
+
+        let error = execute_desktop_common_job_live_plan(
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &scan_pick_drops,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("ScanPickDrops live execution requires a detected game window")
+        ));
+
         let lower_head_then_walk_to =
             bgi_task::plan_common_job(bgi_task::LOWER_HEAD_THEN_WALK_TO_TASK_KEY, None)
                 .unwrap()
@@ -17710,6 +17768,57 @@ mod tests {
 
         assert!(error.contains(
             "LowerHeadThenWalkTo live execution requires plan capture size 1920x1080 to match current capture size 1280x720"
+        ));
+    }
+
+    #[test]
+    fn desktop_scan_pick_drops_live_preflights_before_onnx_gap() {
+        let Some(CommonJobExecutionPlan::ScanPickDrops(plan)) =
+            bgi_task::plan_common_job(bgi_task::SCAN_PICK_DROPS_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected ScanPickDrops plan");
+        };
+
+        let small_window = desktop_test_game_window(1280, 720);
+        let size_error = execute_desktop_scan_pick_drops_live(
+            &AppConfig::default(),
+            &small_window,
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(size_error.contains(
+            "ScanPickDrops live execution requires plan capture size 1920x1080 to match current capture size 1280x720"
+        ));
+        assert!(!size_error.contains("ONNX YOLO inference"));
+
+        let wgc_config = AppConfig {
+            capture_mode: bgi_core::CaptureMode::WindowsGraphicsCapture,
+            ..AppConfig::default()
+        };
+        let bit_blt_error = execute_desktop_scan_pick_drops_live(
+            &wgc_config,
+            &desktop_test_game_window(1920, 1080),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(bit_blt_error
+            .contains("ScanPickDrops live execution requires the BitBlt capture backend"));
+        assert!(!bit_blt_error.contains("ONNX YOLO inference"));
+
+        let adapter_error = execute_desktop_scan_pick_drops_live(
+            &AppConfig::default(),
+            &desktop_test_game_window(1920, 1080),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(adapter_error.contains(
+            "ScanPickDrops live execution requires desktop BgiWorld ONNX YOLO inference and overlay adapters"
         ));
     }
 
