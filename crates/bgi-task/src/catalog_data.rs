@@ -80,7 +80,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::ScriptDispatcher,
         requires_main_ui_wait: Some(true),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models script-dispatched AutoEat foodName/foodEffectType resolution, default buff-food skip semantics, Food inventory grid/classifier/OCR rules through CountInventoryItem, use-confirm contract, full-width digit normalization, legacy int? return values, shared script-dispatcher/independent-task plan routing, and an injectable inventory-food executor; desktop script-dispatcher live execution now covers the missing-default and portable-bag skip/no-op branches and runs inventory-food through shared game-window, BitBlt, and capture-size preflight before rejecting the missing inventory grid/input/ONNX/OCR/click adapters.",
+        notes: "Rust models script-dispatched AutoEat foodName/foodEffectType resolution, default buff-food skip semantics, Food inventory grid/classifier/OCR rules through CountInventoryItem, use-confirm contract, full-width digit normalization, legacy int? return values, shared script-dispatcher/independent-task plan routing, and an injectable inventory-food executor; desktop script-dispatcher live execution now covers the missing-default and portable-bag skip/no-op branches and runs inventory-food through shared game-window, BitBlt, capture-size, and CountInventory first-active-adapter preflight before the live inventory input/grid/ONNX/OCR/click adapters are wired.",
     },
     TaskCatalogEntry {
         key: "QuickTeleport",
@@ -544,7 +544,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the inventory tab, grid enumeration, icon classification, count OCR, weapon-ore prescroll, and single/multiple result-contract state machine through injectable hooks and invocation live bridge; desktop common-job live routing and AutoEatFood inventory execution share game-window, BitBlt, and capture-size preflight, and CountInventoryItem now reports the first active missing inventory adapter from the plan instead of collapsing inventory open, prompt, tab, GridIcon, grid, input, ONNX, OCR, and click gaps into one unsupported error, while script return integration remains pending.",
+        notes: "Rust now preserves and executes the inventory tab, grid enumeration, icon classification, count OCR, weapon-ore prescroll, and single/multiple result-contract state machine through injectable hooks and invocation live bridge; desktop common-job live routing and AutoEatFood inventory execution share game-window, BitBlt, capture-size, and first-active-adapter preflight instead of collapsing inventory open, prompt, tab, GridIcon, grid, input, ONNX, OCR, and click gaps into one unsupported error, while script return integration remains pending.",
     },
     TaskCatalogEntry {
         key: "Teleport",

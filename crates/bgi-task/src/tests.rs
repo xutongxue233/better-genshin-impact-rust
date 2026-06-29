@@ -2725,11 +2725,11 @@ fn auto_eat_food_plan_preserves_legacy_inventory_food_flow_and_result_contract()
         .notes
         .contains("desktop script-dispatcher live execution now covers"));
     assert!(food_catalog.notes.contains(
-        "runs inventory-food through shared game-window, BitBlt, and capture-size preflight"
+        "runs inventory-food through shared game-window, BitBlt, capture-size, and CountInventory first-active-adapter preflight"
     ));
     assert!(food_catalog
         .notes
-        .contains("missing inventory grid/input/ONNX/OCR/click adapters"));
+        .contains("live inventory input/grid/ONNX/OCR/click adapters are wired"));
 }
 
 #[test]

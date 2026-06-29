@@ -90,8 +90,9 @@ use bgi_task::{
     AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
     AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
     AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
-    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
-    AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
+    AutoEatFoodStepAction, AutoEatFoodStepCondition, AutoEatRuntime, AutoEatTemplateLocator,
+    AutoEatTickExecutionReport, AutoEatTickObservation, AutoEatTriggerState,
+    AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
     AutoFishOverlayAction, AutoFishRuntime, AutoFishTemplateLocator, AutoFishTickExecutionReport,
@@ -6782,8 +6783,10 @@ fn execute_desktop_auto_eat_food_live(
             &cancellation,
         )
         .map_err(TaskError::CommonJobExecution)?;
+        desktop_auto_eat_food_inventory_live_preflight(plan)
+            .map_err(TaskError::CommonJobExecution)?;
         return Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop inventory grid/ONNX/OCR/click adapters"
+            "AutoEatFood inventory-food live execution requires desktop runtime adapter wiring after preflight"
                 .to_string(),
         ));
     }
@@ -6951,6 +6954,76 @@ impl AutoEatFoodRuntime for DesktopAutoEatFoodRuntime {
         self.ensure_not_cancelled()?;
         self.logs.push(message.to_string());
         Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn desktop_auto_eat_food_inventory_live_preflight(
+    plan: &AutoEatFoodExecutionPlan,
+) -> Result<(), String> {
+    let inventory_plan = plan.inventory_plan.as_ref().ok_or_else(|| {
+        "AutoEatFood inventory-food live execution requires an inventory plan".to_string()
+    })?;
+    desktop_inventory_count_plan_live_preflight("AutoEatFood inventory-food", inventory_plan)?;
+
+    for step in &plan.steps {
+        if !desktop_auto_eat_food_preflight_condition_applies(plan, step.condition) {
+            continue;
+        }
+
+        match &step.action {
+            AutoEatFoodStepAction::LogInfo { .. }
+            | AutoEatFoodStepAction::LogWarning { .. }
+            | AutoEatFoodStepAction::ReturnMainUi
+            | AutoEatFoodStepAction::OpenFoodInventoryTab { .. }
+            | AutoEatFoodStepAction::LoadGridIconClassifier { .. }
+            | AutoEatFoodStepAction::EnumerateGridItems { .. }
+            | AutoEatFoodStepAction::CropGridIcon { .. }
+            | AutoEatFoodStepAction::InferGridIcon { .. }
+            | AutoEatFoodStepAction::OcrMatchedFoodCount { .. }
+            | AutoEatFoodStepAction::DelayAfterItemClick { .. }
+            | AutoEatFoodStepAction::ClearVisionDrawings
+            | AutoEatFoodStepAction::ReturnResult { .. } => {}
+            AutoEatFoodStepAction::PortableNutritionBagLoop => {
+                return Err(
+                    "AutoEatFood inventory-food live execution requires desktop portable nutrition bag adapter"
+                        .to_string(),
+                );
+            }
+            AutoEatFoodStepAction::ClickMatchedFoodItem { .. } => {
+                return Err(
+                    "AutoEatFood inventory-food live execution requires desktop matched-food click adapter"
+                        .to_string(),
+                );
+            }
+            AutoEatFoodStepAction::ConfirmUseFoodIfVisible { .. } => {
+                return Err(
+                    "AutoEatFood inventory-food live execution requires desktop white-confirm click adapter"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn desktop_auto_eat_food_preflight_condition_applies(
+    plan: &AutoEatFoodExecutionPlan,
+    condition: AutoEatFoodStepCondition,
+) -> bool {
+    match condition {
+        AutoEatFoodStepCondition::Always | AutoEatFoodStepCondition::Finally => true,
+        AutoEatFoodStepCondition::WhenInventoryFoodMode
+        | AutoEatFoodStepCondition::WhenClassifierMatchesFood
+        | AutoEatFoodStepCondition::WhenCountOcrFails => {
+            matches!(plan.mode, AutoEatFoodPlanMode::InventoryFood { .. })
+        }
+        AutoEatFoodStepCondition::WhenPortableNutritionBagMode => {
+            matches!(plan.mode, AutoEatFoodPlanMode::PortableNutritionBagLoop)
+        }
+        AutoEatFoodStepCondition::WhenDefaultFoodMissing => {
+            matches!(plan.mode, AutoEatFoodPlanMode::MissingDefaultFood { .. })
+        }
     }
 }
 
@@ -11892,6 +11965,13 @@ fn execute_desktop_count_inventory_item_live(
 fn desktop_count_inventory_item_live_preflight(
     plan: &CountInventoryItemExecutionPlan,
 ) -> Result<(), String> {
+    desktop_inventory_count_plan_live_preflight("CountInventoryItem", plan)
+}
+
+fn desktop_inventory_count_plan_live_preflight(
+    task_name: &str,
+    plan: &CountInventoryItemExecutionPlan,
+) -> Result<(), String> {
     for step in &plan.steps {
         if !desktop_count_inventory_item_preflight_condition_applies(plan, step.condition) {
             continue;
@@ -11902,69 +11982,60 @@ fn desktop_count_inventory_item_live_preflight(
                 if task_key == RETURN_MAIN_UI_TASK_KEY => {}
             CountInventoryItemStepAction::CommonJob { task_key } => {
                 return Err(format!(
-                    "CountInventoryItem live execution requires desktop nested common-job adapter for {task_key}"
+                    "{task_name} live execution requires desktop nested common-job adapter for {task_key}"
                 ));
             }
             CountInventoryItemStepAction::GenshinAction { action }
                 if *action == GenshinAction::OpenInventory =>
             {
-                return Err(
-                    "CountInventoryItem live execution requires desktop inventory-opening adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop inventory-opening adapter"
+                ));
             }
             CountInventoryItemStepAction::GenshinAction { action } => {
                 return Err(format!(
-                    "CountInventoryItem live execution requires desktop Genshin action adapter for {action:?}"
+                    "{task_name} live execution requires desktop Genshin action adapter for {action:?}"
                 ));
             }
             CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop expired-item prompt adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop expired-item prompt adapter"
+                ));
             }
             CountInventoryItemStepAction::OpenInventoryTab { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop inventory tab adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop inventory tab adapter"
+                ));
             }
             CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop GridIcon ONNX/prototype adapter"
+                ));
             }
             CountInventoryItemStepAction::PreScrollWeaponOre { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop weapon-ore prescroll adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop weapon-ore prescroll adapter"
+                ));
             }
             CountInventoryItemStepAction::EnumerateGridItems { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop inventory grid enumeration adapter"
+                ));
             }
             CountInventoryItemStepAction::CropGridIcon { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop grid icon crop adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop grid icon crop adapter"
+                ));
             }
             CountInventoryItemStepAction::InferGridIcon { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop GridIcon inference adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop GridIcon inference adapter"
+                ));
             }
             CountInventoryItemStepAction::OcrGridItemCount { .. } => {
-                return Err(
-                    "CountInventoryItem live execution requires desktop item-count OCR adapter"
-                        .to_string(),
-                );
+                return Err(format!(
+                    "{task_name} live execution requires desktop item-count OCR adapter"
+                ));
             }
             CountInventoryItemStepAction::ReturnResult { .. }
             | CountInventoryItemStepAction::ClearVisionDrawings
@@ -20262,7 +20333,8 @@ mod tests {
         assert!(matches!(
             error,
             TaskError::CommonJobExecution(message)
-                if message.contains("AutoEatFood inventory-food live execution requires desktop inventory grid/ONNX/OCR/click adapters")
+                if message.contains("AutoEatFood inventory-food live execution requires desktop inventory-opening adapter")
+                    && !message.contains("inventory grid/ONNX/OCR/click adapters")
         ));
     }
 
@@ -20390,6 +20462,112 @@ mod tests {
         let classifier_error = desktop_count_inventory_item_live_preflight(&after_tab).unwrap_err();
         assert!(classifier_error.contains(
             "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
+        ));
+    }
+
+    #[test]
+    fn desktop_auto_eat_food_inventory_preflight_reports_count_inventory_boundary() {
+        let plan = bgi_task::plan_auto_eat_food(
+            bgi_task::AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+                "foodName": "甜甜花酿鸡"
+            })))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let open_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
+        assert!(open_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop inventory-opening adapter"
+        ));
+        assert!(!open_error.contains("grid/ONNX/OCR/click adapters"));
+
+        let mut after_open = plan.clone();
+        after_open
+            .inventory_plan
+            .as_mut()
+            .unwrap()
+            .steps
+            .retain(|step| {
+                !matches!(
+                    step.action,
+                    CountInventoryItemStepAction::GenshinAction {
+                        action: GenshinAction::OpenInventory
+                    }
+                )
+            });
+        let prompt_error = desktop_auto_eat_food_inventory_live_preflight(&after_open).unwrap_err();
+        assert!(prompt_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
+        ));
+
+        let mut after_prompt = after_open.clone();
+        after_prompt
+            .inventory_plan
+            .as_mut()
+            .unwrap()
+            .steps
+            .retain(|step| {
+                !matches!(
+                    step.action,
+                    CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
+                )
+            });
+        let tab_error = desktop_auto_eat_food_inventory_live_preflight(&after_prompt).unwrap_err();
+        assert!(tab_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop inventory tab adapter"
+        ));
+
+        let mut after_tab = after_prompt.clone();
+        after_tab
+            .inventory_plan
+            .as_mut()
+            .unwrap()
+            .steps
+            .retain(|step| {
+                !matches!(
+                    step.action,
+                    CountInventoryItemStepAction::OpenInventoryTab { .. }
+                )
+            });
+        let classifier_error =
+            desktop_auto_eat_food_inventory_live_preflight(&after_tab).unwrap_err();
+        assert!(classifier_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
+        ));
+
+        let mut after_inventory_scan = after_tab.clone();
+        after_inventory_scan
+            .inventory_plan
+            .as_mut()
+            .unwrap()
+            .steps
+            .retain(|step| {
+                !matches!(
+                    step.action,
+                    CountInventoryItemStepAction::LoadGridIconClassifier { .. }
+                        | CountInventoryItemStepAction::EnumerateGridItems { .. }
+                        | CountInventoryItemStepAction::CropGridIcon { .. }
+                        | CountInventoryItemStepAction::InferGridIcon { .. }
+                        | CountInventoryItemStepAction::OcrGridItemCount { .. }
+                )
+            });
+        let click_error =
+            desktop_auto_eat_food_inventory_live_preflight(&after_inventory_scan).unwrap_err();
+        assert!(click_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop matched-food click adapter"
+        ));
+
+        let mut after_click = after_inventory_scan.clone();
+        after_click.steps.retain(|step| {
+            !matches!(
+                step.action,
+                AutoEatFoodStepAction::ClickMatchedFoodItem { .. }
+            )
+        });
+        let confirm_error =
+            desktop_auto_eat_food_inventory_live_preflight(&after_click).unwrap_err();
+        assert!(confirm_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop white-confirm click adapter"
         ));
     }
 

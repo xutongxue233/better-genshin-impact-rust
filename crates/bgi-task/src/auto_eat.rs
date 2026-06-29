@@ -807,11 +807,11 @@ pub fn plan_auto_eat_food(config: AutoEatFoodExecutionConfig) -> Result<AutoEatF
         result_contract,
         steps,
         pending_native: vec![
-            "desktop live adapter for ReturnMainUi, opening Food inventory, expired-item prompts, grid enumeration, ONNX grid-icon inference, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi remains pending".to_string(),
+            "desktop inventory-food live routing now shares game-window, BitBlt, capture-size, and CountInventory adapter-boundary preflight; live ReturnMainUi, opening Food inventory, expired-item prompts, grid enumeration, ONNX grid-icon inference, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi remain pending".to_string(),
             "portable nutrition bag loop for script-dispatched AutoEat without foodName remains pending"
                 .to_string(),
         ],
-        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, and an injectable Rust executor for the inventory-food branch; live desktop capture/input/ONNX/OCR/click adapters remain pending.".to_string(),
+        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, and an injectable Rust executor for the inventory-food branch; desktop live routing shares CountInventory game-window, BitBlt, capture-size, and first-active-adapter preflight before the live input/ONNX/OCR/click adapters are wired.".to_string(),
     })
 }
 
