@@ -320,34 +320,6 @@ pub fn plan_quick_enhance_artifact_macro(
         MacroHotkeyStep::new(
             MacroHotkeyStepPhase::EnhanceArtifact,
             MacroHotkeyStepCondition::WhenInitialized,
-            "click artifact details menu",
-            MacroHotkeyStepAction::ClickCapturePoint {
-                point: macro_hotkey_point(150.0, 150.0, capture_size),
-            },
-        ),
-        MacroHotkeyStep::new(
-            MacroHotkeyStepPhase::EnhanceArtifact,
-            MacroHotkeyStepCondition::WhenInitialized,
-            "wait after details menu",
-            MacroHotkeyStepAction::Delay { delay_ms: 100 },
-        ),
-        MacroHotkeyStep::new(
-            MacroHotkeyStepPhase::EnhanceArtifact,
-            MacroHotkeyStepCondition::WhenInitialized,
-            "click enhance menu",
-            MacroHotkeyStepAction::ClickCapturePoint {
-                point: macro_hotkey_point(150.0, 220.0, capture_size),
-            },
-        ),
-        MacroHotkeyStep::new(
-            MacroHotkeyStepPhase::EnhanceArtifact,
-            MacroHotkeyStepCondition::WhenInitialized,
-            "wait after enhance menu",
-            MacroHotkeyStepAction::Delay { delay_ms: 100 },
-        ),
-        MacroHotkeyStep::new(
-            MacroHotkeyStepPhase::EnhanceArtifact,
-            MacroHotkeyStepCondition::WhenInitialized,
             "move back to quick add artifacts",
             MacroHotkeyStepAction::MoveCapturePoint {
                 point: macro_hotkey_point(1760.0, 770.0, capture_size),
@@ -366,8 +338,7 @@ pub fn plan_quick_enhance_artifact_macro(
         preflight_rule: Some(preflight_rule),
         steps,
         pending_native: vec![
-            "desktop independent-task live route explicitly rejects until the TaskContext/toast preflight adapter is wired".to_string(),
-            "capture-point click/move adapters remain desktop-side work before the legacy macro path can be retired".to_string(),
+            "legacy WPF hotkey call-site retirement remains pending until the Rust desktop hotkey dispatcher invokes this route end to end".to_string(),
         ],
         notes: "Rust preserves QuickEnhanceArtifactMacro's initialized-context guard, fixed 1080p click chain, enhanceWaitDelay addition, and final cursor move back to the quick-add button.".to_string(),
     }
@@ -456,11 +427,13 @@ fn macro_hotkey_config_rule(config: &MacroConfig) -> MacroHotkeyConfigRule {
 }
 
 fn macro_hotkey_point(x_1080p: f64, y_1080p: f64, capture_size: Size) -> MacroHotkeyScreenPoint {
+    let scale_to_1080p_ratio =
+        capture_size.width as f64 / MACRO_HOTKEY_DEFAULT_CAPTURE_WIDTH as f64;
     MacroHotkeyScreenPoint {
         x_1080p,
         y_1080p,
-        screen_x: x_1080p * capture_size.width as f64 / MACRO_HOTKEY_DEFAULT_CAPTURE_WIDTH as f64,
-        screen_y: y_1080p * capture_size.height as f64 / MACRO_HOTKEY_DEFAULT_CAPTURE_HEIGHT as f64,
+        screen_x: x_1080p * scale_to_1080p_ratio,
+        screen_y: y_1080p * scale_to_1080p_ratio,
     }
 }
 

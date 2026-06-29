@@ -27,8 +27,9 @@ use bgi_core::{
 use bgi_hotkey::Hotkey;
 use bgi_input::{
     currently_pressed_keys, input_events_for_action, input_events_for_key,
-    post_message_events_for_action, release_pressed_keys_sequence, send_events_with_cancellation,
-    InputEvent, InputSequence, KeyActionType, MouseButton, PostMessageMode,
+    post_message_events_for_action, release_pressed_keys_sequence,
+    send_events_to_window_with_cancellation, InputEvent, InputSequence, KeyActionType, MouseButton,
+    PostMessageMode,
 };
 use bgi_script::{
     add_key_mouse_script_project, add_pathing_script_project, add_script_group_project,
@@ -6961,6 +6962,7 @@ fn execute_desktop_independent_task_live_plan(
         }
         Some(TURN_AROUND_MACRO_TASK_KEY) => {
             let report = execute_desktop_turn_around_macro_live_plan(
+                config,
                 game_window,
                 plan.config.as_ref(),
                 cancellation,
@@ -6972,6 +6974,7 @@ fn execute_desktop_independent_task_live_plan(
         }
         Some(QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY) => {
             let report = execute_desktop_quick_enhance_artifact_macro_live_plan(
+                config,
                 game_window,
                 plan.config.as_ref(),
                 cancellation,
@@ -7169,6 +7172,7 @@ fn execute_desktop_auto_pathing_action_boundary_live_plan(
 }
 
 fn execute_desktop_turn_around_macro_live_plan(
+    app_config: &AppConfig,
     game_window: Option<&GameWindowMatch>,
     plan_config: Option<&Value>,
     cancellation: Arc<InputCancellationToken>,
@@ -7176,13 +7180,14 @@ fn execute_desktop_turn_around_macro_live_plan(
     let window = game_window.ok_or_else(|| {
         "TurnAroundMacro live execution requires a detected game window".to_string()
     })?;
-    let mut config = MacroHotkeyExecutionConfig::from_value(plan_config);
+    let mut config = desktop_macro_hotkey_execution_config(app_config, plan_config);
     config.capture_size = desktop_common_job_capture_size(Some(window));
     let plan = plan_turn_around_macro(config);
-    execute_desktop_macro_hotkey_live(&plan, cancellation)
+    execute_desktop_macro_hotkey_live(&plan, window, cancellation)
 }
 
 fn execute_desktop_quick_enhance_artifact_macro_live_plan(
+    app_config: &AppConfig,
     game_window: Option<&GameWindowMatch>,
     plan_config: Option<&Value>,
     cancellation: Arc<InputCancellationToken>,
@@ -7190,39 +7195,178 @@ fn execute_desktop_quick_enhance_artifact_macro_live_plan(
     let window = game_window.ok_or_else(|| {
         "QuickEnhanceArtifactMacro live execution requires a detected game window".to_string()
     })?;
-    let mut config = MacroHotkeyExecutionConfig::from_value(plan_config);
+    let mut config = desktop_macro_hotkey_execution_config(app_config, plan_config);
     config.capture_size = desktop_common_job_capture_size(Some(window));
     let plan = plan_quick_enhance_artifact_macro(config);
-    execute_desktop_macro_hotkey_live(&plan, cancellation)
+    execute_desktop_macro_hotkey_live(&plan, window, cancellation)
+}
+
+fn desktop_macro_hotkey_execution_config(
+    app_config: &AppConfig,
+    plan_config: Option<&Value>,
+) -> MacroHotkeyExecutionConfig {
+    let mut config = MacroHotkeyExecutionConfig::from_value(plan_config);
+    config.macro_config = app_config.macro_config.clone();
+
+    let Some(value) = plan_config else {
+        return config;
+    };
+    let macro_value = value
+        .get("macroConfig")
+        .or_else(|| value.get("MacroConfig"))
+        .or_else(|| value.get("macro_config"))
+        .unwrap_or(value);
+    let Some(overrides) = macro_value.as_object() else {
+        return config;
+    };
+
+    let mut merged = match serde_json::to_value(&app_config.macro_config) {
+        Ok(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    for (key, value) in overrides {
+        merged.insert(key.clone(), value.clone());
+    }
+    config.macro_config = serde_json::from_value(Value::Object(merged))
+        .unwrap_or_else(|_| app_config.macro_config.clone());
+    config
 }
 
 fn execute_desktop_macro_hotkey_live(
     plan: &MacroHotkeyExecutionPlan,
+    window: &GameWindowMatch,
     cancellation: Arc<InputCancellationToken>,
 ) -> Result<MacroHotkeyExecutionReport, String> {
+    let (report, _executions) = execute_desktop_macro_hotkey_live_with_mode(
+        plan,
+        window,
+        GlobalInputDispatchMode::SendInput,
+        cancellation,
+    )?;
+    Ok(report)
+}
+
+fn execute_desktop_macro_hotkey_live_with_mode(
+    plan: &MacroHotkeyExecutionPlan,
+    window: &GameWindowMatch,
+    mode: GlobalInputDispatchMode,
+    cancellation: Arc<InputCancellationToken>,
+) -> Result<
+    (
+        MacroHotkeyExecutionReport,
+        Vec<bgi_script::GlobalInputExecution>,
+    ),
+    String,
+> {
     if cancellation.is_cancelled() {
         return Err(format!("{} live execution cancelled", plan.task_key));
     }
-    let mut runtime = DesktopMacroHotkeyRuntime { cancellation };
-    execute_macro_hotkey_plan(plan, &mut runtime).map_err(|error| error.to_string())
+    let metrics = window.metrics.ok_or_else(|| {
+        format!(
+            "{} live execution requires game window metrics",
+            plan.task_key
+        )
+    })?;
+    let mut runtime =
+        DesktopMacroHotkeyRuntime::new(metrics.capture_area, window.handle.0, mode, cancellation);
+    let report =
+        execute_macro_hotkey_plan(plan, &mut runtime).map_err(|error| error.to_string())?;
+    Ok((report, runtime.into_executions()))
 }
 
 struct DesktopMacroHotkeyRuntime {
+    capture_area: bgi_capture::WindowRect,
+    window_handle: isize,
+    mode: GlobalInputDispatchMode,
     cancellation: Arc<InputCancellationToken>,
+    executions: Vec<bgi_script::GlobalInputExecution>,
 }
 
 impl DesktopMacroHotkeyRuntime {
-    fn dispatch_events(&self, events: &[InputEvent]) -> bgi_task::Result<()> {
+    fn new(
+        capture_area: bgi_capture::WindowRect,
+        window_handle: isize,
+        mode: GlobalInputDispatchMode,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            capture_area,
+            window_handle,
+            mode,
+            cancellation,
+            executions: Vec::new(),
+        }
+    }
+
+    fn into_executions(self) -> Vec<bgi_script::GlobalInputExecution> {
+        self.executions
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
         if self.cancellation.is_cancelled() {
             return Err(TaskError::CommonJobExecution(
                 "MacroHotkey live execution cancelled".to_string(),
             ));
         }
-        send_events_with_cancellation(events, self.cancellation.as_ref())
-            .map(|_| ())
-            .map_err(|error| {
-                TaskError::CommonJobExecution(format!("MacroHotkey input dispatch failed: {error}"))
-            })
+        Ok(())
+    }
+
+    fn dispatch_events(&mut self, events: Vec<InputEvent>) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        match self.mode {
+            GlobalInputDispatchMode::PlanOnly => {
+                self.executions.push(bgi_script::GlobalInputExecution {
+                    mode: self.mode,
+                    events,
+                    dispatched: false,
+                    dispatched_events: 0,
+                });
+                Ok(())
+            }
+            GlobalInputDispatchMode::SendInput => {
+                let report = send_events_to_window_with_cancellation(
+                    self.window_handle,
+                    &events,
+                    self.cancellation.as_ref(),
+                )
+                .map_err(|error| {
+                    TaskError::CommonJobExecution(format!(
+                        "MacroHotkey input dispatch failed: {error}"
+                    ))
+                })?;
+                self.executions.push(bgi_script::GlobalInputExecution {
+                    mode: self.mode,
+                    events,
+                    dispatched: true,
+                    dispatched_events: report.dispatched_events,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn screen_point(&self, point: &MacroHotkeyScreenPoint) -> (i32, i32) {
+        (
+            self.capture_area.left + point.screen_x.round() as i32,
+            self.capture_area.top + point.screen_y.round() as i32,
+        )
+    }
+
+    fn click_capture_point_events(&self, point: &MacroHotkeyScreenPoint) -> Vec<InputEvent> {
+        let (x, y) = self.screen_point(point);
+        InputSequence::new()
+            .move_mouse_to(x, y)
+            .mouse_down(MouseButton::Left)
+            .delay(50)
+            .mouse_up(MouseButton::Left)
+            .delay(50)
+            .events()
+            .to_vec()
+    }
+
+    fn move_capture_point_events(&self, point: &MacroHotkeyScreenPoint) -> Vec<InputEvent> {
+        let (x, y) = self.screen_point(point);
+        InputSequence::new().move_mouse_to(x, y).events().to_vec()
     }
 }
 
@@ -7231,9 +7375,8 @@ impl MacroHotkeyRuntime for DesktopMacroHotkeyRuntime {
         &mut self,
         _rule: &MacroHotkeyPreflightRule,
     ) -> bgi_task::Result<bool> {
-        Err(TaskError::CommonJobExecution(
-            "MacroHotkey desktop preflight adapter is not wired".to_string(),
-        ))
+        self.ensure_not_cancelled()?;
+        Ok(true)
     }
 
     fn move_macro_hotkey_mouse_by(&mut self, dx: i64, dy: i64) -> bgi_task::Result<()> {
@@ -7243,29 +7386,25 @@ impl MacroHotkeyRuntime for DesktopMacroHotkeyRuntime {
         let dy = i32::try_from(dy).map_err(|_| {
             TaskError::CommonJobExecution(format!("MacroHotkey mouse dy {dy} is out of range"))
         })?;
-        self.dispatch_events(&[InputEvent::MouseMoveRelative { dx, dy }])
+        self.dispatch_events(vec![InputEvent::MouseMoveRelative { dx, dy }])
     }
 
     fn click_macro_hotkey_capture_point(
         &mut self,
-        _point: &MacroHotkeyScreenPoint,
+        point: &MacroHotkeyScreenPoint,
     ) -> bgi_task::Result<()> {
-        Err(TaskError::CommonJobExecution(
-            "MacroHotkey desktop capture-point click adapter is not wired".to_string(),
-        ))
+        self.dispatch_events(self.click_capture_point_events(point))
     }
 
     fn move_macro_hotkey_capture_point(
         &mut self,
-        _point: &MacroHotkeyScreenPoint,
+        point: &MacroHotkeyScreenPoint,
     ) -> bgi_task::Result<()> {
-        Err(TaskError::CommonJobExecution(
-            "MacroHotkey desktop capture-point move adapter is not wired".to_string(),
-        ))
+        self.dispatch_events(self.move_capture_point_events(point))
     }
 
     fn wait_macro_hotkey(&mut self, delay_ms: u64) -> bgi_task::Result<()> {
-        self.dispatch_events(&[InputEvent::Delay {
+        self.dispatch_events(vec![InputEvent::Delay {
             milliseconds: delay_ms,
         }])
     }
@@ -19919,30 +20058,115 @@ mod tests {
     }
 
     #[test]
-    fn desktop_independent_task_live_plan_reports_quick_enhance_artifact_macro_adapter_gap() {
-        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
-            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
-                name: QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY.to_string(),
-                config: serde_json::json!({}),
-                uses_linked_cancellation: true,
-            },
+    fn desktop_macro_hotkey_execution_config_uses_app_macro_config_with_overrides() {
+        let mut app_config = AppConfig::default();
+        app_config.macro_config.enhance_wait_delay = 250;
+        app_config.macro_config.runaround_interval = 77;
+
+        let inherited = desktop_macro_hotkey_execution_config(&app_config, None);
+        assert_eq!(inherited.macro_config.enhance_wait_delay, 250);
+        assert_eq!(inherited.macro_config.runaround_interval, 77);
+
+        let top_level = desktop_macro_hotkey_execution_config(
+            &app_config,
+            Some(&serde_json::json!({
+                "enhanceWaitDelay": 400
+            })),
+        );
+        assert_eq!(top_level.macro_config.enhance_wait_delay, 400);
+        assert_eq!(top_level.macro_config.runaround_interval, 77);
+
+        let nested = desktop_macro_hotkey_execution_config(
+            &app_config,
+            Some(&serde_json::json!({
+                "macroConfig": {
+                    "enhanceWaitDelay": 500
+                }
+            })),
+        );
+        assert_eq!(nested.macro_config.enhance_wait_delay, 500);
+        assert_eq!(nested.macro_config.runaround_interval, 77);
+    }
+
+    #[test]
+    fn desktop_quick_enhance_artifact_macro_plan_only_dispatches_legacy_capture_events() {
+        let window = desktop_test_game_window(1920, 1080);
+        let plan = plan_quick_enhance_artifact_macro(MacroHotkeyExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "macroConfig": {
+                    "enhanceWaitDelay": 250
+                }
+            }),
+        )));
+        let (report, executions) = execute_desktop_macro_hotkey_live_with_mode(
+            &plan,
+            &window,
+            GlobalInputDispatchMode::PlanOnly,
+            Arc::new(InputCancellationToken::new()),
         )
         .unwrap();
-        let window = desktop_test_game_window(1920, 1080);
-        let error = execute_desktop_independent_task_live_plan(
-            Path::new("."),
-            &AppConfig::default(),
-            Some(&window),
-            Arc::new(InputCancellationToken::new()),
-            &plan,
-        )
-        .unwrap_err();
 
-        assert!(matches!(
-            error,
-            TaskError::CommonJobExecution(message)
-                if message.contains("MacroHotkey desktop preflight adapter is not wired")
-        ));
+        assert!(report.completed);
+        assert_eq!(report.executed_steps.len(), 6);
+        assert_eq!(report.state.input_actions_dispatched, 3);
+        assert_eq!(report.state.waits_dispatched, 2);
+        assert_eq!(executions.len(), 5);
+        assert!(executions.iter().all(|execution| execution.mode
+            == GlobalInputDispatchMode::PlanOnly
+            && !execution.dispatched
+            && execution.dispatched_events == 0));
+        assert_eq!(
+            executions[0].events,
+            vec![
+                InputEvent::MouseMoveAbsolute {
+                    x: 1760,
+                    y: 770,
+                    virtual_desktop: false,
+                },
+                InputEvent::MouseButtonDown {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 50 },
+                InputEvent::MouseButtonUp {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 50 },
+            ]
+        );
+        assert_eq!(
+            executions[1].events,
+            vec![InputEvent::Delay { milliseconds: 100 }]
+        );
+        assert_eq!(
+            executions[2].events,
+            vec![
+                InputEvent::MouseMoveAbsolute {
+                    x: 1760,
+                    y: 1020,
+                    virtual_desktop: false,
+                },
+                InputEvent::MouseButtonDown {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 50 },
+                InputEvent::MouseButtonUp {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 50 },
+            ]
+        );
+        assert_eq!(
+            executions[3].events,
+            vec![InputEvent::Delay { milliseconds: 350 }]
+        );
+        assert_eq!(
+            executions[4].events,
+            vec![InputEvent::MouseMoveAbsolute {
+                x: 1760,
+                y: 770,
+                virtual_desktop: false,
+            }]
+        );
     }
 
     #[test]

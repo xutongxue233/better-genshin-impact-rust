@@ -20027,7 +20027,7 @@ fn macro_hotkey_quick_enhance_artifact_plan_preserves_click_chain_and_preflight(
             .uninitialized_toast_message,
         "请先启动"
     );
-    assert_eq!(plan.steps.len(), 10);
+    assert_eq!(plan.steps.len(), 6);
     let click_points: Vec<MacroHotkeyScreenPoint> = plan
         .steps
         .iter()
@@ -20043,25 +20043,13 @@ fn macro_hotkey_quick_enhance_artifact_plan_preserves_click_chain_and_preflight(
                 x_1080p: 1760.0,
                 y_1080p: 770.0,
                 screen_x: 1173.3333333333333,
-                screen_y: 513.3333333333334,
+                screen_y: 513.3333333333333,
             },
             MacroHotkeyScreenPoint {
                 x_1080p: 1760.0,
                 y_1080p: 1020.0,
                 screen_x: 1173.3333333333333,
                 screen_y: 680.0,
-            },
-            MacroHotkeyScreenPoint {
-                x_1080p: 150.0,
-                y_1080p: 150.0,
-                screen_x: 100.0,
-                screen_y: 100.0,
-            },
-            MacroHotkeyScreenPoint {
-                x_1080p: 150.0,
-                y_1080p: 220.0,
-                screen_x: 100.0,
-                screen_y: 146.66666666666666,
             },
         ]
     );
@@ -20073,7 +20061,7 @@ fn macro_hotkey_quick_enhance_artifact_plan_preserves_click_chain_and_preflight(
             _ => None,
         })
         .collect();
-    assert_eq!(delays, vec![100, 350, 100, 100]);
+    assert_eq!(delays, vec![100, 350]);
     assert!(matches!(
         plan.steps.last().unwrap().action,
         MacroHotkeyStepAction::MoveCapturePoint { point }
@@ -20084,8 +20072,8 @@ fn macro_hotkey_quick_enhance_artifact_plan_preserves_click_chain_and_preflight(
     let report = execute_macro_hotkey_plan(&plan, &mut runtime).unwrap();
     assert!(report.completed);
     assert_eq!(runtime.preflight_rules.len(), 1);
-    assert_eq!(runtime.clicks.len(), 4);
-    assert_eq!(runtime.waits, vec![100, 350, 100, 100]);
+    assert_eq!(runtime.clicks.len(), 2);
+    assert_eq!(runtime.waits, vec![100, 350]);
     assert_eq!(runtime.moves_to.len(), 1);
 
     let mut blocked_runtime = FakeMacroHotkeyRuntime::default();
@@ -20097,7 +20085,45 @@ fn macro_hotkey_quick_enhance_artifact_plan_preserves_click_chain_and_preflight(
     );
     assert_eq!(blocked_runtime.preflight_rules.len(), 1);
     assert!(blocked_runtime.clicks.is_empty());
-    assert_eq!(blocked.skipped_steps.len(), 9);
+    assert_eq!(blocked.skipped_steps.len(), 5);
+}
+
+#[test]
+fn macro_hotkey_capture_points_use_legacy_width_ratio_for_xy_scaling() {
+    let plan = plan_quick_enhance_artifact_macro(MacroHotkeyExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "captureSize": { "width": 1600, "height": 1000 }
+        }),
+    )));
+
+    let click_points: Vec<MacroHotkeyScreenPoint> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step.action {
+            MacroHotkeyStepAction::ClickCapturePoint { point } => Some(point),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(click_points.len(), 2);
+    assert_eq!(
+        click_points[0],
+        MacroHotkeyScreenPoint {
+            x_1080p: 1760.0,
+            y_1080p: 770.0,
+            screen_x: 1466.6666666666667,
+            screen_y: 641.6666666666667,
+        }
+    );
+    assert_eq!(
+        click_points[1],
+        MacroHotkeyScreenPoint {
+            x_1080p: 1760.0,
+            y_1080p: 1020.0,
+            screen_x: 1466.6666666666667,
+            screen_y: 850.0,
+        }
+    );
 }
 
 #[test]
@@ -20150,7 +20176,7 @@ fn macro_hotkey_tasks_execute_as_rust_independent_plans_and_catalog_entries() {
     assert_eq!(enhance_entry.hotkey_fields, &["enhanceArtifactHotkey"]);
     assert!(enhance_entry
         .notes
-        .contains("desktop independent-task live route now reaches this Rust boundary"));
+        .contains("cancellable SendInput capture-point click/move dispatch"));
 
     let descriptors = independent_tasks();
     assert!(descriptors.iter().any(|task| {

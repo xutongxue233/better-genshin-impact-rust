@@ -435,7 +435,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::HotkeyCommand,
         requires_main_ui_wait: Some(false),
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust models and can execute the QuickEnhanceArtifactMacro hotkey plan through injectable runtime hooks, preserving the initialized-context guard, fixed 1080p click sequence, enhanceWaitDelay addition, and final cursor move; the desktop independent-task live route now reaches this Rust boundary and explicitly rejects until TaskContext/toast preflight plus capture-point click/move adapters are wired before the legacy macro path can be retired.",
+        notes: "Rust models and can execute the QuickEnhanceArtifactMacro hotkey plan through injectable runtime hooks, preserving the initialized-context guard, fixed 1080p click sequence, enhanceWaitDelay addition, and final cursor move; the desktop independent-task live route now executes the macro through cancellable SendInput capture-point click/move dispatch with the legacy click down/up delays, while legacy WPF hotkey registration retirement and real-game regression remain pending.",
     },
     TaskCatalogEntry {
         key: "QuickBuy",
