@@ -14111,7 +14111,7 @@ struct FakeCountInventoryItemRuntime {
     open_tab_outcomes: VecDeque<CommonJobRuntimeOutcome>,
     load_classifier_outcomes: VecDeque<CommonJobRuntimeOutcome>,
     prescroll_outcomes: VecDeque<CommonJobRuntimeOutcome>,
-    grid_items: VecDeque<Vec<CountInventoryGridItemFrame>>,
+    grid_items: VecDeque<CountInventoryGridEnumeration>,
     crop_outcomes: VecDeque<CommonJobRuntimeOutcome>,
     infer_outcomes: VecDeque<Vec<CountInventoryGridIconMatch>>,
     count_outcomes: VecDeque<Vec<CountInventoryItemCount>>,
@@ -14145,6 +14145,20 @@ impl FakeCountInventoryItemRuntime {
     fn with_grid_items(
         mut self,
         batches: impl IntoIterator<Item = Vec<CountInventoryGridItemFrame>>,
+    ) -> Self {
+        self.grid_items = batches
+            .into_iter()
+            .map(|items| CountInventoryGridEnumeration {
+                items,
+                scan_complete: true,
+            })
+            .collect();
+        self
+    }
+
+    fn with_grid_enumerations(
+        mut self,
+        batches: impl IntoIterator<Item = CountInventoryGridEnumeration>,
     ) -> Self {
         self.grid_items = batches.into_iter().collect();
         self
@@ -14274,7 +14288,7 @@ impl CountInventoryItemRuntime for FakeCountInventoryItemRuntime {
         template: &GridTemplate,
         detection_rule: &GridItemDetectionRule,
         scroll_rule: &GridScrollRule,
-    ) -> Result<Vec<CountInventoryGridItemFrame>> {
+    ) -> Result<CountInventoryGridEnumeration> {
         self.enumerate_calls.push((
             template.clone(),
             detection_rule.clone(),
@@ -14477,6 +14491,34 @@ fn count_inventory_item_executor_returns_single_not_found_when_classifier_misses
         .skipped_steps
         .iter()
         .any(|step| { step.reason == CountInventoryItemSkipReason::ClassifierTargetMissing }));
+}
+
+#[test]
+fn count_inventory_item_executor_keeps_result_pending_when_scan_is_incomplete() {
+    let plan = plan_count_inventory_item(CountInventoryItemExecutionConfig {
+        grid_screen_name: Some(GridScreenName::Materials),
+        item_name: Some("晶核".to_string()),
+        ..CountInventoryItemExecutionConfig::default()
+    })
+    .unwrap();
+    let mut runtime = FakeCountInventoryItemRuntime::new()
+        .with_grid_enumerations([CountInventoryGridEnumeration {
+            items: vec![fake_inventory_frame(0)],
+            scan_complete: false,
+        }])
+        .with_infer_outcomes([vec![fake_inventory_match(0, "甜甜花")]]);
+
+    let report = execute_count_inventory_item_plan(&plan, &mut runtime).unwrap();
+
+    assert!(!report.completed);
+    assert_eq!(report.state.result, None);
+    assert!(!report.state.scan_complete);
+    assert!(report.state.target_matches.is_empty());
+    assert!(runtime.count_calls.is_empty());
+    assert!(report
+        .skipped_steps
+        .iter()
+        .any(|step| { step.reason == CountInventoryItemSkipReason::ScanIncomplete }));
 }
 
 #[test]

@@ -1691,6 +1691,12 @@ pub struct CountInventoryGridItemFrame {
     pub rect: Rect,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CountInventoryGridEnumeration {
+    pub items: Vec<CountInventoryGridItemFrame>,
+    pub scan_complete: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CountInventoryGridIconMatch {
     pub frame: CountInventoryGridItemFrame,
@@ -2629,7 +2635,7 @@ pub trait CountInventoryItemRuntime: CommonJobRuntime {
         template: &GridTemplate,
         detection_rule: &GridItemDetectionRule,
         scroll_rule: &GridScrollRule,
-    ) -> Result<Vec<CountInventoryGridItemFrame>>;
+    ) -> Result<CountInventoryGridEnumeration>;
 
     fn crop_count_inventory_grid_icons(
         &mut self,
@@ -7111,12 +7117,13 @@ where
             detection_rule,
             scroll_rule,
         } => {
-            state.grid_items = runtime.enumerate_count_inventory_grid_items(
+            let enumeration = runtime.enumerate_count_inventory_grid_items(
                 template,
                 detection_rule,
                 scroll_rule,
             )?;
-            state.scan_complete = true;
+            state.grid_items = enumeration.items;
+            state.scan_complete = enumeration.scan_complete;
             Ok(CommonJobRuntimeOutcome::Matched(
                 !state.grid_items.is_empty(),
             ))

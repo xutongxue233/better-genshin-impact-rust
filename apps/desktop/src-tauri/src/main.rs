@@ -131,10 +131,11 @@ use bgi_task::{
     ClaimMailRewardsExecutionReport, CombatActiveAvatarDetectionResult, CombatCommandPlaybackMode,
     CombatTeamPlaybackExecution, CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource,
     CommonJobInputDriver, CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome,
-    CommonJobStepAction, CountInventoryGridIconMatch, CountInventoryGridItemFrame,
-    CountInventoryItemCount, CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
-    CountInventoryItemRuntime, CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule,
-    DispatcherRuntime, GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
+    CommonJobStepAction, CountInventoryGridEnumeration, CountInventoryGridIconMatch,
+    CountInventoryGridItemFrame, CountInventoryItemCount, CountInventoryItemExecutionPlan,
+    CountInventoryItemExecutionReport, CountInventoryItemRuntime,
+    CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
+    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
     GoToAdventurersGuildNestedOutcome, GoToAdventurersGuildPathingRule,
     GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
     GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
@@ -7215,7 +7216,11 @@ fn desktop_auto_eat_food_inventory_live_preflight(
     let inventory_plan = plan.inventory_plan.as_ref().ok_or_else(|| {
         "AutoEatFood inventory-food live execution requires an inventory plan".to_string()
     })?;
-    desktop_inventory_count_plan_live_preflight("AutoEatFood inventory-food", inventory_plan)?;
+    desktop_inventory_count_plan_live_preflight(
+        "AutoEatFood inventory-food",
+        inventory_plan,
+        true,
+    )?;
 
     for step in &plan.steps {
         if !desktop_auto_eat_food_preflight_condition_applies(plan, step.condition) {
@@ -12567,13 +12572,14 @@ fn execute_desktop_count_inventory_item_live(
 fn desktop_count_inventory_item_live_preflight(
     plan: &CountInventoryItemExecutionPlan,
 ) -> Result<(), String> {
-    desktop_inventory_count_plan_live_preflight("CountInventoryItem", plan)
+    desktop_inventory_count_plan_live_preflight("CountInventoryItem", plan, false)
 }
 
 #[cfg(test)]
 fn desktop_inventory_count_plan_live_preflight(
     task_name: &str,
     plan: &CountInventoryItemExecutionPlan,
+    require_complete_grid_enumeration: bool,
 ) -> Result<(), String> {
     for step in &plan.steps {
         if !desktop_count_inventory_item_preflight_condition_applies(plan, step.condition) {
@@ -12600,9 +12606,11 @@ fn desktop_inventory_count_plan_live_preflight(
             CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {}
             CountInventoryItemStepAction::PreScrollWeaponOre { .. } => {}
             CountInventoryItemStepAction::EnumerateGridItems { .. } => {
-                return Err(format!(
-                    "{task_name} live execution requires desktop inventory grid enumeration adapter"
-                ));
+                if require_complete_grid_enumeration {
+                    return Err(format!(
+                        "{task_name} live execution requires full desktop GridScroller inventory grid enumeration adapter"
+                    ));
+                }
             }
             CountInventoryItemStepAction::CropGridIcon { .. } => {}
             CountInventoryItemStepAction::InferGridIcon { .. } => {
@@ -12811,7 +12819,7 @@ where
         template: &GridTemplate,
         detection_rule: &GridItemDetectionRule,
         _scroll_rule: &GridScrollRule,
-    ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
+    ) -> bgi_task::Result<CountInventoryGridEnumeration> {
         self.ensure_not_cancelled()?;
         let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
             &mut self.common,
@@ -12819,12 +12827,10 @@ where
             template,
             detection_rule,
         )?;
-        Err(TaskError::CommonJobExecution(
-            format!(
-                "CountInventoryItem live execution requires full desktop GridScroller inventory grid enumeration adapter after visible-page enumeration found {} current-page cell(s)",
-                visible_items.len()
-            ),
-        ))
+        Ok(CountInventoryGridEnumeration {
+            items: visible_items,
+            scan_complete: false,
+        })
     }
 
     fn crop_count_inventory_grid_icons(
@@ -22529,7 +22535,7 @@ mod tests {
 
         let static_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(static_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop inventory grid enumeration adapter"
+            "AutoEatFood inventory-food live execution requires full desktop GridScroller inventory grid enumeration adapter"
         ));
         assert!(!static_error.contains("inventory grid/ONNX/OCR/click adapters"));
     }
@@ -22617,26 +22623,12 @@ mod tests {
             panic!("expected CountInventoryItem plan");
         };
 
-        let grid_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
-        assert!(grid_error.contains(
-            "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
-        ));
-        assert!(!grid_error.contains("expired-item prompt adapter"));
-        assert!(!grid_error.contains("inventory tab adapter"));
-        assert!(!grid_error.contains("GridIcon ONNX/prototype adapter"));
-
-        let mut after_enumeration = plan.clone();
-        after_enumeration.steps.retain(|step| {
-            !matches!(
-                step.action,
-                CountInventoryItemStepAction::EnumerateGridItems { .. }
-            )
-        });
-        let inference_error =
-            desktop_count_inventory_item_live_preflight(&after_enumeration).unwrap_err();
+        let inference_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
         assert!(inference_error.contains(
             "CountInventoryItem live execution requires desktop GridIcon inference adapter"
         ));
+        assert!(!inference_error.contains("expired-item prompt adapter"));
+        assert!(!inference_error.contains("inventory tab adapter"));
         assert!(!inference_error.contains("grid icon crop adapter"));
 
         let weapon_plan = bgi_task::plan_common_job(
@@ -22653,7 +22645,7 @@ mod tests {
         };
         let weapon_error = desktop_count_inventory_item_live_preflight(&weapon_plan).unwrap_err();
         assert!(weapon_error.contains(
-            "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
+            "CountInventoryItem live execution requires desktop GridIcon inference adapter"
         ));
         assert!(!weapon_error.contains("weapon-ore prescroll adapter"));
     }
@@ -22703,11 +22695,11 @@ mod tests {
 
         let grid_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(grid_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop inventory grid enumeration adapter"
+            "AutoEatFood inventory-food live execution requires full desktop GridScroller inventory grid enumeration adapter"
         ));
         assert!(!grid_error.contains("expired-item prompt adapter"));
         assert!(!grid_error.contains("inventory tab adapter"));
-        assert!(!grid_error.contains("GridIcon ONNX/prototype adapter"));
+        assert!(!grid_error.contains("GridIcon inference adapter"));
 
         let mut after_inventory_scan = plan.clone();
         after_inventory_scan
