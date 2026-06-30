@@ -2720,10 +2720,16 @@
     }
   }
 
-  async function executeIndependentAutoFightTeamPlayback(sendInput: boolean) {
+  async function executeIndependentAutoFightTeamPlayback(sendInput: boolean, useLiveFrame = false) {
     try {
       independentFightPlaybackBusy = true;
-      shellStatus = sendInput ? "dispatching team playback" : "planning team playback";
+      shellStatus = sendInput
+        ? useLiveFrame
+          ? "dispatching live team playback"
+          : "dispatching team playback"
+        : useLiveFrame
+          ? "planning live team playback"
+          : "planning team playback";
       independentFightPlaybackResult = await invoke<DesktopAutoFightTeamPlaybackResult>(
         "task_execute_auto_fight_team_playback",
         {
@@ -2731,6 +2737,7 @@
             strategyName: independentFightStrategy.trim() || null,
             teamNames: independentFightTeamNames.trim() || null,
             sendInput,
+            useLiveFrame,
           },
         },
       );
@@ -5371,6 +5378,14 @@
           <button disabled={independentFightPlaybackBusy} onclick={() => executeIndependentAutoFightTeamPlayback(true)}>
             <Gamepad2 size={17} />
             Send Team
+          </button>
+          <button disabled={independentFightPlaybackBusy} onclick={() => executeIndependentAutoFightTeamPlayback(false, true)}>
+            <Search size={17} />
+            Plan Live Team
+          </button>
+          <button disabled={independentFightPlaybackBusy} onclick={() => executeIndependentAutoFightTeamPlayback(true, true)}>
+            <Crosshair size={17} />
+            Send Live Team
           </button>
           <button disabled={independentFightAvatarBusy} onclick={detectIndependentAutoFightActiveAvatar}>
             <Search size={17} />

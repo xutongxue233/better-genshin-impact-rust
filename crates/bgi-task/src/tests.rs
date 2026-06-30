@@ -1569,6 +1569,54 @@ fn frame_team_playback_resolves_inactive_burst_readiness_from_side_circle() {
 }
 
 #[test]
+fn frame_team_playback_execute_path_uses_supplied_frame() {
+    let root = unique_test_root("frame-team-execute");
+    let script = parse_combat_script_context("钟离 e(wait), q", true).unwrap();
+    let plan = plan_combat_script_execution(&script).unwrap();
+    let team_plan = CombatTeamPlan {
+        avatars: vec![
+            test_team_avatar(1, "钟离"),
+            test_team_avatar(2, "夜兰"),
+            test_team_avatar(3, "纳西妲"),
+            test_team_avatar(4, "班尼特"),
+        ],
+        command_avatar_names: vec!["钟离".to_string()],
+        can_be_skipped_avatar_names: Vec::new(),
+        all_command_avatars_can_be_skipped: false,
+    };
+    let executable_commands = script.commands.clone();
+    let mut image = blank_bgr_image(Size::new(1920, 1080));
+    let index_rects = default_combat_avatar_index_rects(image.size).unwrap();
+    fill_rect_gray(&mut image, index_rects[1], 255);
+    fill_rect_gray(&mut image, index_rects[2], 255);
+    fill_rect_gray(&mut image, index_rects[3], 255);
+
+    let execution = execute_team_context_combat_script_inputs_with_frame(
+        &root,
+        &image,
+        &plan,
+        &team_plan,
+        &executable_commands,
+        CombatCommandPlaybackMode::PlanOnly,
+        None,
+    )
+    .unwrap();
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(execution.mode, CombatCommandPlaybackMode::PlanOnly);
+    assert!(execution.dispatch_ready);
+    assert!(!execution.dispatched);
+    assert_eq!(execution.blocked_command_index, None);
+    assert!(execution.planned_commands[0].switch_events.is_empty());
+    assert!(execution.planned_commands[0]
+        .resolved_context
+        .contains(&CombatExecutionContextRequirement::SkillCooldown));
+    assert!(execution.planned_commands[1]
+        .resolved_context
+        .contains(&CombatExecutionContextRequirement::BurstReadiness));
+}
+
+#[test]
 fn action_scheduler_cd_parser_matches_legacy_boundaries_and_reverse_lookup() {
     let config = "钟离,12;钟离的朋友,3;夜兰;钟离,9;纳西妲,bad";
 

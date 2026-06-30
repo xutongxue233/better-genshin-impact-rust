@@ -79,11 +79,12 @@ use bgi_task::{
     execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
     execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
     execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
-    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
-    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
-    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight,
-    plan_auto_fish, plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick,
-    plan_auto_wood, plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
+    execute_team_context_combat_script_inputs_with_frame, execute_teleport_plan,
+    execute_use_redeem_code_plan, execute_walk_to_f_live, execute_wonderland_cycle_live,
+    execute_wonderland_cycle_plan, extract_redeem_codes_from_text, independent_tasks,
+    parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight, plan_auto_fish,
+    plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
+    plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
     plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
     redeem_code_entries_from_strings, reduce_lower_head_then_walk_to_tracking_frame,
     runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
@@ -956,6 +957,7 @@ struct DesktopAutoFightTeamPlaybackPayload {
     strategy_name: Option<String>,
     team_names: Option<String>,
     send_input: Option<bool>,
+    use_live_frame: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3863,40 +3865,37 @@ fn task_execute_auto_fight_team_playback(
     let IndependentTaskExecution::AutoFightPlan(plan) = execution.execution else {
         return Err("AutoFight returned a non-fight execution".to_string());
     };
-    let script_name = plan
-        .team_selection
-        .script_name
-        .as_deref()
-        .ok_or_else(|| plan.team_selection.message.clone())?;
-    let script = plan
-        .script_execution_plans
-        .iter()
-        .find(|script| script.name == script_name)
-        .ok_or_else(|| {
-            format!("selected combat script execution plan was not found: {script_name}")
-        })?;
-    let team_plan = plan.team_plan.as_ref().ok_or_else(|| {
-        "auto-fight team playback requires configured or recognized team context".to_string()
-    })?;
     let mode = if payload.send_input.unwrap_or(false) {
         CombatCommandPlaybackMode::SendInput
     } else {
         CombatCommandPlaybackMode::PlanOnly
     };
+    let use_live_frame = payload.use_live_frame.unwrap_or(false);
     let cancellation = if matches!(mode, CombatCommandPlaybackMode::SendInput) {
         task_state.script_cancellation.reset();
         Some(task_state.script_cancellation.clone())
     } else {
         None
     };
-    let result = execute_team_context_combat_script_inputs(
-        script,
-        team_plan,
-        &plan.team_selection.executable_commands,
+    let config = if use_live_frame {
+        Some(read_desktop_config(&app, &app_root))
+    } else {
+        None
+    };
+    let result = execute_desktop_auto_fight_team_playback_plan(
+        &app_root,
+        &plan,
         mode,
+        use_live_frame,
         cancellation.as_deref(),
-    )
-    .map_err(|error| error.to_string())?;
+        move || {
+            let config = config.as_ref().ok_or_else(|| {
+                "AutoFight team playback live-frame capture config was not initialized".to_string()
+            })?;
+            capture_desktop_game_bgr_image(config)
+                .map_err(|error| format!("AutoFight team playback desktop capture failed: {error}"))
+        },
+    )?;
 
     Ok(DesktopAutoFightTeamPlaybackExecution {
         task: execution.task_key,
@@ -7723,6 +7722,56 @@ fn desktop_auto_fight_finish_probe_execution_mode(
     } else {
         AutoFightFinishDetectionExecutionMode::PlanOnly
     }
+}
+
+fn execute_desktop_auto_fight_team_playback_plan<C>(
+    app_root: &Path,
+    plan: &AutoFightExecutionPlan,
+    mode: CombatCommandPlaybackMode,
+    use_live_frame: bool,
+    cancellation: Option<&InputCancellationToken>,
+    capture: C,
+) -> Result<CombatTeamPlaybackExecution, String>
+where
+    C: FnOnce() -> Result<BgrImage, String>,
+{
+    let script_name = plan
+        .team_selection
+        .script_name
+        .as_deref()
+        .ok_or_else(|| plan.team_selection.message.clone())?;
+    let script = plan
+        .script_execution_plans
+        .iter()
+        .find(|script| script.name == script_name)
+        .ok_or_else(|| {
+            format!("selected combat script execution plan was not found: {script_name}")
+        })?;
+    let team_plan = plan.team_plan.as_ref().ok_or_else(|| {
+        "auto-fight team playback requires configured or recognized team context".to_string()
+    })?;
+
+    if use_live_frame {
+        let image = capture()?;
+        execute_team_context_combat_script_inputs_with_frame(
+            app_root,
+            &image,
+            script,
+            team_plan,
+            &plan.team_selection.executable_commands,
+            mode,
+            cancellation,
+        )
+    } else {
+        execute_team_context_combat_script_inputs(
+            script,
+            team_plan,
+            &plan.team_selection.executable_commands,
+            mode,
+            cancellation,
+        )
+    }
+    .map_err(|error| error.to_string())
 }
 
 fn execute_desktop_auto_fight_finish_probe_live_plan(
@@ -22958,6 +23007,71 @@ mod tests {
     }
 
     #[test]
+    fn desktop_auto_fight_team_playback_without_live_frame_skips_capture() {
+        let root = desktop_test_temp_root("auto-fight-team-playback-no-live-frame");
+        write_desktop_auto_fight_live_playback_strategy(&root);
+        let auto_fight_config = AutoFightExecutionConfig::from_value(Some(&serde_json::json!({
+            "strategyName": "daily",
+            "teamNames": "钟离,夜兰,行秋,班尼特"
+        })));
+        let auto_fight_plan = plan_auto_fight(&root, auto_fight_config.param).unwrap();
+        let capture_called = std::cell::Cell::new(false);
+
+        let execution = execute_desktop_auto_fight_team_playback_plan(
+            &root,
+            &auto_fight_plan,
+            CombatCommandPlaybackMode::PlanOnly,
+            false,
+            None,
+            || {
+                capture_called.set(true);
+                Err("capture should not be used for non-live playback".to_string())
+            },
+        )
+        .unwrap();
+
+        assert!(!capture_called.get());
+        assert!(!execution.dispatch_ready);
+        assert_eq!(
+            execution.blocked_requirements,
+            vec![bgi_task::CombatExecutionContextRequirement::SkillCooldown]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_auto_fight_team_playback_live_frame_uses_injected_capture() {
+        let root = desktop_test_temp_root("auto-fight-team-playback-live-frame");
+        write_desktop_auto_fight_live_playback_strategy(&root);
+        let auto_fight_config = AutoFightExecutionConfig::from_value(Some(&serde_json::json!({
+            "strategyName": "daily",
+            "teamNames": "钟离,夜兰,行秋,班尼特"
+        })));
+        let auto_fight_plan = plan_auto_fight(&root, auto_fight_config.param).unwrap();
+
+        let execution = execute_desktop_auto_fight_team_playback_plan(
+            &root,
+            &auto_fight_plan,
+            CombatCommandPlaybackMode::PlanOnly,
+            true,
+            None,
+            || Ok(desktop_auto_fight_ready_team_frame()),
+        )
+        .unwrap();
+
+        assert!(execution.dispatch_ready);
+        assert_eq!(execution.blocked_command_index, None);
+        assert!(execution.planned_commands[0].switch_events.is_empty());
+        assert!(execution.planned_commands[0]
+            .resolved_context
+            .contains(&bgi_task::CombatExecutionContextRequirement::SkillCooldown));
+        assert!(execution.planned_commands[1]
+            .resolved_context
+            .contains(&bgi_task::CombatExecutionContextRequirement::BurstReadiness));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn desktop_independent_task_live_plan_reports_auto_artifact_salvage_adapter_gap() {
         let plan = desktop_independent_task_invocation_plan("AutoArtifactSalvage");
 
@@ -23554,6 +23668,15 @@ mod tests {
         .unwrap();
     }
 
+    fn write_desktop_auto_fight_live_playback_strategy(root: &Path) {
+        write_desktop_auto_fight_strategy(root);
+        fs::write(
+            root.join("User").join("AutoFight").join("daily.txt"),
+            "钟离 e(wait), q",
+        )
+        .unwrap();
+    }
+
     fn desktop_auto_fight_finished_frame() -> BgrImage {
         let size = VisionSize::new(1920, 1080);
         let mut pixels = vec![0; size.width as usize * size.height as usize * 3];
@@ -23572,6 +23695,20 @@ mod tests {
         BgrImage::new(size, pixels).unwrap()
     }
 
+    fn desktop_auto_fight_ready_team_frame() -> BgrImage {
+        let size = VisionSize::new(1920, 1080);
+        let mut image = BgrImage::new(
+            size,
+            vec![0; size.width as usize * size.height as usize * 3],
+        )
+        .unwrap();
+        let index_rects = bgi_task::default_combat_avatar_index_rects(size).unwrap();
+        for rect in index_rects.iter().skip(1) {
+            fill_desktop_bgr_rect(&mut image, *rect, [255, 255, 255]);
+        }
+        image
+    }
+
     fn set_desktop_bgr_pixel(
         pixels: &mut [u8],
         size: VisionSize,
@@ -23580,6 +23717,19 @@ mod tests {
     ) {
         let offset = ((position.1 * size.width + position.0) * 3) as usize;
         pixels[offset..offset + 3].copy_from_slice(&bgr);
+    }
+
+    fn fill_desktop_bgr_rect(image: &mut BgrImage, rect: Rect, bgr: [u8; 3]) {
+        let x_start = rect.x.max(0) as u32;
+        let y_start = rect.y.max(0) as u32;
+        let x_end = rect.right().clamp(0, image.size.width as i32) as u32;
+        let y_end = rect.bottom().clamp(0, image.size.height as i32) as u32;
+        for y in y_start..y_end {
+            for x in x_start..x_end {
+                let offset = ((y * image.size.width + x) * 3) as usize;
+                image.pixels[offset..offset + 3].copy_from_slice(&bgr);
+            }
+        }
     }
 
     #[test]

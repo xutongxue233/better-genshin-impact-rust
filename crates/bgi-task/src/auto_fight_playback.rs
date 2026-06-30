@@ -429,3 +429,35 @@ pub fn execute_team_context_combat_script_inputs(
     execution.dispatched = matches!(mode, CombatCommandPlaybackMode::SendInput);
     Ok(execution)
 }
+
+pub fn execute_team_context_combat_script_inputs_with_frame(
+    working_directory: impl AsRef<Path>,
+    image: &BgrImage,
+    script: &CombatScriptExecutionPlan,
+    team_plan: &CombatTeamPlan,
+    executable_commands: &[CombatCommandPlan],
+    mode: CombatCommandPlaybackMode,
+    cancellation: Option<&InputCancellationToken>,
+) -> Result<CombatTeamPlaybackExecution> {
+    let mut execution = plan_team_context_combat_script_playback_with_frame(
+        working_directory,
+        image,
+        script,
+        team_plan,
+        executable_commands,
+    )?;
+    execution.mode = mode;
+    if matches!(mode, CombatCommandPlaybackMode::SendInput) {
+        if !execution.dispatch_ready {
+            return Err(TaskError::CombatStrategy(format!(
+                "frame-aware team-context combat playback is not dispatch ready; first blocked command: {:?}, requirements: {:?}",
+                execution.blocked_command_index, execution.blocked_requirements
+            )));
+        }
+        let result = dispatch_auto_fight_input_events(&execution.input_events, cancellation)?;
+        execution.dispatched_events = result.0;
+        execution.cancelled = result.1;
+    }
+    execution.dispatched = matches!(mode, CombatCommandPlaybackMode::SendInput);
+    Ok(execution)
+}
