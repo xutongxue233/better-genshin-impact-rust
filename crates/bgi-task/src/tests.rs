@@ -26303,6 +26303,9 @@ fn common_job_pathing_preflight_reads_bundled_go_to_routes_without_completing_mo
         assert!(report
             .pending_dependencies
             .contains(&bgi_core::PathingMovementDependency::MovementTermination));
+        assert!(!report
+            .pending_dependencies
+            .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
         assert_eq!(
             report.movement_contract.waypoint_count,
             report.waypoint_count

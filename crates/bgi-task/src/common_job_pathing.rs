@@ -35,7 +35,7 @@ pub fn preflight_common_job_pathing_rule(
             "failed to read common-job pathing asset {pathing_json}: {error}"
         ))
     })?;
-    let execution_plan = task.execution_plan();
+    let execution_plan = task.execution_plan_with_legacy_track_converter();
     let movement_contract = execution_plan.movement_contract.clone();
 
     Ok(CommonJobPathingPreflightReport {

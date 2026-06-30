@@ -424,6 +424,10 @@ impl PathingTask {
         self.execution_plan_from_segments(segments)
     }
 
+    pub fn execution_plan_with_legacy_track_converter(&self) -> PathingExecutionPlan {
+        self.execution_plan_with_track_converter(legacy_track_map_point_for_pathing)
+    }
+
     pub fn execution_plan_with_track_converter<F>(&self, mut converter: F) -> PathingExecutionPlan
     where
         F: FnMut(PathingTrackConversionContext<'_>) -> Option<PathingPoint>,

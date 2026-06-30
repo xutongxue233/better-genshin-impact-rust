@@ -139,7 +139,7 @@ fn execute_group_pathing_project(
         }
     }
     let summary = task.summary();
-    let execution_plan = task.execution_plan();
+    let execution_plan = task.execution_plan_with_legacy_track_converter();
     Ok(PathingScriptExecution {
         plan: PathingScriptRunPlan {
             source: PathingScriptSource::UserAutoPathingFile,

@@ -2013,6 +2013,30 @@ fn script_host_runtime_routes_pathing_script_calls() {
     assert!(!inline_execution.completed);
     assert_eq!(inline_execution.execution_plan.segment_count, 1);
     assert_eq!(inline_execution.execution_plan.waypoint_count, 1);
+    assert_eq!(
+        inline_execution.execution_plan.segments[0].seed_previous_position,
+        Some(bgi_core::PathingPoint {
+            x: 32568.0,
+            y: 15984.0
+        })
+    );
+    assert_eq!(
+        inline_execution.execution_plan.segments[0].waypoints[0].track_point,
+        Some(bgi_core::PathingPoint {
+            x: 32568.0,
+            y: 15984.0
+        })
+    );
+    assert!(!inline_execution.execution_plan.segments[0].waypoints[0].track_conversion_pending);
+    assert_eq!(
+        inline_execution.execution_plan.segments[0].seed_previous_position_coordinate_space,
+        Some(bgi_core::PathingCoordinateSpace::LegacyTrackMap)
+    );
+    assert!(!inline_execution
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
     assert_eq!(inline_plan.source, PathingScriptSource::InlineJson);
     assert_eq!(inline_plan.summary.waypoint_count, 1);
     assert_eq!(inline_plan.summary.actions, vec!["pick_around".to_string()]);
@@ -2036,6 +2060,18 @@ fn script_host_runtime_routes_pathing_script_calls() {
         from_script.plan.task.file_name.as_deref(),
         Some("route.json")
     );
+    assert_eq!(
+        from_script.execution_plan.segments[0].waypoints[0].track_point,
+        Some(bgi_core::PathingPoint {
+            x: 32568.0,
+            y: 15984.0
+        })
+    );
+    assert!(!from_script
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
 
     let from_user = runtime
         .call(ScriptHostCall::new(
@@ -2061,8 +2097,20 @@ fn script_host_runtime_routes_pathing_script_calls() {
     assert_eq!(from_user.execution_plan.waypoint_count, 1);
     assert_eq!(
         from_user.execution_plan.segments[0].seed_previous_position,
-        Some(bgi_core::PathingPoint { x: 100.0, y: 200.0 })
+        Some(bgi_core::PathingPoint {
+            x: 32568.0,
+            y: 15984.0
+        })
     );
+    assert_eq!(
+        from_user.execution_plan.segments[0].seed_previous_position_coordinate_space,
+        Some(bgi_core::PathingCoordinateSpace::LegacyTrackMap)
+    );
+    assert!(!from_user
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
 
     let plan = runtime
         .call(ScriptHostCall::new(
@@ -2107,6 +2155,37 @@ fn script_host_runtime_routes_pathing_script_calls() {
             .unwrap_err(),
         ScriptHostRuntimeError::Policy(ScriptHostPolicyError::PathTraversal { .. })
     ));
+
+    let unsupported_map_route_json = r#"{
+          "info": {
+            "name": "unsupported route",
+            "type": "collect",
+            "map_name": "Enkanomiya"
+          },
+          "positions": [
+            { "x": 100.0, "y": 200.0, "type": "path" }
+          ]
+        }"#;
+    let unsupported = runtime
+        .call(ScriptHostCall::new(
+            ScriptHostTarget::PathingScript,
+            "Run",
+            vec![serde_json::json!(unsupported_map_route_json)],
+        ))
+        .unwrap();
+    let ScriptHostCallResult::PathingExecution(unsupported_execution) = unsupported else {
+        panic!("expected unsupported-map pathing execution");
+    };
+    assert_eq!(
+        unsupported_execution.execution_plan.segments[0].waypoints[0].track_point,
+        None
+    );
+    assert!(unsupported_execution.execution_plan.segments[0].waypoints[0].track_conversion_pending);
+    assert!(unsupported_execution
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
 
     fs::remove_dir_all(script_root).unwrap();
     fs::remove_dir_all(strategy_root).unwrap();

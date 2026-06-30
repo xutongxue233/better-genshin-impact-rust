@@ -128,7 +128,7 @@ impl PathingScriptHost {
 impl PathingScriptRunPlan {
     pub fn execute(self) -> Result<PathingScriptExecution> {
         Ok(PathingScriptExecution {
-            execution_plan: self.task.execution_plan(),
+            execution_plan: self.task.execution_plan_with_legacy_track_converter(),
             plan: self,
             dispatched: false,
             completed: false,

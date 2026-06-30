@@ -2123,6 +2123,10 @@ fn script_group_javascript_pathing_host_returns_execution_plan() {
         javascript.host_calls[0].result["execution_plan"]["segment_count"],
         2
     );
+    assert_eq!(
+        javascript.host_calls[0].result["execution_plan"]["segments"][0]["seed_previous_position"],
+        json!({"x": 32766.0, "y": 16380.0})
+    );
     assert_eq!(javascript.host_calls[1].method, "plan");
     assert_eq!(
         javascript.host_calls[1].result["party_config"],
@@ -2911,6 +2915,30 @@ fn script_group_pathing_steps_return_execution_plan() {
     assert_eq!(execution.execution_plan.segment_count, 2);
     assert_eq!(execution.execution_plan.expected_fight_count, 1);
     assert!(execution.execution_plan.segments[1].starts_with_teleport);
+    assert_eq!(
+        execution.execution_plan.segments[0].seed_previous_position,
+        Some(bgi_core::PathingPoint {
+            x: 32766.0,
+            y: 16380.0
+        })
+    );
+    assert_eq!(
+        execution.execution_plan.segments[0].waypoints[0].track_point,
+        Some(bgi_core::PathingPoint {
+            x: 32766.0,
+            y: 16380.0
+        })
+    );
+    assert!(!execution.execution_plan.segments[0].waypoints[0].track_conversion_pending);
+    assert_eq!(
+        execution.execution_plan.segments[0].seed_previous_position_coordinate_space,
+        Some(bgi_core::PathingCoordinateSpace::LegacyTrackMap)
+    );
+    assert!(!execution
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
 }
 
 #[test]
