@@ -261,6 +261,46 @@ fn pathing_execution_plan_splits_segments_like_legacy_executor() {
     assert!(leaf.phases.contains(&PathingWaypointPhase::RunAction));
 }
 
+#[test]
+fn pathing_movement_contract_aggregates_present_phase_dependencies_only() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                { "x": 3.0, "y": 4.0, "type": "orientation", "action": "log_output", "action_params": "turn" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+    let dependencies = &plan.movement_contract.pending_dependencies;
+
+    assert!(!plan.movement_contract.movement_executor_ready);
+    assert!(dependencies.contains(&PathingMovementDependency::CoordinateConversion));
+    assert!(dependencies.contains(&PathingMovementDependency::PositionObservation));
+    assert!(dependencies.contains(&PathingMovementDependency::CameraRotation));
+    assert!(dependencies.contains(&PathingMovementDependency::InputDispatch));
+    assert!(dependencies.contains(&PathingMovementDependency::LowHpRecovery));
+    assert!(dependencies.contains(&PathingMovementDependency::TrapEscape));
+    assert!(dependencies.contains(&PathingMovementDependency::MovementTermination));
+    assert!(!dependencies.contains(&PathingMovementDependency::Teleport));
+    assert!(!dependencies.contains(&PathingMovementDependency::ActionHandlers));
+
+    let orientation_contract = &plan.movement_contract.segments[0].waypoints[1];
+    let run_action_contract = orientation_contract
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
+        .expect("log_output waypoint should keep a run-action phase");
+    assert_eq!(
+        run_action_contract.native_status,
+        PathingNativePhaseStatus::Pending
+    );
+    assert!(run_action_contract.pending_dependencies.is_empty());
+}
+
 fn test_root(name: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!("bgi-core-{name}-{}", std::process::id()));

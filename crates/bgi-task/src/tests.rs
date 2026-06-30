@@ -16794,6 +16794,7 @@ fn task_invocation_live_completion_distinguishes_partial_independent_boundary() 
                         movement_pending_dependencies: Vec::new(),
                         movement_segment_count: 0,
                         movement_waypoint_count: 0,
+                        movement_report: None,
                         executed_actions: 0,
                         skipped_actions: 0,
                         unsupported_actions: 0,
@@ -20457,6 +20458,120 @@ fn independent_auto_pathing_returns_execution_plan_for_user_route() {
 }
 
 #[test]
+fn auto_pathing_movement_contract_consumer_reports_native_pending_without_runtime_completion() {
+    let root = unique_test_root("auto-pathing-movement-native-pending");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "movement route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let mut runtime = UnsupportedAutoPathingMovementRuntime;
+
+    let report = execute_auto_pathing_movement_contract_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(report.movement_contract_consumed);
+    assert!(!report.movement_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::NativePending
+    );
+    assert_eq!(report.executed_phases, 0);
+    assert_eq!(report.unsupported_phases, 1);
+    assert_eq!(report.failed_phases, 0);
+    assert_eq!(report.cancelled_phases, 0);
+    let failed = report.failed_phase.as_ref().unwrap();
+    assert_eq!(failed.global_index, 0);
+    assert_eq!(
+        failed.phase,
+        bgi_core::PathingWaypointPhase::RecoverWhenLowHp
+    );
+    assert!(failed.message.contains("native-pending"));
+    assert_eq!(report.segment_reports.len(), 1);
+    assert_eq!(report.segment_reports[0].waypoint_reports.len(), 1);
+    assert_eq!(
+        report.segment_reports[0].waypoint_reports[0]
+            .phase_reports
+            .len(),
+        1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_movement_contract_consumer_marks_completed_only_after_all_phase_reports_execute() {
+    let root = unique_test_root("auto-pathing-movement-completed");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("route.json"),
+        r#"{
+                "info": { "name": "movement completed route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "orientation", "action": "log_output", "action_params": "faced" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/route.json").unwrap();
+    let expected_phase_count = plan
+        .execution_plan
+        .movement_contract
+        .segments
+        .iter()
+        .flat_map(|segment| segment.waypoints.iter())
+        .map(|waypoint| waypoint.phase_contracts.len())
+        .sum::<usize>();
+    let mut runtime = CompletingAutoPathingMovementRuntime::default();
+
+    let report = execute_auto_pathing_movement_contract_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(report.movement_contract_consumed);
+    assert!(report.movement_completed);
+    assert!(report.native_pathing_completed);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::Completed
+    );
+    assert_eq!(report.executed_phases, expected_phase_count);
+    assert_eq!(runtime.phases.len(), expected_phase_count);
+    assert_eq!(report.skipped_phases, 0);
+    assert_eq!(report.unsupported_phases, 0);
+    assert_eq!(report.failed_phases, 0);
+    assert!(report.failed_phase.is_none());
+    assert_eq!(report.segment_reports.len(), 1);
+    assert_eq!(report.segment_reports[0].waypoint_reports.len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[derive(Default)]
+struct CompletingAutoPathingMovementRuntime {
+    phases: Vec<bgi_core::PathingWaypointPhase>,
+}
+
+impl AutoPathingMovementRuntime for CompletingAutoPathingMovementRuntime {
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.phases.push(context.phase.phase);
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed {:?}",
+            context.phase.phase
+        )))
+    }
+}
+
+#[test]
 fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phases() {
     let root = unique_test_root("auto-pathing-action-boundary");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");
@@ -20517,6 +20632,7 @@ fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phase
     );
     assert!(report.boundary_completed);
     assert!(!report.movement_attempted);
+    assert!(report.movement_report.is_some());
     assert_eq!(
         report.movement_completion_status,
         AutoPathingMovementCompletionStatus::NativePending

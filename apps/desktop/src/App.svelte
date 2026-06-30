@@ -501,6 +501,59 @@
     action_report: PathingActionBoundaryReport | null;
   };
 
+  type AutoPathingPhaseExecutionStatus = "executed" | "skipped" | "unsupported" | "failed" | "cancelled";
+
+  type PathingMovementPhaseBoundaryReport = {
+    phase: string;
+    status: AutoPathingPhaseExecutionStatus;
+    message: string;
+    pending_dependencies: string[];
+  };
+
+  type PathingMovementWaypointBoundaryReport = {
+    global_index: number;
+    segment_index: number;
+    segment_waypoint_index: number;
+    waypoint_type: string;
+    move_mode: string;
+    action: string | null;
+    phase_reports: PathingMovementPhaseBoundaryReport[];
+  };
+
+  type PathingMovementSegmentBoundaryReport = {
+    segment_index: number;
+    waypoint_reports: PathingMovementWaypointBoundaryReport[];
+  };
+
+  type AutoPathingMovementBoundaryReport = {
+    source: string;
+    route: string;
+    normalized_path: string;
+    movement_contract_consumed: boolean;
+    movement_completed: boolean;
+    movement_completion_status: string;
+    native_pathing_completed: boolean;
+    movement_executor_ready: boolean;
+    movement_contract_version: number;
+    movement_pending_dependencies: string[];
+    movement_segment_count: number;
+    movement_waypoint_count: number;
+    executed_phases: number;
+    skipped_phases: number;
+    unsupported_phases: number;
+    failed_phases: number;
+    cancelled_phases: number;
+    failed_phase: {
+      global_index: number;
+      segment_index: number;
+      segment_waypoint_index: number;
+      phase: string;
+      message: string;
+    } | null;
+    segment_reports: PathingMovementSegmentBoundaryReport[];
+    notes: string;
+  };
+
   type GlobalInputExecution = {
     mode: string;
     dispatched: boolean;
@@ -560,6 +613,7 @@
     movement_pending_dependencies: string[];
     movement_segment_count: number;
     movement_waypoint_count: number;
+    movement_report: AutoPathingMovementBoundaryReport | null;
     executed_actions: number;
     skipped_actions: number;
     unsupported_actions: number;
@@ -3042,6 +3096,7 @@
     execution: DesktopAutoPathingActionBoundaryExecution,
   ): ExecutionSummary {
     const boundary = execution.boundary;
+    const movement = boundary.movement_report;
     const actionCounts = pathingBoundaryStatusCounts(
       boundary.waypoint_reports.flatMap((waypoint) =>
         waypoint.action_report ? [waypoint.action_report] : [],
@@ -3056,11 +3111,27 @@
       details: [
         { label: "Boundary", value: boundary.boundary_completed ? "done" : "pending" },
         { label: "Movement", value: boundary.movement_attempted ? "attempted" : "not attempted" },
+        {
+          label: "Move Contract",
+          value: movement?.movement_contract_consumed ? "consumed" : "not consumed",
+        },
         { label: "Native Done", value: boundary.native_pathing_completed ? "yes" : "no" },
         { label: "Contract", value: `v${boundary.movement_contract_version}` },
         { label: "Segments", value: `${boundary.movement_segment_count}` },
         { label: "Waypoints", value: `${boundary.movement_waypoint_count}` },
         { label: "Pending", value: `${boundary.movement_pending_dependencies.length}` },
+        {
+          label: "Move Phases",
+          value: movement
+            ? `${movement.executed_phases}/${movement.skipped_phases}/${movement.unsupported_phases}/${movement.failed_phases}/${movement.cancelled_phases}`
+            : "-",
+        },
+        {
+          label: "Move Failed",
+          value: movement?.failed_phase
+            ? `${movement.failed_phase.phase} #${movement.failed_phase.global_index}`
+            : "-",
+        },
         { label: "Action Reported", value: `${actionCounts.reported}` },
         { label: "Action Done", value: `${actionCounts.executed}` },
         { label: "Action Skip", value: `${actionCounts.skipped}` },

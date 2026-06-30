@@ -492,26 +492,11 @@ impl PathingMovementContractPlan {
         preflight: &PathingPreflightPlan,
         segments: &[PathingSegmentPlan],
     ) -> Self {
-        let pending_dependencies = if segments.is_empty() {
-            Vec::new()
-        } else {
-            vec![
-                PathingMovementDependency::CoordinateConversion,
-                PathingMovementDependency::MapMatching,
-                PathingMovementDependency::PositionObservation,
-                PathingMovementDependency::CameraRotation,
-                PathingMovementDependency::InputDispatch,
-                PathingMovementDependency::Teleport,
-                PathingMovementDependency::LowHpRecovery,
-                PathingMovementDependency::TrapEscape,
-                PathingMovementDependency::ActionHandlers,
-                PathingMovementDependency::MovementTermination,
-            ]
-        };
+        let pending_dependencies = aggregate_pathing_movement_pending_dependencies(segments);
 
         Self {
             contract_version: 1,
-            movement_executor_ready: false,
+            movement_executor_ready: !segments.is_empty() && pending_dependencies.is_empty(),
             native_pathing_completed: false,
             pending_dependencies,
             map_name: map_name.to_string(),
@@ -593,9 +578,39 @@ impl PathingMovementPhaseContract {
             coordinate_space,
             requires_track_conversion: target_point.is_some() && waypoint.track_conversion_pending,
             native_status: pathing_phase_native_status(phase),
-            pending_dependencies: pathing_phase_pending_dependencies(phase),
+            pending_dependencies: pathing_phase_pending_dependencies(phase, waypoint),
         }
     }
+}
+
+const PATHING_MOVEMENT_DEPENDENCY_ORDER: [PathingMovementDependency; 10] = [
+    PathingMovementDependency::CoordinateConversion,
+    PathingMovementDependency::MapMatching,
+    PathingMovementDependency::PositionObservation,
+    PathingMovementDependency::CameraRotation,
+    PathingMovementDependency::InputDispatch,
+    PathingMovementDependency::Teleport,
+    PathingMovementDependency::LowHpRecovery,
+    PathingMovementDependency::TrapEscape,
+    PathingMovementDependency::ActionHandlers,
+    PathingMovementDependency::MovementTermination,
+];
+
+fn aggregate_pathing_movement_pending_dependencies(
+    segments: &[PathingSegmentPlan],
+) -> Vec<PathingMovementDependency> {
+    PATHING_MOVEMENT_DEPENDENCY_ORDER
+        .into_iter()
+        .filter(|dependency| {
+            segments.iter().any(|segment| {
+                segment.waypoints.iter().any(|waypoint| {
+                    waypoint.phases.iter().any(|phase| {
+                        pathing_phase_pending_dependencies(*phase, waypoint).contains(dependency)
+                    })
+                })
+            })
+        })
+        .collect()
 }
 
 fn pathing_phase_target_point(
@@ -626,6 +641,7 @@ fn pathing_phase_native_status(phase: PathingWaypointPhase) -> PathingNativePhas
 
 fn pathing_phase_pending_dependencies(
     phase: PathingWaypointPhase,
+    waypoint: &PathingWaypointPlan,
 ) -> Vec<PathingMovementDependency> {
     match phase {
         PathingWaypointPhase::RecoverWhenLowHp => vec![
@@ -651,7 +667,26 @@ fn pathing_phase_pending_dependencies(
             PathingMovementDependency::MovementTermination,
             PathingMovementDependency::TrapEscape,
         ],
-        PathingWaypointPhase::RunAction => vec![PathingMovementDependency::ActionHandlers],
+        PathingWaypointPhase::RunAction => pathing_action_pending_dependencies(waypoint),
+    }
+}
+
+fn pathing_action_pending_dependencies(
+    waypoint: &PathingWaypointPlan,
+) -> Vec<PathingMovementDependency> {
+    let executor_ready = match waypoint.action_plan.as_ref() {
+        Some(PathingActionPlan::SetTime(plan)) => plan.executor_ready,
+        Some(PathingActionPlan::LogOutput(plan)) => plan.executor_ready,
+        Some(PathingActionPlan::CommonJob(plan)) => plan.executor_ready,
+        Some(PathingActionPlan::ForceTeleport(plan)) => plan.executor_ready,
+        Some(PathingActionPlan::LinneaMining(plan)) => plan.executor_ready,
+        None => false,
+    };
+
+    if executor_ready {
+        Vec::new()
+    } else {
+        vec![PathingMovementDependency::ActionHandlers]
     }
 }
 

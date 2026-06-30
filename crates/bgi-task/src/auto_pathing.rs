@@ -4,9 +4,10 @@ use crate::{
 };
 use bgi_core::{
     read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingCoordinateSpace,
-    PathingExecutionPlan, PathingLogOutputActionPlan, PathingMovementDependency, PathingPoint,
-    PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingWaypointPhase,
-    PathingWaypointPlan,
+    PathingExecutionPlan, PathingLogOutputActionPlan, PathingMovementDependency,
+    PathingMovementPhaseContract, PathingMovementSegmentContract, PathingMovementWaypointContract,
+    PathingPoint, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary,
+    PathingWaypointPhase, PathingWaypointPlan,
 };
 use bgi_vision::Size;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,7 @@ pub struct AutoPathingActionBoundaryReport {
     pub movement_pending_dependencies: Vec<PathingMovementDependency>,
     pub movement_segment_count: usize,
     pub movement_waypoint_count: usize,
+    pub movement_report: Option<AutoPathingMovementBoundaryReport>,
     pub executed_actions: usize,
     pub skipped_actions: usize,
     pub unsupported_actions: usize,
@@ -102,6 +104,64 @@ pub struct AutoPathingExecutionReport {
     pub cancelled: bool,
     pub phase_reports: Vec<AutoPathingPhaseExecutionReport>,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AutoPathingMovementBoundaryReport {
+    pub source: &'static str,
+    pub route: String,
+    pub normalized_path: PathBuf,
+    pub movement_contract_consumed: bool,
+    pub movement_completed: bool,
+    pub movement_completion_status: AutoPathingMovementCompletionStatus,
+    pub native_pathing_completed: bool,
+    pub movement_executor_ready: bool,
+    pub movement_contract_version: u8,
+    pub movement_pending_dependencies: Vec<PathingMovementDependency>,
+    pub movement_segment_count: usize,
+    pub movement_waypoint_count: usize,
+    pub executed_phases: usize,
+    pub skipped_phases: usize,
+    pub unsupported_phases: usize,
+    pub failed_phases: usize,
+    pub cancelled_phases: usize,
+    pub failed_phase: Option<AutoPathingMovementFailedPhase>,
+    pub segment_reports: Vec<PathingMovementSegmentBoundaryReport>,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AutoPathingMovementFailedPhase {
+    pub global_index: usize,
+    pub segment_index: usize,
+    pub segment_waypoint_index: usize,
+    pub phase: PathingWaypointPhase,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementSegmentBoundaryReport {
+    pub segment_index: usize,
+    pub waypoint_reports: Vec<PathingMovementWaypointBoundaryReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementWaypointBoundaryReport {
+    pub global_index: usize,
+    pub segment_index: usize,
+    pub segment_waypoint_index: usize,
+    pub waypoint_type: String,
+    pub move_mode: String,
+    pub action: Option<String>,
+    pub phase_reports: Vec<PathingMovementPhaseBoundaryReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingMovementPhaseBoundaryReport {
+    pub phase: PathingWaypointPhase,
+    pub status: AutoPathingPhaseExecutionStatus,
+    pub message: String,
+    pub pending_dependencies: Vec<PathingMovementDependency>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -224,6 +284,13 @@ pub struct AutoPathingPreflightExecutionContext<'a> {
     pub phase: AutoPathingPreflightPhase,
 }
 
+pub struct AutoPathingMovementPhaseExecutionContext<'a> {
+    pub plan: &'a AutoPathingExecutionPlan,
+    pub segment: &'a PathingMovementSegmentContract,
+    pub waypoint: &'a PathingMovementWaypointContract,
+    pub phase: &'a PathingMovementPhaseContract,
+}
+
 pub trait AutoPathingRuntime {
     fn execute_preflight(
         &mut self,
@@ -238,6 +305,13 @@ pub trait AutoPathingRuntime {
     fn execute_phase(
         &mut self,
         context: AutoPathingPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution>;
+}
+
+pub trait AutoPathingMovementRuntime {
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
     ) -> Result<AutoPathingPhaseExecution>;
 }
 
@@ -263,6 +337,30 @@ impl AutoPathingRuntime for UnsupportedAutoPathingRuntime {
             )),
         };
         Ok(execution)
+    }
+}
+
+pub struct UnsupportedAutoPathingMovementRuntime;
+
+impl AutoPathingMovementRuntime for UnsupportedAutoPathingMovementRuntime {
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        if context.phase.pending_dependencies.is_empty() {
+            return Ok(AutoPathingPhaseExecution::skipped(format!(
+                "{:?} has no native side effect for AutoPathing route {}",
+                context.phase.phase, context.plan.route
+            )));
+        }
+
+        Ok(AutoPathingPhaseExecution::unsupported(format!(
+            "{:?} is still native-pending for AutoPathing route {} at waypoint {} because it requires {:?}",
+            context.phase.phase,
+            context.plan.route,
+            context.waypoint.global_index,
+            context.phase.pending_dependencies
+        )))
     }
 }
 
@@ -352,6 +450,140 @@ where
     R: AutoPathingRuntime,
 {
     execute_auto_pathing_with_runtime_and_cancellation(plan, runtime, || false)
+}
+
+pub fn execute_auto_pathing_movement_contract_with_runtime<R>(
+    plan: &AutoPathingExecutionPlan,
+    runtime: &mut R,
+) -> Result<AutoPathingMovementBoundaryReport>
+where
+    R: AutoPathingMovementRuntime,
+{
+    execute_auto_pathing_movement_contract_with_runtime_and_cancellation(plan, runtime, || false)
+}
+
+pub fn execute_auto_pathing_movement_contract_with_runtime_and_cancellation<R, F>(
+    plan: &AutoPathingExecutionPlan,
+    runtime: &mut R,
+    mut should_cancel: F,
+) -> Result<AutoPathingMovementBoundaryReport>
+where
+    R: AutoPathingMovementRuntime,
+    F: FnMut() -> bool,
+{
+    let contract = &plan.execution_plan.movement_contract;
+    let mut report = AutoPathingMovementBoundaryReport {
+        source: plan.source,
+        route: plan.route.clone(),
+        normalized_path: plan.normalized_path.clone(),
+        movement_contract_consumed: contract.waypoint_count > 0,
+        movement_completed: false,
+        movement_completion_status: AutoPathingMovementCompletionStatus::NotAttempted,
+        native_pathing_completed: false,
+        movement_executor_ready: contract.movement_executor_ready,
+        movement_contract_version: contract.contract_version,
+        movement_pending_dependencies: contract.pending_dependencies.clone(),
+        movement_segment_count: contract.segment_count,
+        movement_waypoint_count: contract.waypoint_count,
+        executed_phases: 0,
+        skipped_phases: 0,
+        unsupported_phases: 0,
+        failed_phases: 0,
+        cancelled_phases: 0,
+        failed_phase: None,
+        segment_reports: Vec::new(),
+        notes:
+            "AutoPathing movement contract consumer reports native PathExecutor phase readiness without claiming completion unless every injected movement phase succeeds."
+                .to_string(),
+    };
+
+    if contract.waypoint_count == 0 {
+        return Ok(report);
+    }
+
+    for segment in &contract.segments {
+        let mut segment_report = PathingMovementSegmentBoundaryReport {
+            segment_index: segment.segment_index,
+            waypoint_reports: Vec::new(),
+        };
+
+        for waypoint in &segment.waypoints {
+            let mut waypoint_report = PathingMovementWaypointBoundaryReport {
+                global_index: waypoint.global_index,
+                segment_index: waypoint.segment_index,
+                segment_waypoint_index: waypoint.segment_waypoint_index,
+                waypoint_type: waypoint.waypoint_type.clone(),
+                move_mode: waypoint.move_mode.clone(),
+                action: waypoint.action.clone(),
+                phase_reports: Vec::new(),
+            };
+
+            for phase in &waypoint.phase_contracts {
+                let phase_execution = if should_cancel() {
+                    AutoPathingPhaseExecution {
+                        status: AutoPathingPhaseExecutionStatus::Cancelled,
+                        message: "AutoPathing movement execution cancelled before phase dispatch"
+                            .to_string(),
+                    }
+                } else {
+                    runtime.execute_movement_phase(AutoPathingMovementPhaseExecutionContext {
+                        plan,
+                        segment,
+                        waypoint,
+                        phase,
+                    })?
+                };
+
+                match phase_execution.status {
+                    AutoPathingPhaseExecutionStatus::Executed => report.executed_phases += 1,
+                    AutoPathingPhaseExecutionStatus::Skipped => report.skipped_phases += 1,
+                    AutoPathingPhaseExecutionStatus::Unsupported => report.unsupported_phases += 1,
+                    AutoPathingPhaseExecutionStatus::Failed => report.failed_phases += 1,
+                    AutoPathingPhaseExecutionStatus::Cancelled => report.cancelled_phases += 1,
+                }
+
+                let should_stop = matches!(
+                    phase_execution.status,
+                    AutoPathingPhaseExecutionStatus::Unsupported
+                        | AutoPathingPhaseExecutionStatus::Failed
+                        | AutoPathingPhaseExecutionStatus::Cancelled
+                );
+                let message = phase_execution.message.clone();
+                waypoint_report
+                    .phase_reports
+                    .push(PathingMovementPhaseBoundaryReport {
+                        phase: phase.phase,
+                        status: phase_execution.status,
+                        message: phase_execution.message,
+                        pending_dependencies: phase.pending_dependencies.clone(),
+                    });
+
+                if should_stop {
+                    report.failed_phase = Some(AutoPathingMovementFailedPhase {
+                        global_index: waypoint.global_index,
+                        segment_index: waypoint.segment_index,
+                        segment_waypoint_index: waypoint.segment_waypoint_index,
+                        phase: phase.phase,
+                        message,
+                    });
+                    segment_report.waypoint_reports.push(waypoint_report);
+                    report.segment_reports.push(segment_report);
+                    report.movement_completion_status =
+                        AutoPathingMovementCompletionStatus::NativePending;
+                    return Ok(report);
+                }
+            }
+
+            segment_report.waypoint_reports.push(waypoint_report);
+        }
+
+        report.segment_reports.push(segment_report);
+    }
+
+    report.movement_completed = true;
+    report.native_pathing_completed = true;
+    report.movement_completion_status = AutoPathingMovementCompletionStatus::Completed;
+    Ok(report)
 }
 
 pub fn evaluate_auto_pathing_resolution_preflight(
@@ -614,6 +846,9 @@ where
     F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
 {
     let movement_contract = &plan.execution_plan.movement_contract;
+    let mut movement_runtime = UnsupportedAutoPathingMovementRuntime;
+    let movement_report =
+        execute_auto_pathing_movement_contract_with_runtime(plan, &mut movement_runtime)?;
     let mut report = AutoPathingActionBoundaryReport {
         source: plan.source,
         route: plan.route.clone(),
@@ -621,15 +856,14 @@ where
         completion_scope: AutoPathingActionBoundaryCompletionScope::ActionBoundaryOnly,
         boundary_completed: false,
         movement_attempted: false,
-        movement_completion_status: auto_pathing_movement_completion_status(
-            movement_contract.movement_executor_ready,
-        ),
+        movement_completion_status: movement_report.movement_completion_status,
         native_pathing_completed: false,
         movement_executor_ready: movement_contract.movement_executor_ready,
         movement_contract_version: movement_contract.contract_version,
         movement_pending_dependencies: movement_contract.pending_dependencies.clone(),
         movement_segment_count: movement_contract.segment_count,
         movement_waypoint_count: movement_contract.waypoint_count,
+        movement_report: Some(movement_report),
         executed_actions: 0,
         skipped_actions: 0,
         unsupported_actions: 0,
@@ -708,16 +942,6 @@ where
     report.boundary_completed = true;
     report.native_pathing_completed = false;
     Ok(report)
-}
-
-fn auto_pathing_movement_completion_status(
-    movement_executor_ready: bool,
-) -> AutoPathingMovementCompletionStatus {
-    if movement_executor_ready {
-        AutoPathingMovementCompletionStatus::NotAttempted
-    } else {
-        AutoPathingMovementCompletionStatus::NativePending
-    }
 }
 
 fn pathing_phase_boundary_report(
