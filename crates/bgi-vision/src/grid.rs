@@ -13,6 +13,24 @@ pub struct GridCell {
     pub is_phantom: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct VisibleGridEnumerationSpec {
+    pub roi: Rect,
+    pub columns: u8,
+    pub min_width_per_column_ratio: f64,
+    pub shape_ratio_target: f64,
+    pub shape_ratio_tolerance: f64,
+    pub top_right_exclusion_x_ratio: f64,
+    pub top_right_exclusion_y_ratio: f64,
+    pub canny_low_threshold: f64,
+    pub canny_high_threshold: f64,
+    pub close_kernel_width: i32,
+    pub close_kernel_height: i32,
+    pub fill_missing_threshold: i32,
+    pub phantom_bottom_color: BgrPixel,
+    pub phantom_tolerance: u8,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridIconCropSpec {
     pub normalized_size: Size,
@@ -84,6 +102,37 @@ pub fn cluster_grid_cells(rects: &[Rect], threshold: i32) -> Vec<GridCell> {
     let mut cells = assign_grid_cell_rows_and_columns(rects, threshold);
     fill_missing_grid_cells(&mut cells);
     cells
+}
+
+pub fn enumerate_visible_grid_cells(
+    image: &BgrImage,
+    spec: VisibleGridEnumerationSpec,
+) -> Result<Vec<GridCell>> {
+    validate_visible_grid_enumeration_spec(image.size, spec)?;
+    let roi = spec.roi.clamp_to(image.size)?;
+    if roi.width <= 0 || roi.height <= 0 {
+        return Err(VisionError::InvalidRect);
+    }
+    let roi_image = crop_bgr_image(image, roi)?;
+    let candidates = visible_grid_candidate_rects(&roi_image, spec)?
+        .into_iter()
+        .map(|rect| Rect {
+            x: rect.x + roi.x,
+            y: rect.y + roi.y,
+            width: rect.width,
+            height: rect.height,
+        })
+        .collect::<Vec<_>>();
+    let mut cells = post_process_grid_cells(
+        image,
+        &candidates,
+        spec.fill_missing_threshold,
+        spec.phantom_bottom_color,
+        spec.phantom_tolerance,
+    )?;
+    cells.retain(|cell| cell.col >= 0 && cell.col < spec.columns as i32);
+    cells.sort_by_key(|cell| (cell.row, cell.col, cell.rect.y, cell.rect.x));
+    Ok(cells)
 }
 
 pub fn assign_grid_cell_rows_and_columns(rects: &[Rect], threshold: i32) -> Vec<GridCell> {
@@ -419,6 +468,234 @@ fn linear_sample_axis(source: f64, upper: u32) -> (u32, u32, f64) {
 fn bgr_channel(image: &BgrImage, x: u32, y: u32, channel: usize) -> f64 {
     let index = ((y * image.size.width + x) as usize) * 3 + channel;
     image.pixels[index] as f64
+}
+
+fn validate_visible_grid_enumeration_spec(
+    size: Size,
+    spec: VisibleGridEnumerationSpec,
+) -> Result<()> {
+    if size.width == 0
+        || size.height == 0
+        || spec.roi.width <= 0
+        || spec.roi.height <= 0
+        || spec.columns == 0
+        || spec.min_width_per_column_ratio <= 0.0
+        || spec.shape_ratio_target <= 0.0
+        || spec.shape_ratio_tolerance < 0.0
+        || spec.close_kernel_width <= 0
+        || spec.close_kernel_height <= 0
+        || spec.fill_missing_threshold < 0
+    {
+        return Err(VisionError::InvalidRect);
+    }
+    Ok(())
+}
+
+fn visible_grid_candidate_rects(
+    image: &BgrImage,
+    spec: VisibleGridEnumerationSpec,
+) -> Result<Vec<Rect>> {
+    let edge_mask = visible_grid_edge_mask(image, spec)?;
+    let closed_mask = close_binary_mask(
+        &edge_mask,
+        image.size,
+        spec.close_kernel_width as u32,
+        spec.close_kernel_height as u32,
+    );
+    let components = connected_component_rects(&closed_mask, image.size);
+    let column_width = image.size.width as f64 / spec.columns as f64;
+    let min_width = column_width * spec.min_width_per_column_ratio;
+    let mut rects = Vec::new();
+    for rect in components {
+        if rect.width as f64 <= min_width {
+            continue;
+        }
+        if rect.height <= 0 {
+            continue;
+        }
+        let ratio = rect.width as f64 / rect.height as f64;
+        if (ratio - spec.shape_ratio_target).abs() > spec.shape_ratio_tolerance {
+            continue;
+        }
+        if is_top_right_excluded(rect, image.size, spec) {
+            continue;
+        }
+        rects.push(rect);
+    }
+    rects.sort_by_key(|rect| (rect.y, rect.x));
+    Ok(rects)
+}
+
+fn visible_grid_edge_mask(image: &BgrImage, spec: VisibleGridEnumerationSpec) -> Result<Vec<bool>> {
+    let gray = convert_bgr_image(&image.pixels, image.size, ColorConversion::BgrToGray)?;
+    let threshold = ((spec.canny_low_threshold + spec.canny_high_threshold) / 2.0).max(1.0);
+    let width = image.size.width as usize;
+    let height = image.size.height as usize;
+    let mut mask = vec![false; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let center = gray.pixels[y * width + x] as f64;
+            let left = if x > 0 {
+                gray.pixels[y * width + x - 1] as f64
+            } else {
+                center
+            };
+            let right = if x + 1 < width {
+                gray.pixels[y * width + x + 1] as f64
+            } else {
+                center
+            };
+            let top = if y > 0 {
+                gray.pixels[(y - 1) * width + x] as f64
+            } else {
+                center
+            };
+            let bottom = if y + 1 < height {
+                gray.pixels[(y + 1) * width + x] as f64
+            } else {
+                center
+            };
+            let magnitude = (right - left).abs() + (bottom - top).abs();
+            mask[y * width + x] = magnitude >= threshold;
+        }
+    }
+    Ok(mask)
+}
+
+fn close_binary_mask(
+    mask: &[bool],
+    size: Size,
+    kernel_width: u32,
+    kernel_height: u32,
+) -> Vec<bool> {
+    let dilated = dilate_binary_mask(mask, size, kernel_width, kernel_height);
+    erode_binary_mask(&dilated, size, kernel_width, kernel_height)
+}
+
+fn dilate_binary_mask(
+    mask: &[bool],
+    size: Size,
+    kernel_width: u32,
+    kernel_height: u32,
+) -> Vec<bool> {
+    let width = size.width as i32;
+    let height = size.height as i32;
+    let radius_x = (kernel_width as i32 - 1) / 2;
+    let radius_y = (kernel_height as i32 - 1) / 2;
+    let mut output = vec![false; mask.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut value = false;
+            'window: for dy in -radius_y..=radius_y {
+                for dx in -radius_x..=radius_x {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx >= 0
+                        && ny >= 0
+                        && nx < width
+                        && ny < height
+                        && mask[(ny as u32 * size.width + nx as u32) as usize]
+                    {
+                        value = true;
+                        break 'window;
+                    }
+                }
+            }
+            output[(y as u32 * size.width + x as u32) as usize] = value;
+        }
+    }
+    output
+}
+
+fn erode_binary_mask(
+    mask: &[bool],
+    size: Size,
+    kernel_width: u32,
+    kernel_height: u32,
+) -> Vec<bool> {
+    let width = size.width as i32;
+    let height = size.height as i32;
+    let radius_x = (kernel_width as i32 - 1) / 2;
+    let radius_y = (kernel_height as i32 - 1) / 2;
+    let mut output = vec![false; mask.len()];
+    for y in 0..height {
+        for x in 0..width {
+            let mut value = true;
+            'window: for dy in -radius_y..=radius_y {
+                for dx in -radius_x..=radius_x {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    if nx < 0
+                        || ny < 0
+                        || nx >= width
+                        || ny >= height
+                        || !mask[(ny as u32 * size.width + nx as u32) as usize]
+                    {
+                        value = false;
+                        break 'window;
+                    }
+                }
+            }
+            output[(y as u32 * size.width + x as u32) as usize] = value;
+        }
+    }
+    output
+}
+
+fn connected_component_rects(mask: &[bool], size: Size) -> Vec<Rect> {
+    let mut visited = vec![false; mask.len()];
+    let mut rects = Vec::new();
+    let width = size.width as i32;
+    let height = size.height as i32;
+    let mut stack = Vec::new();
+
+    for y in 0..height {
+        for x in 0..width {
+            let start_index = (y as u32 * size.width + x as u32) as usize;
+            if visited[start_index] || !mask[start_index] {
+                continue;
+            }
+
+            visited[start_index] = true;
+            stack.clear();
+            stack.push((x, y));
+            let mut min_x = x;
+            let mut max_x = x;
+            let mut min_y = y;
+            let mut max_y = y;
+
+            while let Some((cx, cy)) = stack.pop() {
+                min_x = min_x.min(cx);
+                max_x = max_x.max(cx);
+                min_y = min_y.min(cy);
+                max_y = max_y.max(cy);
+
+                for (nx, ny) in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
+                    if nx < 0 || ny < 0 || nx >= width || ny >= height {
+                        continue;
+                    }
+                    let index = (ny as u32 * size.width + nx as u32) as usize;
+                    if visited[index] || !mask[index] {
+                        continue;
+                    }
+                    visited[index] = true;
+                    stack.push((nx, ny));
+                }
+            }
+
+            if let Ok(rect) = Rect::new(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1) {
+                rects.push(rect);
+            }
+        }
+    }
+
+    rects
+}
+
+fn is_top_right_excluded(rect: Rect, size: Size, spec: VisibleGridEnumerationSpec) -> bool {
+    let center = rect.center();
+    center.x as f64 >= size.width as f64 * spec.top_right_exclusion_x_ratio
+        && center.y as f64 <= size.height as f64 * spec.top_right_exclusion_y_ratio
 }
 
 fn average_row_spacing(cells: &[GridCell]) -> f64 {

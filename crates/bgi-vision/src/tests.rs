@@ -775,6 +775,80 @@ fn grid_post_process_filters_phantom_cells_by_legacy_bottom_color() {
 }
 
 #[test]
+fn visible_grid_enumeration_detects_current_page_cells_and_filters_noise() {
+    let roi = Rect::new(20, 15, 150, 110).unwrap();
+    let mut image = solid_bgr_image(Size::new(190, 140), [12, 12, 12]);
+    let cell_rects = [
+        Rect::new(30, 25, 30, 40).unwrap(),
+        Rect::new(75, 25, 30, 40).unwrap(),
+        Rect::new(120, 25, 30, 40).unwrap(),
+        Rect::new(30, 75, 30, 40).unwrap(),
+        Rect::new(75, 75, 30, 40).unwrap(),
+        Rect::new(120, 75, 30, 40).unwrap(),
+    ];
+    for rect in cell_rects {
+        draw_rect_edge(&mut image, rect, [245, 245, 245]);
+    }
+    draw_rect_edge(
+        &mut image,
+        Rect::new(150, 17, 10, 10).unwrap(),
+        [245, 245, 245],
+    );
+    draw_rect_edge(
+        &mut image,
+        Rect::new(22, 120, 5, 10).unwrap(),
+        [245, 245, 245],
+    );
+
+    let cells = enumerate_visible_grid_cells(&image, test_visible_grid_spec(roi, 3)).unwrap();
+
+    assert_eq!(cells.len(), 6);
+    assert!(cells.iter().all(|cell| !cell.is_phantom));
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| (cell.row, cell.col))
+            .collect::<Vec<_>>(),
+        vec![(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
+    );
+    assert_eq!(cells[0].rect, Rect::new(29, 24, 32, 42).unwrap());
+}
+
+#[test]
+fn visible_grid_enumeration_fills_missing_cells_with_legacy_phantom_color() {
+    let roi = Rect::new(20, 15, 150, 110).unwrap();
+    let phantom = BgrPixel {
+        b: 0xdc,
+        g: 0xe5,
+        r: 0xe9,
+    };
+    let mut image = solid_bgr_image(Size::new(190, 140), [phantom.b, phantom.g, phantom.r]);
+    for rect in [
+        Rect::new(30, 25, 30, 40).unwrap(),
+        Rect::new(30, 75, 30, 40).unwrap(),
+        Rect::new(75, 75, 30, 40).unwrap(),
+    ] {
+        draw_rect_edge(&mut image, rect, [0, 0, 0]);
+    }
+    let mut spec = test_visible_grid_spec(roi, 3);
+    spec.phantom_bottom_color = phantom;
+
+    let cells = enumerate_visible_grid_cells(&image, spec).unwrap();
+
+    assert_eq!(cells.len(), 4);
+    let phantom_cell = cells
+        .iter()
+        .find(|cell| cell.row == 0 && cell.col == 1)
+        .expect("expected missing top row cell to be synthesized");
+    assert!(phantom_cell.is_phantom);
+    assert_eq!(phantom_cell.rect, Rect::new(74, 24, 32, 42).unwrap());
+
+    let black = solid_bgr_image(Size::new(190, 140), [0, 0, 0]);
+    let cells = enumerate_visible_grid_cells(&black, spec).unwrap();
+    assert!(cells.is_empty());
+}
+
+#[test]
 fn grid_icon_and_count_text_crops_follow_legacy_ratios() {
     let image = patterned_bgr_image(Size::new(250, 306));
     let crops = crop_grid_icon(&image, GridIconCropSpec::legacy_inventory()).unwrap();
@@ -827,6 +901,62 @@ fn solid_bgr_image(size: Size, pixel: [u8; 3]) -> BgrImage {
         pixels.extend_from_slice(&pixel);
     }
     BgrImage::new(size, pixels).unwrap()
+}
+
+fn test_visible_grid_spec(roi: Rect, columns: u8) -> VisibleGridEnumerationSpec {
+    VisibleGridEnumerationSpec {
+        roi,
+        columns,
+        min_width_per_column_ratio: 0.4,
+        shape_ratio_target: 0.75,
+        shape_ratio_tolerance: 0.2,
+        top_right_exclusion_x_ratio: 0.75,
+        top_right_exclusion_y_ratio: 0.2,
+        canny_low_threshold: 30.0,
+        canny_high_threshold: 80.0,
+        close_kernel_width: 3,
+        close_kernel_height: 3,
+        fill_missing_threshold: 8,
+        phantom_bottom_color: BgrPixel {
+            b: 0xdc,
+            g: 0xe5,
+            r: 0xe9,
+        },
+        phantom_tolerance: 30,
+    }
+}
+
+fn draw_rect_edge(image: &mut BgrImage, rect: Rect, bgr: [u8; 3]) {
+    for x in rect.x.max(0)..rect.right().min(image.size.width as i32) {
+        set_bgr_pixel(image, x as u32, rect.y.max(0) as u32, bgr);
+        if rect.bottom() > 0 {
+            set_bgr_pixel(
+                image,
+                x as u32,
+                (rect.bottom() - 1).min(image.size.height as i32 - 1) as u32,
+                bgr,
+            );
+        }
+    }
+    for y in rect.y.max(0)..rect.bottom().min(image.size.height as i32) {
+        set_bgr_pixel(image, rect.x.max(0) as u32, y as u32, bgr);
+        if rect.right() > 0 {
+            set_bgr_pixel(
+                image,
+                (rect.right() - 1).min(image.size.width as i32 - 1) as u32,
+                y as u32,
+                bgr,
+            );
+        }
+    }
+}
+
+fn set_bgr_pixel(image: &mut BgrImage, x: u32, y: u32, bgr: [u8; 3]) {
+    if x >= image.size.width || y >= image.size.height {
+        return;
+    }
+    let index = ((y * image.size.width + x) * 3) as usize;
+    image.pixels[index..index + 3].copy_from_slice(&bgr);
 }
 
 fn patterned_bgr_image(size: Size) -> BgrImage {

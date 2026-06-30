@@ -195,7 +195,7 @@ use bgi_vision::{
     registered_onnx_models, resize_bgr_nearest, BgrImage, BvImage, BvLocatorOperation,
     BvLocatorPlan, BvPageCommand, ColorConversion, GridIconCropSpec, ImageRegion, OcrMatchConfig,
     OcrResult, OcrResultRegion, OnnxModelLoadPlan, OnnxProviderSelection, PureRustVisionBackend,
-    RecognitionType, Rect, Region, Size as VisionSize, VisionBackend,
+    RecognitionType, Rect, Region, Size as VisionSize, VisibleGridEnumerationSpec, VisionBackend,
 };
 use chrono::{FixedOffset, Local, NaiveDate, Offset};
 use image::ImageEncoder;
@@ -7109,14 +7109,22 @@ where
 
     fn enumerate_auto_eat_food_grid_items(
         &mut self,
-        _template: &GridTemplate,
-        _detection_rule: &GridItemDetectionRule,
+        template: &GridTemplate,
+        detection_rule: &GridItemDetectionRule,
         _scroll_rule: &GridScrollRule,
     ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
         self.ensure_not_cancelled()?;
+        let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
+            &mut self.common,
+            self.capture_size,
+            template,
+            detection_rule,
+        )?;
         Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop inventory grid enumeration adapter"
-                .to_string(),
+            format!(
+                "AutoEatFood inventory-food live execution requires full desktop GridScroller inventory grid enumeration adapter after visible-page enumeration found {} current-page cell(s)",
+                visible_items.len()
+            ),
         ))
     }
 
@@ -12800,14 +12808,22 @@ where
 
     fn enumerate_count_inventory_grid_items(
         &mut self,
-        _template: &GridTemplate,
-        _detection_rule: &GridItemDetectionRule,
+        template: &GridTemplate,
+        detection_rule: &GridItemDetectionRule,
         _scroll_rule: &GridScrollRule,
     ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
         self.ensure_not_cancelled()?;
+        let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
+            &mut self.common,
+            self.capture_size,
+            template,
+            detection_rule,
+        )?;
         Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
-                .to_string(),
+            format!(
+                "CountInventoryItem live execution requires full desktop GridScroller inventory grid enumeration adapter after visible-page enumeration found {} current-page cell(s)",
+                visible_items.len()
+            ),
         ))
     }
 
@@ -12994,6 +13010,77 @@ where
     Ok(CommonJobRuntimeOutcome::Matched(
         desktop_inventory_locator_exists(common, &checked_locator)?,
     ))
+}
+
+fn desktop_enumerate_visible_inventory_grid_items_with_common_runtime<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    capture_size: VisionSize,
+    template: &GridTemplate,
+    detection_rule: &GridItemDetectionRule,
+) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    let frame = common.frame_source_mut().capture_frame()?;
+    let spec = desktop_visible_inventory_grid_spec(capture_size, template, detection_rule)
+        .map_err(|error| {
+            TaskError::VisionPlan(format!("inventory visible grid spec failed: {error}"))
+        })?;
+    let cells = bgi_vision::enumerate_visible_grid_cells(&frame, spec).map_err(|error| {
+        TaskError::VisionPlan(format!(
+            "inventory visible grid enumeration failed: {error}"
+        ))
+    })?;
+    Ok(cells
+        .into_iter()
+        .enumerate()
+        .map(|(index, cell)| CountInventoryGridItemFrame {
+            page_index: 0,
+            item_index: index as u32,
+            rect: cell.rect,
+        })
+        .collect())
+}
+
+fn desktop_visible_inventory_grid_spec(
+    capture_size: VisionSize,
+    template: &GridTemplate,
+    detection_rule: &GridItemDetectionRule,
+) -> bgi_vision::Result<VisibleGridEnumerationSpec> {
+    let roi = desktop_scaled_rect_1080p(template.roi_1080p, capture_size)?;
+    let threshold =
+        (roi.height as f64 * detection_rule.fill_missing_threshold_roi_height_ratio).round() as i32;
+    Ok(VisibleGridEnumerationSpec {
+        roi,
+        columns: template.columns,
+        min_width_per_column_ratio: detection_rule.min_width_per_column_ratio,
+        shape_ratio_target: detection_rule.shape_ratio_target,
+        shape_ratio_tolerance: detection_rule.shape_ratio_tolerance,
+        top_right_exclusion_x_ratio: detection_rule.top_right_exclusion_x_ratio,
+        top_right_exclusion_y_ratio: detection_rule.top_right_exclusion_y_ratio,
+        canny_low_threshold: detection_rule.canny_low_threshold,
+        canny_high_threshold: detection_rule.canny_high_threshold,
+        close_kernel_width: detection_rule.close_kernel_width,
+        close_kernel_height: detection_rule.close_kernel_height,
+        fill_missing_threshold: threshold,
+        phantom_bottom_color: bgi_vision::BgrPixel {
+            b: detection_rule.phantom_cell_bgr.b,
+            g: detection_rule.phantom_cell_bgr.g,
+            r: detection_rule.phantom_cell_bgr.r,
+        },
+        phantom_tolerance: detection_rule.phantom_cell_tolerance,
+    })
+}
+
+fn desktop_scaled_rect_1080p(rect: Rect, capture_size: VisionSize) -> bgi_vision::Result<Rect> {
+    Rect::new(
+        desktop_scaled_1080p(rect.x, capture_size),
+        desktop_scaled_1080p(rect.y, capture_size),
+        desktop_scaled_1080p(rect.width, capture_size),
+        desktop_scaled_1080p(rect.height, capture_size),
+    )
 }
 
 fn desktop_crop_inventory_grid_icons_with_common_runtime<F, I, C>(
@@ -19138,6 +19225,54 @@ mod tests {
         }
     }
 
+    fn desktop_test_inventory_grid_detection_rule() -> GridItemDetectionRule {
+        GridItemDetectionRule {
+            min_width_per_column_ratio: 0.4,
+            shape_ratio_target: 0.75,
+            shape_ratio_tolerance: 0.2,
+            top_right_exclusion_x_ratio: 0.8,
+            top_right_exclusion_y_ratio: 0.2,
+            canny_low_threshold: 30.0,
+            canny_high_threshold: 80.0,
+            close_kernel_width: 3,
+            close_kernel_height: 3,
+            fill_missing_threshold_roi_height_ratio: 0.04,
+            phantom_cell_bgr: bgi_task::GridBgrColor { b: 0, g: 0, r: 0 },
+            phantom_cell_tolerance: 30,
+        }
+    }
+
+    fn draw_desktop_bgr_rect_edge(image: &mut BgrImage, rect: Rect, bgr: [u8; 3]) {
+        for x in rect.x.max(0)..rect.right().min(image.size.width as i32) {
+            set_desktop_bgr_pixel(
+                &mut image.pixels,
+                image.size,
+                (x as u32, rect.y as u32),
+                bgr,
+            );
+            set_desktop_bgr_pixel(
+                &mut image.pixels,
+                image.size,
+                (x as u32, (rect.bottom() - 1).max(0) as u32),
+                bgr,
+            );
+        }
+        for y in rect.y.max(0)..rect.bottom().min(image.size.height as i32) {
+            set_desktop_bgr_pixel(
+                &mut image.pixels,
+                image.size,
+                (rect.x as u32, y as u32),
+                bgr,
+            );
+            set_desktop_bgr_pixel(
+                &mut image.pixels,
+                image.size,
+                ((rect.right() - 1).max(0) as u32, y as u32),
+                bgr,
+            );
+        }
+    }
+
     #[derive(Debug)]
     struct DesktopTalkOptionTestFrameSource {
         frames: VecDeque<BgrImage>,
@@ -19246,6 +19381,54 @@ mod tests {
                 r: 67
             })
         );
+    }
+
+    #[test]
+    fn desktop_inventory_visible_grid_enumeration_maps_current_frame_cells() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let template = GridTemplate {
+            roi_1080p: Rect::new(200, 150, 300, 220).unwrap(),
+            columns: 3,
+            s1_round: 3,
+            round_milliseconds: 40,
+            s2_round: 32,
+            s3_scale: 0.024,
+        };
+        let detection_rule = desktop_test_inventory_grid_detection_rule();
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        for rect in [
+            Rect::new(220, 170, 60, 80).unwrap(),
+            Rect::new(310, 170, 60, 80).unwrap(),
+            Rect::new(400, 170, 60, 80).unwrap(),
+            Rect::new(220, 270, 60, 80).unwrap(),
+        ] {
+            draw_desktop_bgr_rect_edge(&mut frame, rect, [245, 245, 245]);
+        }
+        let mut runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+
+        let items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
+            &mut runtime,
+            capture_size,
+            &template,
+            &detection_rule,
+        )
+        .unwrap();
+        let (_, frame_source, _, _, _) = runtime.into_parts();
+
+        assert_eq!(frame_source.captures, 1);
+        assert_eq!(items.len(), 6);
+        assert!(items.iter().all(|item| item.page_index == 0));
+        assert_eq!(
+            items.iter().map(|item| item.item_index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(items[0].rect, Rect::new(219, 169, 62, 82).unwrap());
+        assert_eq!(items[4].rect, Rect::new(309, 269, 62, 82).unwrap());
     }
 
     #[test]
