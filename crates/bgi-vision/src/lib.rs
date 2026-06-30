@@ -5,6 +5,7 @@ mod backend;
 mod bv;
 #[path = "geometry.rs"]
 mod geometry;
+mod grid;
 mod onnx;
 #[path = "recognition.rs"]
 mod recognition;
@@ -14,6 +15,7 @@ mod region;
 pub use backend::*;
 pub use bv::*;
 pub use geometry::*;
+pub use grid::*;
 pub use onnx::*;
 pub use recognition::*;
 pub use region::*;
@@ -39,6 +41,8 @@ pub enum VisionError {
     },
     #[error("BGR image buffer length {actual} does not match expected length {expected}")]
     InvalidImageBuffer { expected: usize, actual: usize },
+    #[error("image size mismatch: expected {expected:?}, got {actual:?}")]
+    ImageSizeMismatch { expected: Size, actual: Size },
     #[error("failed to decode image {path:?}: {source}")]
     ImageDecode {
         path: Option<PathBuf>,

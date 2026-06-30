@@ -720,11 +720,145 @@ fn onnx_model_load_plan_falls_back_to_source_without_tensor_rt_provider() {
     assert!(!plan.will_generate_tensor_rt_cache);
 }
 
+#[test]
+fn grid_cells_cluster_rows_columns_and_fill_missing_phantoms() {
+    let rects = vec![
+        Rect::new(0, 0, 80, 100).unwrap(),
+        Rect::new(0, 120, 80, 100).unwrap(),
+        Rect::new(100, 120, 80, 100).unwrap(),
+    ];
+
+    let mut cells = cluster_grid_cells(&rects, 20);
+    cells.sort_by_key(|cell| (cell.row, cell.col));
+
+    assert_eq!(cells.len(), 4);
+    assert_eq!((cells[0].row, cells[0].col), (0, 0));
+    assert!(!cells[0].is_phantom);
+    assert_eq!((cells[1].row, cells[1].col), (0, 1));
+    assert!(cells[1].is_phantom);
+    assert_eq!(cells[1].rect, Rect::new(100, 0, 80, 100).unwrap());
+    assert_eq!((cells[2].row, cells[2].col), (1, 0));
+    assert_eq!((cells[3].row, cells[3].col), (1, 1));
+
+    let tied = assign_grid_cell_rows_and_columns(
+        &[
+            Rect::new(0, 0, 80, 100).unwrap(),
+            Rect::new(250, 0, 80, 100).unwrap(),
+        ],
+        20,
+    );
+    assert_eq!(tied[1].col, 2);
+}
+
+#[test]
+fn grid_post_process_filters_phantom_cells_by_legacy_bottom_color() {
+    let rects = vec![
+        Rect::new(0, 0, 80, 100).unwrap(),
+        Rect::new(0, 120, 80, 100).unwrap(),
+        Rect::new(100, 120, 80, 100).unwrap(),
+    ];
+    let target = BgrPixel {
+        b: 0xdc,
+        g: 0xe5,
+        r: 0xe9,
+    };
+    let image = solid_bgr_image(Size::new(220, 240), [target.b, target.g, target.r]);
+
+    let cells = post_process_grid_cells(&image, &rects, 20, target, 30).unwrap();
+    assert_eq!(cells.len(), 4);
+    assert!(cells.iter().any(|cell| cell.is_phantom));
+
+    let black = solid_bgr_image(Size::new(220, 240), [0, 0, 0]);
+    let cells = post_process_grid_cells(&black, &rects, 20, target, 30).unwrap();
+    assert_eq!(cells.len(), 3);
+    assert!(!cells.iter().any(|cell| cell.is_phantom));
+}
+
+#[test]
+fn grid_icon_and_count_text_crops_follow_legacy_ratios() {
+    let image = patterned_bgr_image(Size::new(250, 306));
+    let crops = crop_grid_icon(&image, GridIconCropSpec::legacy_inventory()).unwrap();
+
+    assert_eq!(crops.normalized.size, Size::new(125, 153));
+    assert_eq!(crops.icon.size, Size::new(125, 125));
+    assert_eq!(crops.bottom.size, Size::new(125, 27));
+
+    let text = crop_grid_item_count_text(
+        &crops.normalized,
+        GridItemTextCropSpec::legacy_inventory_count(),
+    )
+    .unwrap();
+    assert_eq!(text.size, Size::new(230, 44));
+}
+
+#[test]
+fn grid_scroll_shift_rejects_identical_and_blank_frames_but_detects_translation() {
+    assert!(!classify_grid_scroll_response(0.5, 0.5, 0.95));
+    assert!(classify_grid_scroll_response(0.51, 0.5, 0.95));
+    assert!(!classify_grid_scroll_response(0.95, 0.5, 0.95));
+
+    let previous = patterned_bgr_image(Size::new(6, 6));
+    let identical = detect_grid_scroll_shift(&previous, &previous, 0.5, 0.95, 2).unwrap();
+    assert!(!identical.is_scrolling);
+    assert!(identical.response >= 0.95);
+
+    let blank = solid_bgr_image(Size::new(6, 6), [0, 0, 0]);
+    let blank_decision = detect_grid_scroll_shift(&blank, &blank, 0.5, 0.95, 2).unwrap();
+    assert!(!blank_decision.is_scrolling);
+    assert_eq!(blank_decision.response, 0.0);
+
+    let shifted = shift_bgr_image(&previous, 0, -1, [0, 0, 0]);
+    let decision = detect_grid_scroll_shift(&previous, &shifted, 0.5, 0.95, 2).unwrap();
+    assert!(decision.is_scrolling);
+    assert_eq!((decision.shift_x, decision.shift_y), (0, -1));
+    assert!(decision.response > 0.5 && decision.response < 0.95);
+}
+
 fn bgr_pixels(values: &[[u8; 3]]) -> Vec<u8> {
     values
         .iter()
         .flat_map(|pixel| pixel.iter().copied())
         .collect()
+}
+
+fn solid_bgr_image(size: Size, pixel: [u8; 3]) -> BgrImage {
+    let mut pixels = Vec::with_capacity(size.width as usize * size.height as usize * 3);
+    for _ in 0..size.width as usize * size.height as usize {
+        pixels.extend_from_slice(&pixel);
+    }
+    BgrImage::new(size, pixels).unwrap()
+}
+
+fn patterned_bgr_image(size: Size) -> BgrImage {
+    let mut pixels = Vec::with_capacity(size.width as usize * size.height as usize * 3);
+    for y in 0..size.height {
+        for x in 0..size.width {
+            let value = ((x * 37 + y * 53 + (x * y * 11)) % 251) as u8;
+            pixels.extend_from_slice(&[value, value, value]);
+        }
+    }
+    BgrImage::new(size, pixels).unwrap()
+}
+
+fn shift_bgr_image(image: &BgrImage, shift_x: i32, shift_y: i32, fill: [u8; 3]) -> BgrImage {
+    let mut pixels = Vec::with_capacity(image.pixels.len());
+    for y in 0..image.size.height as i32 {
+        for x in 0..image.size.width as i32 {
+            let source_x = x - shift_x;
+            let source_y = y - shift_y;
+            if source_x >= 0
+                && source_y >= 0
+                && source_x < image.size.width as i32
+                && source_y < image.size.height as i32
+            {
+                let index = ((source_y as u32 * image.size.width + source_x as u32) as usize) * 3;
+                pixels.extend_from_slice(&image.pixels[index..index + 3]);
+            } else {
+                pixels.extend_from_slice(&fill);
+            }
+        }
+    }
+    BgrImage::new(image.size, pixels).unwrap()
 }
 
 fn temp_path(name: &str) -> PathBuf {
