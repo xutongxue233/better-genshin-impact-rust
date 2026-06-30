@@ -175,6 +175,8 @@ fn pathing_execution_plan_splits_segments_like_legacy_executor() {
     assert!(plan.segments[0].seed_previous_position_requires_track_conversion);
     assert_eq!(plan.segments[1].waypoint_count, 3);
     assert!(plan.segments[1].starts_with_teleport);
+    assert_eq!(plan.segments[1].pre_teleport_delay_ms, 0);
+    assert_eq!(plan.movement_contract.segments[1].pre_teleport_delay_ms, 0);
     assert_eq!(plan.segments[1].seed_previous_position, None);
     assert_eq!(
         plan.segments[1].seed_previous_position_coordinate_space,
@@ -259,6 +261,61 @@ fn pathing_execution_plan_splits_segments_like_legacy_executor() {
     assert!(!leaf.phases.contains(&PathingWaypointPhase::MoveTo));
     assert!(!leaf.phases.contains(&PathingWaypointPhase::MoveCloseTo));
     assert!(leaf.phases.contains(&PathingWaypointPhase::RunAction));
+}
+
+#[test]
+fn pathing_execution_plan_preserves_legacy_pre_teleport_delay_between_segments() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                { "x": 3.0, "y": 4.0, "type": "target", "action": "pick_up_collect" },
+                { "x": 5.0, "y": 6.0, "type": "teleport" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+
+    assert_eq!(plan.segment_count, 2);
+    assert_eq!(plan.segments[0].pre_teleport_delay_ms, 0);
+    assert_eq!(plan.segments[1].pre_teleport_delay_ms, 1_000);
+    assert_eq!(
+        plan.movement_contract.segments[1].pre_teleport_delay_ms,
+        1_000
+    );
+}
+
+#[test]
+fn pathing_execution_plan_skips_pre_teleport_delay_after_legacy_fast_endpoints() {
+    for (waypoint_type, action) in [
+        ("teleport", None),
+        ("target", Some("fight")),
+        ("target", Some("nahida_collect")),
+        ("target", Some("pick_around")),
+    ] {
+        let action_json = action
+            .map(|action| format!(r#", "action": "{action}""#))
+            .unwrap_or_default();
+        let json = format!(
+            r#"{{
+                "info": {{ "name": "route", "type": "collect", "map_name": "Teyvat" }},
+                "positions": [
+                    {{ "x": 1.0, "y": 2.0, "type": "{waypoint_type}"{action_json} }},
+                    {{ "x": 3.0, "y": 4.0, "type": "teleport" }}
+                ]
+            }}"#
+        );
+        let task = PathingTask::from_json(&json).unwrap();
+
+        let plan = task.execution_plan();
+
+        assert_eq!(plan.segment_count, 2);
+        assert_eq!(plan.segments[1].pre_teleport_delay_ms, 0);
+        assert_eq!(plan.movement_contract.segments[1].pre_teleport_delay_ms, 0);
+    }
 }
 
 #[test]

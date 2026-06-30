@@ -90,6 +90,7 @@ pub struct PathingMovementSegmentContract {
     pub segment_index: usize,
     pub retry_times: u8,
     pub starts_with_teleport: bool,
+    pub pre_teleport_delay_ms: u32,
     pub seed_previous_position: Option<PathingPoint>,
     pub seed_previous_position_coordinate_space: Option<PathingCoordinateSpace>,
     pub seed_previous_position_requires_track_conversion: bool,
@@ -172,6 +173,7 @@ pub struct PathingSegmentPlan {
     pub segment_index: usize,
     pub waypoint_count: usize,
     pub starts_with_teleport: bool,
+    pub pre_teleport_delay_ms: u32,
     pub seed_previous_position: Option<PathingPoint>,
     pub seed_previous_position_coordinate_space: Option<PathingCoordinateSpace>,
     pub seed_previous_position_requires_track_conversion: bool,
@@ -370,6 +372,7 @@ pub enum PathingWaypointPhase {
 }
 
 const PATH_EXECUTOR_RETRY_TIMES: u8 = 2;
+const PATH_EXECUTOR_PRE_TELEPORT_DELAY_MS: u32 = 1_000;
 
 impl PathingTask {
     pub fn execution_plan(&self) -> PathingExecutionPlan {
@@ -446,6 +449,7 @@ fn push_pathing_segment(
         .first()
         .map(|(_, waypoint)| waypoint_type_eq(&waypoint.waypoint_type, "teleport"))
         .unwrap_or(false);
+    let pre_teleport_delay_ms = pre_teleport_delay_ms(starts_with_teleport, segments.last());
     let seed_previous_position = if starts_with_teleport {
         None
     } else {
@@ -472,6 +476,7 @@ fn push_pathing_segment(
         segment_index,
         waypoint_count,
         starts_with_teleport,
+        pre_teleport_delay_ms,
         seed_previous_position,
         seed_previous_position_coordinate_space: if starts_with_teleport {
             None
@@ -483,6 +488,32 @@ fn push_pathing_segment(
         retry_times: PATH_EXECUTOR_RETRY_TIMES,
         waypoints,
     });
+}
+
+fn pre_teleport_delay_ms(
+    starts_with_teleport: bool,
+    previous_segment: Option<&PathingSegmentPlan>,
+) -> u32 {
+    if !starts_with_teleport {
+        return 0;
+    }
+
+    let Some(previous_waypoint) = previous_segment.and_then(|segment| segment.waypoints.last())
+    else {
+        return 0;
+    };
+    if legacy_skips_pre_teleport_delay(previous_waypoint) {
+        0
+    } else {
+        PATH_EXECUTOR_PRE_TELEPORT_DELAY_MS
+    }
+}
+
+fn legacy_skips_pre_teleport_delay(waypoint: &PathingWaypointPlan) -> bool {
+    waypoint_type_eq(&waypoint.waypoint_type, "teleport")
+        || action_eq(waypoint.action.as_deref(), "fight")
+        || action_eq(waypoint.action.as_deref(), "nahida_collect")
+        || action_eq(waypoint.action.as_deref(), "pick_around")
 }
 
 impl PathingMovementContractPlan {
@@ -524,6 +555,7 @@ impl PathingMovementSegmentContract {
             segment_index: segment.segment_index,
             retry_times: segment.retry_times,
             starts_with_teleport: segment.starts_with_teleport,
+            pre_teleport_delay_ms: segment.pre_teleport_delay_ms,
             seed_previous_position: segment.seed_previous_position,
             seed_previous_position_coordinate_space: segment
                 .seed_previous_position_coordinate_space,
