@@ -9090,6 +9090,22 @@ fn desktop_scaled_1080p(value: i32, capture_size: VisionSize) -> i32 {
     ((value as f64) * capture_size.width as f64 / 1920.0).round() as i32
 }
 
+fn desktop_weapon_ore_prescroll_events(
+    rule: &WeaponOrePrescrollRule,
+    capture_size: VisionSize,
+) -> Vec<InputEvent> {
+    let x = desktop_scaled_1080p(rule.hold_scrollbar_bottom_x_1080p, capture_size);
+    let y = desktop_scaled_1080p(rule.hold_scrollbar_bottom_y_1080p, capture_size);
+    InputSequence::new()
+        .move_mouse_to(x, y)
+        .mouse_down(MouseButton::Left)
+        .delay(rule.hold_ms)
+        .mouse_up(MouseButton::Left)
+        .delay(rule.after_scroll_wait_ms)
+        .events()
+        .to_vec()
+}
+
 fn desktop_quick_serenitea_pot_big_map_locator(
     capture_size: VisionSize,
     name: &str,
@@ -12254,11 +12270,7 @@ fn desktop_inventory_count_plan_live_preflight(
             CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
             | CountInventoryItemStepAction::OpenInventoryTab { .. } => {}
             CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {}
-            CountInventoryItemStepAction::PreScrollWeaponOre { .. } => {
-                return Err(format!(
-                    "{task_name} live execution requires desktop weapon-ore prescroll adapter"
-                ));
-            }
+            CountInventoryItemStepAction::PreScrollWeaponOre { .. } => {}
             CountInventoryItemStepAction::EnumerateGridItems { .. } => {
                 return Err(format!(
                     "{task_name} live execution requires desktop inventory grid enumeration adapter"
@@ -12457,13 +12469,15 @@ where
 
     fn pre_scroll_count_inventory_weapon_ore(
         &mut self,
-        _rule: &WeaponOrePrescrollRule,
+        rule: &WeaponOrePrescrollRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop weapon-ore prescroll adapter"
-                .to_string(),
-        ))
+        if !rule.enabled {
+            return Ok(CommonJobRuntimeOutcome::Matched(false));
+        }
+        let events = desktop_weapon_ore_prescroll_events(rule, self.capture_size);
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, &events)?;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
     }
 
     fn enumerate_count_inventory_grid_items(
@@ -21573,8 +21587,42 @@ mod tests {
         };
         let weapon_error = desktop_count_inventory_item_live_preflight(&weapon_plan).unwrap_err();
         assert!(weapon_error.contains(
-            "CountInventoryItem live execution requires desktop weapon-ore prescroll adapter"
+            "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
         ));
+        assert!(!weapon_error.contains("weapon-ore prescroll adapter"));
+    }
+
+    #[test]
+    fn desktop_weapon_ore_prescroll_events_scale_1080p_hold_and_settle() {
+        let rule = WeaponOrePrescrollRule {
+            enabled: true,
+            item_name_prefix: "精锻用".to_string(),
+            hold_scrollbar_bottom_x_1080p: 1289,
+            hold_scrollbar_bottom_y_1080p: 936,
+            hold_ms: 2_000,
+            after_scroll_wait_ms: 300,
+        };
+
+        assert_eq!(
+            desktop_weapon_ore_prescroll_events(&rule, VisionSize::new(1280, 720)),
+            vec![
+                InputEvent::MouseMoveAbsolute {
+                    x: 859,
+                    y: 624,
+                    virtual_desktop: false,
+                },
+                InputEvent::MouseButtonDown {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay {
+                    milliseconds: 2_000,
+                },
+                InputEvent::MouseButtonUp {
+                    button: MouseButton::Left,
+                },
+                InputEvent::Delay { milliseconds: 300 },
+            ]
+        );
     }
 
     #[test]
