@@ -7097,13 +7097,10 @@ where
 
     fn load_auto_eat_food_grid_icon_classifier(
         &mut self,
-        _rule: &GridIconClassifierRule,
+        rule: &GridIconClassifierRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
-                .to_string(),
-        ))
+        desktop_validate_grid_icon_classifier_assets("AutoEatFood inventory-food", rule)
     }
 
     fn enumerate_auto_eat_food_grid_items(
@@ -12256,11 +12253,7 @@ fn desktop_inventory_count_plan_live_preflight(
             }
             CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
             | CountInventoryItemStepAction::OpenInventoryTab { .. } => {}
-            CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {
-                return Err(format!(
-                    "{task_name} live execution requires desktop GridIcon ONNX/prototype adapter"
-                ));
-            }
+            CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {}
             CountInventoryItemStepAction::PreScrollWeaponOre { .. } => {
                 return Err(format!(
                     "{task_name} live execution requires desktop weapon-ore prescroll adapter"
@@ -12456,13 +12449,10 @@ where
 
     fn load_count_inventory_grid_icon_classifier(
         &mut self,
-        _rule: &GridIconClassifierRule,
+        rule: &GridIconClassifierRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
-                .to_string(),
-        ))
+        desktop_validate_grid_icon_classifier_assets("CountInventoryItem", rule)
     }
 
     fn pre_scroll_count_inventory_weapon_ore(
@@ -12668,6 +12658,60 @@ where
     Ok(CommonJobRuntimeOutcome::Matched(
         desktop_inventory_locator_exists(common, &checked_locator)?,
     ))
+}
+
+fn desktop_validate_grid_icon_classifier_assets(
+    task_name: &str,
+    rule: &GridIconClassifierRule,
+) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+    let asset_root = bgi_task::task_asset_root();
+    let model_path =
+        desktop_grid_icon_classifier_asset_path(&asset_root, &rule.model_path, "model")?;
+    let prototype_csv_path = desktop_grid_icon_classifier_asset_path(
+        &asset_root,
+        &rule.prototype_csv_path,
+        "prototype CSV",
+    )?;
+
+    let mut missing = Vec::new();
+    if !model_path.is_file() {
+        missing.push(format!("model: {}", model_path.display()));
+    }
+    if !prototype_csv_path.is_file() {
+        missing.push(format!("prototype CSV: {}", prototype_csv_path.display()));
+    }
+
+    if missing.is_empty() {
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    } else {
+        Err(TaskError::CommonJobExecution(format!(
+            "{task_name} live execution requires GridIcon classifier assets; missing {}",
+            missing.join("; ")
+        )))
+    }
+}
+
+fn desktop_grid_icon_classifier_asset_path(
+    asset_root: &Path,
+    relative_path: &str,
+    field_name: &str,
+) -> bgi_task::Result<PathBuf> {
+    let relative = Path::new(relative_path);
+    let escapes_root = relative.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::Prefix(_)
+                | std::path::Component::RootDir
+                | std::path::Component::ParentDir
+        )
+    });
+    if relative_path.trim().is_empty() || relative.is_absolute() || escapes_root {
+        return Err(TaskError::CommonJobExecution(format!(
+            "GridIcon classifier {field_name} path must be relative to the task asset root: {relative_path}"
+        )));
+    }
+
+    Ok(asset_root.join(relative))
 }
 
 const DESKTOP_INVENTORY_PROMPT_CLICK_TIMEOUT_MS: u64 = 300;
@@ -21419,7 +21463,7 @@ mod tests {
 
         let static_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(static_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
+            "AutoEatFood inventory-food live execution requires desktop inventory grid enumeration adapter"
         ));
         assert!(!static_error.contains("inventory grid/ONNX/OCR/click adapters"));
     }
@@ -21507,12 +21551,30 @@ mod tests {
             panic!("expected CountInventoryItem plan");
         };
 
-        let classifier_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
-        assert!(classifier_error.contains(
-            "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
+        let grid_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
+        assert!(grid_error.contains(
+            "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
         ));
-        assert!(!classifier_error.contains("expired-item prompt adapter"));
-        assert!(!classifier_error.contains("inventory tab adapter"));
+        assert!(!grid_error.contains("expired-item prompt adapter"));
+        assert!(!grid_error.contains("inventory tab adapter"));
+        assert!(!grid_error.contains("GridIcon ONNX/prototype adapter"));
+
+        let weapon_plan = bgi_task::plan_common_job(
+            bgi_task::COUNT_INVENTORY_ITEM_TASK_KEY,
+            Some(&serde_json::json!({
+                "gridScreenName": "Weapons",
+                "itemName": "精锻用魔矿"
+            })),
+        )
+        .unwrap()
+        .unwrap();
+        let CommonJobExecutionPlan::CountInventoryItem(weapon_plan) = weapon_plan else {
+            panic!("expected CountInventoryItem weapon plan");
+        };
+        let weapon_error = desktop_count_inventory_item_live_preflight(&weapon_plan).unwrap_err();
+        assert!(weapon_error.contains(
+            "CountInventoryItem live execution requires desktop weapon-ore prescroll adapter"
+        ));
     }
 
     #[test]
@@ -21525,12 +21587,13 @@ mod tests {
         )
         .unwrap();
 
-        let classifier_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
-        assert!(classifier_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
+        let grid_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
+        assert!(grid_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop inventory grid enumeration adapter"
         ));
-        assert!(!classifier_error.contains("expired-item prompt adapter"));
-        assert!(!classifier_error.contains("inventory tab adapter"));
+        assert!(!grid_error.contains("expired-item prompt adapter"));
+        assert!(!grid_error.contains("inventory tab adapter"));
+        assert!(!grid_error.contains("GridIcon ONNX/prototype adapter"));
 
         let mut after_inventory_scan = plan.clone();
         after_inventory_scan

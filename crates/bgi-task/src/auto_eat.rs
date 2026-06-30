@@ -807,11 +807,11 @@ pub fn plan_auto_eat_food(config: AutoEatFoodExecutionConfig) -> Result<AutoEatF
         result_contract,
         steps,
         pending_native: vec![
-            "desktop inventory-food live routing now shares game-window, BitBlt, capture-size, and CountInventory adapter-boundary preflight; live ReturnMainUi, opening Food inventory, expired-item prompt confirmation, and Food tab selection are wired through the shared common-job runtime, while grid enumeration, ONNX grid-icon inference, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi remain pending".to_string(),
+            "desktop inventory-food live routing now shares game-window, BitBlt, capture-size, and CountInventory adapter-boundary preflight; live ReturnMainUi, opening Food inventory, expired-item prompt confirmation, Food tab selection, and GridIcon classifier asset preflight are wired through the shared common-job runtime, while grid enumeration, ONNX/prototype classifier loading and inference, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi remain pending".to_string(),
             "portable nutrition bag loop for script-dispatched AutoEat without foodName remains pending"
                 .to_string(),
         ],
-        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, and an injectable Rust executor for the inventory-food branch; desktop live routing shares CountInventory game-window, BitBlt, capture-size, inventory opening, expired-prompt confirmation, tab-selection, and first-active-adapter preflight before the remaining live grid/ONNX/OCR/click adapters are wired.".to_string(),
+        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, and an injectable Rust executor for the inventory-food branch; desktop live routing shares CountInventory game-window, BitBlt, capture-size, inventory opening, expired-prompt confirmation, tab-selection, classifier asset checks, and first-active-adapter preflight before the remaining live grid/ONNX/OCR/click adapters are wired.".to_string(),
     })
 }
 
