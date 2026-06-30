@@ -6,6 +6,7 @@ mod bv;
 #[path = "geometry.rs"]
 mod geometry;
 mod grid;
+mod grid_icon_classifier;
 mod onnx;
 #[path = "recognition.rs"]
 mod recognition;
@@ -16,6 +17,7 @@ pub use backend::*;
 pub use bv::*;
 pub use geometry::*;
 pub use grid::*;
+pub use grid_icon_classifier::*;
 pub use onnx::*;
 pub use recognition::*;
 pub use region::*;
@@ -43,6 +45,12 @@ pub enum VisionError {
     InvalidImageBuffer { expected: usize, actual: usize },
     #[error("image size mismatch: expected {expected:?}, got {actual:?}")]
     ImageSizeMismatch { expected: Size, actual: Size },
+    #[error("grid icon prototype CSV line {line} is invalid: {message}")]
+    InvalidGridIconPrototypeCsv { line: usize, message: String },
+    #[error("grid icon feature length {actual} does not match expected {expected}")]
+    InvalidGridIconFeatureLength { expected: usize, actual: usize },
+    #[error("grid icon prototypes are empty")]
+    EmptyGridIconPrototypes,
     #[error("failed to decode image {path:?}: {source}")]
     ImageDecode {
         path: Option<PathBuf>,

@@ -866,6 +866,128 @@ fn grid_icon_and_count_text_crops_follow_legacy_ratios() {
 }
 
 #[test]
+fn grid_icon_prototype_csv_parses_legacy_base64_features() {
+    let csv = format!(
+        "name,feature\n甜甜花,{}\n\n晶核,{}\n",
+        base64_f32_feature(&[1.0, 2.5, -3.0, 4.25]),
+        base64_f32_feature(&[4.0, 3.0, 2.0, 1.0])
+    );
+
+    let prototypes = parse_grid_icon_prototype_csv(&csv, 4).unwrap();
+
+    assert_eq!(prototypes.len(), 2);
+    assert_eq!(prototypes[0].name, "甜甜花");
+    assert_eq!(prototypes[0].feature, vec![1.0, 2.5, -3.0, 4.25]);
+    assert_eq!(prototypes[1].name, "晶核");
+    assert_eq!(prototypes[1].feature, vec![4.0, 3.0, 2.0, 1.0]);
+
+    let invalid_dimension = parse_grid_icon_prototype_csv(
+        &format!("name,feature\nbad,{}\n", base64_f32_feature(&[1.0])),
+        4,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        invalid_dimension,
+        VisionError::InvalidGridIconFeatureLength {
+            expected: 4,
+            actual: 1
+        }
+    ));
+
+    let invalid_base64 =
+        parse_grid_icon_prototype_csv("name,feature\nbad,not-base64\n", 4).unwrap_err();
+    assert!(matches!(
+        invalid_base64,
+        VisionError::InvalidGridIconPrototypeCsv { line: 2, .. }
+    ));
+
+    let duplicate = parse_grid_icon_prototype_csv(
+        &format!(
+            "name,feature\n晶核,{}\n晶核,{}\n",
+            base64_f32_feature(&[1.0, 2.0, 3.0, 4.0]),
+            base64_f32_feature(&[4.0, 3.0, 2.0, 1.0])
+        ),
+        4,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        VisionError::InvalidGridIconPrototypeCsv { line: 3, .. }
+    ));
+}
+
+#[test]
+fn grid_icon_model_input_uses_rgb_chw_order_from_bgr_pixels() {
+    let mut image = solid_bgr_image(LEGACY_GRID_ICON_INPUT_SIZE, [0, 0, 0]);
+    set_bgr_pixel(&mut image, 0, 0, [10, 20, 30]);
+    set_bgr_pixel(&mut image, 1, 0, [40, 50, 60]);
+
+    let input = grid_icon_bgr_to_rgb_chw_input(&image).unwrap();
+
+    let plane =
+        LEGACY_GRID_ICON_INPUT_SIZE.width as usize * LEGACY_GRID_ICON_INPUT_SIZE.height as usize;
+    assert_eq!(input.len(), plane * 3);
+    assert!((input[0] - 30.0 / 255.0).abs() < f32::EPSILON);
+    assert!((input[1] - 60.0 / 255.0).abs() < f32::EPSILON);
+    assert!((input[plane] - 20.0 / 255.0).abs() < f32::EPSILON);
+    assert!((input[plane + 1] - 50.0 / 255.0).abs() < f32::EPSILON);
+    assert!((input[plane * 2] - 10.0 / 255.0).abs() < f32::EPSILON);
+    assert!((input[plane * 2 + 1] - 40.0 / 255.0).abs() < f32::EPSILON);
+
+    let wrong_size = solid_bgr_image(Size::new(124, 125), [0, 0, 0]);
+    let error = grid_icon_bgr_to_rgb_chw_input(&wrong_size).unwrap_err();
+    assert!(matches!(error, VisionError::ImageSizeMismatch { .. }));
+}
+
+#[test]
+fn grid_icon_feature_matching_keeps_legacy_squared_distance_threshold() {
+    let prototypes = vec![
+        GridIconPrototype {
+            name: "甜甜花".to_string(),
+            feature: vec![1.0, 1.0, 1.0, 1.0],
+        },
+        GridIconPrototype {
+            name: "晶核".to_string(),
+            feature: vec![5.0, 5.0, 5.0, 5.0],
+        },
+    ];
+
+    let nearest = nearest_grid_icon_prototype(&[5.5, 5.0, 5.0, 5.0], &prototypes, 4).unwrap();
+    assert_eq!(nearest.name, "晶核");
+    assert!((nearest.distance_squared - 0.25).abs() < f64::EPSILON);
+
+    let accepted =
+        classify_grid_icon_feature(&[5.5, 5.0, 5.0, 5.0], &prototypes, 4, 100.0).unwrap();
+    assert_eq!(accepted.unwrap().name, "晶核");
+
+    let boundary =
+        classify_grid_icon_feature(&[11.0, 1.0, 1.0, 1.0], &prototypes[..1], 4, 100.0).unwrap();
+    assert!(boundary.is_none());
+
+    let empty = nearest_grid_icon_prototype(&[1.0, 1.0, 1.0, 1.0], &[], 4).unwrap_err();
+    assert!(matches!(empty, VisionError::EmptyGridIconPrototypes));
+}
+
+#[test]
+fn grid_icon_star_index_uses_highest_logit_position() {
+    assert_eq!(
+        grid_icon_star_index_from_logits(&[0.1, 0.8, 0.2, 0.7]).unwrap(),
+        1
+    );
+    assert_eq!(
+        grid_icon_star_index_from_logits(&[0.1, 0.8, 0.8, 0.7]).unwrap(),
+        1
+    );
+    assert!(matches!(
+        grid_icon_star_index_from_logits(&[]).unwrap_err(),
+        VisionError::InvalidGridIconFeatureLength {
+            expected: 1,
+            actual: 0
+        }
+    ));
+}
+
+#[test]
 fn grid_scroll_shift_rejects_identical_and_blank_frames_but_detects_translation() {
     assert!(!classify_grid_scroll_response(0.5, 0.5, 0.95));
     assert!(classify_grid_scroll_response(0.51, 0.5, 0.95));
@@ -901,6 +1023,16 @@ fn solid_bgr_image(size: Size, pixel: [u8; 3]) -> BgrImage {
         pixels.extend_from_slice(&pixel);
     }
     BgrImage::new(size, pixels).unwrap()
+}
+
+fn base64_f32_feature(values: &[f32]) -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let bytes = values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect::<Vec<_>>();
+    STANDARD.encode(bytes)
 }
 
 fn test_visible_grid_spec(roi: Rect, columns: u8) -> VisibleGridEnumerationSpec {

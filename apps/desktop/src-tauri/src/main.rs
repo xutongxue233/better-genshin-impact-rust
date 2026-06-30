@@ -6931,7 +6931,7 @@ impl AutoEatFoodRuntime for DesktopAutoEatFoodRuntime {
     ) -> bgi_task::Result<Vec<CountInventoryGridIconMatch>> {
         self.ensure_not_cancelled()?;
         Err(TaskError::CommonJobExecution(
-            "AutoEatFood GridIcon inference adapter is not wired".to_string(),
+            "AutoEatFood GridIcon ONNX feature extraction adapter is not wired".to_string(),
         ))
     }
 
@@ -6993,6 +6993,7 @@ struct DesktopAutoEatFoodInventoryRuntime<F, I, C> {
     key_bindings_config: KeyBindingsConfig,
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
+    grid_icon_prototype_count: usize,
     cropped_grid_icons: Vec<BgrImage>,
 }
 
@@ -7008,6 +7009,7 @@ impl<F, I, C> DesktopAutoEatFoodInventoryRuntime<F, I, C> {
             key_bindings_config: config.key_bindings_config.clone(),
             capture_size,
             cancellation,
+            grid_icon_prototype_count: 0,
             cropped_grid_icons: Vec::new(),
         }
     }
@@ -7105,7 +7107,9 @@ where
         rule: &GridIconClassifierRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        desktop_validate_grid_icon_classifier_assets("AutoEatFood inventory-food", rule)
+        self.grid_icon_prototype_count =
+            desktop_validate_grid_icon_classifier_assets("AutoEatFood inventory-food", rule)?;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
     }
 
     fn enumerate_auto_eat_food_grid_items(
@@ -7150,7 +7154,8 @@ where
         self.ensure_not_cancelled()?;
         Err(TaskError::CommonJobExecution(
             format!(
-                "AutoEatFood inventory-food live execution requires desktop GridIcon inference adapter after {} cropped icon(s)",
+                "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX feature extraction adapter after {} parsed prototype(s) and {} cropped icon(s)",
+                self.grid_icon_prototype_count,
                 self.cropped_grid_icons.len()
             ),
         ))
@@ -12615,7 +12620,7 @@ fn desktop_inventory_count_plan_live_preflight(
             CountInventoryItemStepAction::CropGridIcon { .. } => {}
             CountInventoryItemStepAction::InferGridIcon { .. } => {
                 return Err(format!(
-                    "{task_name} live execution requires desktop GridIcon inference adapter"
+                    "{task_name} live execution requires desktop GridIcon ONNX feature extraction adapter"
                 ));
             }
             CountInventoryItemStepAction::OcrGridItemCount { .. } => {
@@ -12656,6 +12661,7 @@ struct DesktopCountInventoryItemRuntime<F, I, C> {
     key_bindings_config: KeyBindingsConfig,
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
+    grid_icon_prototype_count: usize,
     cropped_grid_icons: Vec<BgrImage>,
 }
 
@@ -12671,6 +12677,7 @@ impl<F, I, C> DesktopCountInventoryItemRuntime<F, I, C> {
             key_bindings_config: config.key_bindings_config.clone(),
             capture_size,
             cancellation,
+            grid_icon_prototype_count: 0,
             cropped_grid_icons: Vec::new(),
         }
     }
@@ -12798,7 +12805,9 @@ where
         rule: &GridIconClassifierRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        desktop_validate_grid_icon_classifier_assets("CountInventoryItem", rule)
+        self.grid_icon_prototype_count =
+            desktop_validate_grid_icon_classifier_assets("CountInventoryItem", rule)?;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
     }
 
     fn pre_scroll_count_inventory_weapon_ore(
@@ -12854,7 +12863,8 @@ where
         self.ensure_not_cancelled()?;
         Err(TaskError::CommonJobExecution(
             format!(
-                "CountInventoryItem live execution requires desktop GridIcon inference adapter after {} cropped icon(s)",
+                "CountInventoryItem live execution requires desktop GridIcon ONNX feature extraction adapter after {} parsed prototype(s) and {} cropped icon(s)",
+                self.grid_icon_prototype_count,
                 self.cropped_grid_icons.len()
             ),
         ))
@@ -13131,7 +13141,7 @@ where
 fn desktop_validate_grid_icon_classifier_assets(
     task_name: &str,
     rule: &GridIconClassifierRule,
-) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+) -> bgi_task::Result<usize> {
     let asset_root = bgi_task::task_asset_root();
     let model_path =
         desktop_grid_icon_classifier_asset_path(&asset_root, &rule.model_path, "model")?;
@@ -13149,14 +13159,35 @@ fn desktop_validate_grid_icon_classifier_assets(
         missing.push(format!("prototype CSV: {}", prototype_csv_path.display()));
     }
 
-    if missing.is_empty() {
-        Ok(CommonJobRuntimeOutcome::Matched(true))
-    } else {
-        Err(TaskError::CommonJobExecution(format!(
+    if !missing.is_empty() {
+        return Err(TaskError::CommonJobExecution(format!(
             "{task_name} live execution requires GridIcon classifier assets; missing {}",
             missing.join("; ")
-        )))
+        )));
     }
+
+    let prototype_csv = fs::read_to_string(&prototype_csv_path).map_err(|error| {
+        TaskError::CommonJobExecution(format!(
+            "{task_name} live execution could not read GridIcon prototype CSV {}: {error}",
+            prototype_csv_path.display()
+        ))
+    })?;
+    let prototypes =
+        bgi_vision::parse_grid_icon_prototype_csv(&prototype_csv, rule.feature_dimensions as usize)
+            .map_err(|error| {
+                TaskError::CommonJobExecution(format!(
+                    "{task_name} live execution could not parse GridIcon prototype CSV {}: {error}",
+                    prototype_csv_path.display()
+                ))
+            })?;
+    if prototypes.is_empty() {
+        return Err(TaskError::CommonJobExecution(format!(
+            "{task_name} live execution requires GridIcon prototype CSV to contain at least one prototype: {}",
+            prototype_csv_path.display()
+        )));
+    }
+
+    Ok(prototypes.len())
 }
 
 fn desktop_grid_icon_classifier_asset_path(
@@ -22625,7 +22656,7 @@ mod tests {
 
         let inference_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
         assert!(inference_error.contains(
-            "CountInventoryItem live execution requires desktop GridIcon inference adapter"
+            "CountInventoryItem live execution requires desktop GridIcon ONNX feature extraction adapter"
         ));
         assert!(!inference_error.contains("expired-item prompt adapter"));
         assert!(!inference_error.contains("inventory tab adapter"));
@@ -22645,7 +22676,7 @@ mod tests {
         };
         let weapon_error = desktop_count_inventory_item_live_preflight(&weapon_plan).unwrap_err();
         assert!(weapon_error.contains(
-            "CountInventoryItem live execution requires desktop GridIcon inference adapter"
+            "CountInventoryItem live execution requires desktop GridIcon ONNX feature extraction adapter"
         ));
         assert!(!weapon_error.contains("weapon-ore prescroll adapter"));
     }
@@ -22699,7 +22730,7 @@ mod tests {
         ));
         assert!(!grid_error.contains("expired-item prompt adapter"));
         assert!(!grid_error.contains("inventory tab adapter"));
-        assert!(!grid_error.contains("GridIcon inference adapter"));
+        assert!(!grid_error.contains("GridIcon ONNX feature extraction adapter"));
 
         let mut after_inventory_scan = plan.clone();
         after_inventory_scan
