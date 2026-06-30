@@ -190,10 +190,10 @@ use bgi_task::{
     CountInventoryItemStepCondition,
 };
 use bgi_vision::{
-    convert_bgr_image, crop_bgr_image, in_range_mask, recognition_type_infos,
+    convert_bgr_image, crop_bgr_image, crop_grid_icon, in_range_mask, recognition_type_infos,
     registered_onnx_models, resize_bgr_nearest, BgrImage, BvImage, BvLocatorOperation,
-    BvLocatorPlan, BvPageCommand, ColorConversion, ImageRegion, OcrMatchConfig, OcrResult,
-    OcrResultRegion, OnnxModelLoadPlan, OnnxProviderSelection, PureRustVisionBackend,
+    BvLocatorPlan, BvPageCommand, ColorConversion, GridIconCropSpec, ImageRegion, OcrMatchConfig,
+    OcrResult, OcrResultRegion, OnnxModelLoadPlan, OnnxProviderSelection, PureRustVisionBackend,
     RecognitionType, Rect, Region, Size as VisionSize, VisionBackend,
 };
 use chrono::{FixedOffset, Local, NaiveDate, Offset};
@@ -6993,6 +6993,7 @@ struct DesktopAutoEatFoodInventoryRuntime<F, I, C> {
     key_bindings_config: KeyBindingsConfig,
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
+    cropped_grid_icons: Vec<BgrImage>,
 }
 
 impl<F, I, C> DesktopAutoEatFoodInventoryRuntime<F, I, C> {
@@ -7007,6 +7008,7 @@ impl<F, I, C> DesktopAutoEatFoodInventoryRuntime<F, I, C> {
             key_bindings_config: config.key_bindings_config.clone(),
             capture_size,
             cancellation,
+            cropped_grid_icons: Vec::new(),
         }
     }
 }
@@ -7121,13 +7123,14 @@ where
 
     fn crop_auto_eat_food_grid_icons(
         &mut self,
-        _items: &[CountInventoryGridItemFrame],
-        _rule: &GridIconCropRule,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconCropRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop grid icon crop adapter"
-                .to_string(),
+        self.cropped_grid_icons =
+            desktop_crop_inventory_grid_icons_with_common_runtime(&mut self.common, items, rule)?;
+        Ok(CommonJobRuntimeOutcome::Matched(
+            !self.cropped_grid_icons.is_empty(),
         ))
     }
 
@@ -7138,8 +7141,10 @@ where
     ) -> bgi_task::Result<Vec<CountInventoryGridIconMatch>> {
         self.ensure_not_cancelled()?;
         Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop GridIcon inference adapter"
-                .to_string(),
+            format!(
+                "AutoEatFood inventory-food live execution requires desktop GridIcon inference adapter after {} cropped icon(s)",
+                self.cropped_grid_icons.len()
+            ),
         ))
     }
 
@@ -12542,11 +12547,7 @@ fn desktop_inventory_count_plan_live_preflight(
                     "{task_name} live execution requires desktop inventory grid enumeration adapter"
                 ));
             }
-            CountInventoryItemStepAction::CropGridIcon { .. } => {
-                return Err(format!(
-                    "{task_name} live execution requires desktop grid icon crop adapter"
-                ));
-            }
+            CountInventoryItemStepAction::CropGridIcon { .. } => {}
             CountInventoryItemStepAction::InferGridIcon { .. } => {
                 return Err(format!(
                     "{task_name} live execution requires desktop GridIcon inference adapter"
@@ -12590,6 +12591,7 @@ struct DesktopCountInventoryItemRuntime<F, I, C> {
     key_bindings_config: KeyBindingsConfig,
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
+    cropped_grid_icons: Vec<BgrImage>,
 }
 
 impl<F, I, C> DesktopCountInventoryItemRuntime<F, I, C> {
@@ -12604,6 +12606,7 @@ impl<F, I, C> DesktopCountInventoryItemRuntime<F, I, C> {
             key_bindings_config: config.key_bindings_config.clone(),
             capture_size,
             cancellation,
+            cropped_grid_icons: Vec::new(),
         }
     }
 }
@@ -12761,12 +12764,14 @@ where
 
     fn crop_count_inventory_grid_icons(
         &mut self,
-        _items: &[CountInventoryGridItemFrame],
-        _rule: &GridIconCropRule,
+        items: &[CountInventoryGridItemFrame],
+        rule: &GridIconCropRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop grid icon crop adapter".to_string(),
+        self.cropped_grid_icons =
+            desktop_crop_inventory_grid_icons_with_common_runtime(&mut self.common, items, rule)?;
+        Ok(CommonJobRuntimeOutcome::Matched(
+            !self.cropped_grid_icons.is_empty(),
         ))
     }
 
@@ -12777,8 +12782,10 @@ where
     ) -> bgi_task::Result<Vec<CountInventoryGridIconMatch>> {
         self.ensure_not_cancelled()?;
         Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop GridIcon inference adapter"
-                .to_string(),
+            format!(
+                "CountInventoryItem live execution requires desktop GridIcon inference adapter after {} cropped icon(s)",
+                self.cropped_grid_icons.len()
+            ),
         ))
     }
 
@@ -12938,6 +12945,45 @@ where
     Ok(CommonJobRuntimeOutcome::Matched(
         desktop_inventory_locator_exists(common, &checked_locator)?,
     ))
+}
+
+fn desktop_crop_inventory_grid_icons_with_common_runtime<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    items: &[CountInventoryGridItemFrame],
+    rule: &GridIconCropRule,
+) -> bgi_task::Result<Vec<BgrImage>>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let spec = GridIconCropSpec {
+        normalized_size: VisionSize::new(rule.normalized_width, rule.normalized_height),
+        icon_crop: rule.icon_crop,
+        bottom_crop: rule.bottom_crop,
+    };
+    let frame = common.frame_source_mut().capture_frame()?;
+    let mut icons = Vec::with_capacity(items.len());
+    for item in items {
+        let cell = crop_bgr_image(&frame, item.rect).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "inventory grid cell crop failed for page {} item {} rect {:?}: {error}",
+                item.page_index, item.item_index, item.rect
+            ))
+        })?;
+        let crops = crop_grid_icon(&cell, spec).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "inventory grid icon crop failed for page {} item {} rect {:?}: {error}",
+                item.page_index, item.item_index, item.rect
+            ))
+        })?;
+        icons.push(crops.icon);
+    }
+    Ok(icons)
 }
 
 fn desktop_validate_grid_icon_classifier_assets(
@@ -19100,6 +19146,60 @@ mod tests {
     }
 
     #[test]
+    fn desktop_inventory_grid_icon_crop_adapter_crops_current_frame() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let cell_rect = Rect::new(106, 110, 125, 153).unwrap();
+        let cell = BgrImage::new(
+            VisionSize::new(125, 153),
+            (0..125 * 153).flat_map(|_| [23_u8, 45_u8, 67_u8]).collect(),
+        )
+        .unwrap();
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        desktop_talk_option_test_paint_template(
+            &mut frame.pixels,
+            capture_size,
+            &cell,
+            cell_rect.x as u32,
+            cell_rect.y as u32,
+        );
+        let mut runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+
+        let icons = desktop_crop_inventory_grid_icons_with_common_runtime(
+            &mut runtime,
+            &[CountInventoryGridItemFrame {
+                page_index: 2,
+                item_index: 7,
+                rect: cell_rect,
+            }],
+            &GridIconCropRule {
+                normalized_width: 125,
+                normalized_height: 153,
+                icon_crop: Rect::new(0, 0, 125, 125).unwrap(),
+                bottom_crop: Rect::new(0, 126, 125, 27).unwrap(),
+            },
+        )
+        .unwrap();
+        let (_, frame_source, _, _, _) = runtime.into_parts();
+
+        assert_eq!(frame_source.captures, 1);
+        assert_eq!(icons.len(), 1);
+        assert_eq!(icons[0].size, VisionSize::new(125, 125));
+        assert_eq!(
+            icons[0].bgr_pixel_at(12, 34),
+            Some(bgi_vision::BgrPixel {
+                b: 23,
+                g: 45,
+                r: 67
+            })
+        );
+    }
+
+    #[test]
     fn desktop_talk_option_drain_clicks_lowest_option_icon() {
         let assets = DesktopTalkOptionTestAssets::new();
         let frame = assets.frame(&[
@@ -22292,6 +22392,20 @@ mod tests {
         assert!(!grid_error.contains("expired-item prompt adapter"));
         assert!(!grid_error.contains("inventory tab adapter"));
         assert!(!grid_error.contains("GridIcon ONNX/prototype adapter"));
+
+        let mut after_enumeration = plan.clone();
+        after_enumeration.steps.retain(|step| {
+            !matches!(
+                step.action,
+                CountInventoryItemStepAction::EnumerateGridItems { .. }
+            )
+        });
+        let inference_error =
+            desktop_count_inventory_item_live_preflight(&after_enumeration).unwrap_err();
+        assert!(inference_error.contains(
+            "CountInventoryItem live execution requires desktop GridIcon inference adapter"
+        ));
+        assert!(!inference_error.contains("grid icon crop adapter"));
 
         let weapon_plan = bgi_task::plan_common_job(
             bgi_task::COUNT_INVENTORY_ITEM_TASK_KEY,
