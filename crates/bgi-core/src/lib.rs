@@ -50,7 +50,8 @@ pub use pathing::{
     PathingMovementContractPlan, PathingMovementDependency, PathingMovementPhaseContract,
     PathingMovementSegmentContract, PathingMovementWaypointContract, PathingNativePhaseStatus,
     PathingPoint, PathingPreflightPlan, PathingSegmentPlan, PathingSetTimeActionPlan,
-    PathingSummary, PathingTask, PathingWaypointPhase, PathingWaypointPlan, Waypoint,
+    PathingSummary, PathingTask, PathingTrackConversionContext, PathingWaypointPhase,
+    PathingWaypointPlan, Waypoint,
 };
 pub use trigger::{initial_triggers, GameUiCategory, TriggerDescriptor};
 pub use ui::{default_navigation, ui_shell_decision, NavigationItem, UiShellDecision};

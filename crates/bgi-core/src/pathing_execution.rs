@@ -21,6 +21,18 @@ pub struct PathingExecutionPlan {
     pub segments: Vec<PathingSegmentPlan>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct PathingTrackConversionContext<'a> {
+    pub map_name: &'a str,
+    pub map_match_method: Option<&'a str>,
+    pub global_index: usize,
+    pub segment_index: usize,
+    pub segment_waypoint_index: usize,
+    pub waypoint_type: &'a str,
+    pub action: Option<&'a str>,
+    pub route_point: PathingPoint,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PathingPreflightPlan {
     pub switch_party_before: bool,
@@ -377,6 +389,27 @@ const PATH_EXECUTOR_PRE_TELEPORT_DELAY_MS: u32 = 1_000;
 impl PathingTask {
     pub fn execution_plan(&self) -> PathingExecutionPlan {
         let segments = split_waypoints_for_track(&self.positions);
+        self.execution_plan_from_segments(segments)
+    }
+
+    pub fn execution_plan_with_track_converter<F>(&self, mut converter: F) -> PathingExecutionPlan
+    where
+        F: FnMut(PathingTrackConversionContext<'_>) -> Option<PathingPoint>,
+    {
+        let mut segments = split_waypoints_for_track(&self.positions);
+        apply_pathing_track_conversion(
+            &mut segments,
+            &self.info.map_name,
+            self.info.map_match_method.as_deref(),
+            &mut converter,
+        );
+        self.execution_plan_from_segments(segments)
+    }
+
+    fn execution_plan_from_segments(
+        &self,
+        segments: Vec<PathingSegmentPlan>,
+    ) -> PathingExecutionPlan {
         let preflight = PathingPreflightPlan::for_task(self);
         let expected_fight_count = self
             .positions
@@ -412,6 +445,48 @@ impl PathingTask {
             ),
             farming: PathingFarmingExecutionPlan::from_task(self, expected_fight_count),
             segments,
+        }
+    }
+}
+
+fn apply_pathing_track_conversion<F>(
+    segments: &mut [PathingSegmentPlan],
+    map_name: &str,
+    map_match_method: Option<&str>,
+    converter: &mut F,
+) where
+    F: FnMut(PathingTrackConversionContext<'_>) -> Option<PathingPoint>,
+{
+    for segment in segments {
+        for waypoint in &mut segment.waypoints {
+            let context = PathingTrackConversionContext {
+                map_name,
+                map_match_method,
+                global_index: waypoint.global_index,
+                segment_index: waypoint.segment_index,
+                segment_waypoint_index: waypoint.segment_waypoint_index,
+                waypoint_type: &waypoint.waypoint_type,
+                action: waypoint.action.as_deref(),
+                route_point: waypoint.route_point,
+            };
+            if let Some(track_point) = converter(context) {
+                waypoint.track_point = Some(track_point);
+                waypoint.track_conversion_pending = false;
+            }
+        }
+
+        if segment.starts_with_teleport {
+            continue;
+        }
+        if let Some(first_track_point) = segment
+            .waypoints
+            .first()
+            .and_then(|waypoint| waypoint.track_point)
+        {
+            segment.seed_previous_position = Some(first_track_point);
+            segment.seed_previous_position_coordinate_space =
+                Some(PathingCoordinateSpace::LegacyTrackMap);
+            segment.seed_previous_position_requires_track_conversion = false;
         }
     }
 }
@@ -684,21 +759,39 @@ fn pathing_phase_pending_dependencies(
             PathingMovementDependency::Teleport,
             PathingMovementDependency::MapMatching,
             PathingMovementDependency::CoordinateConversion,
-        ],
+        ]
+        .into_iter()
+        .filter(|dependency| {
+            *dependency != PathingMovementDependency::CoordinateConversion
+                || waypoint.track_conversion_pending
+        })
+        .collect(),
         PathingWaypointPhase::BeforeMoveToTarget
         | PathingWaypointPhase::BeforeMoveCloseToTarget => Vec::new(),
         PathingWaypointPhase::FaceTo => vec![
             PathingMovementDependency::CoordinateConversion,
             PathingMovementDependency::PositionObservation,
             PathingMovementDependency::CameraRotation,
-        ],
+        ]
+        .into_iter()
+        .filter(|dependency| {
+            *dependency != PathingMovementDependency::CoordinateConversion
+                || waypoint.track_conversion_pending
+        })
+        .collect(),
         PathingWaypointPhase::MoveTo | PathingWaypointPhase::MoveCloseTo => vec![
             PathingMovementDependency::CoordinateConversion,
             PathingMovementDependency::PositionObservation,
             PathingMovementDependency::InputDispatch,
             PathingMovementDependency::MovementTermination,
             PathingMovementDependency::TrapEscape,
-        ],
+        ]
+        .into_iter()
+        .filter(|dependency| {
+            *dependency != PathingMovementDependency::CoordinateConversion
+                || waypoint.track_conversion_pending
+        })
+        .collect(),
         PathingWaypointPhase::RunAction => pathing_action_pending_dependencies(waypoint),
     }
 }

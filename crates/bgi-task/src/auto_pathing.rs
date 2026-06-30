@@ -6,8 +6,8 @@ use bgi_core::{
     read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingCoordinateSpace,
     PathingExecutionPlan, PathingLogOutputActionPlan, PathingMovementDependency,
     PathingMovementPhaseContract, PathingMovementSegmentContract, PathingMovementWaypointContract,
-    PathingPoint, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary,
-    PathingWaypointPhase, PathingWaypointPlan,
+    PathingPoint, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
+    PathingTrackConversionContext, PathingWaypointPhase, PathingWaypointPlan,
 };
 use bgi_vision::Size;
 use serde::{Deserialize, Serialize};
@@ -421,6 +421,30 @@ pub fn plan_auto_pathing(
     working_directory: impl AsRef<Path>,
     route: &str,
 ) -> Result<AutoPathingExecutionPlan> {
+    plan_auto_pathing_with_execution_plan(working_directory, route, |task| task.execution_plan())
+}
+
+pub fn plan_auto_pathing_with_track_converter<F>(
+    working_directory: impl AsRef<Path>,
+    route: &str,
+    converter: F,
+) -> Result<AutoPathingExecutionPlan>
+where
+    F: FnMut(PathingTrackConversionContext<'_>) -> Option<PathingPoint>,
+{
+    plan_auto_pathing_with_execution_plan(working_directory, route, |task| {
+        task.execution_plan_with_track_converter(converter)
+    })
+}
+
+fn plan_auto_pathing_with_execution_plan<F>(
+    working_directory: impl AsRef<Path>,
+    route: &str,
+    build_execution_plan: F,
+) -> Result<AutoPathingExecutionPlan>
+where
+    F: FnOnce(&PathingTask) -> PathingExecutionPlan,
+{
     let normalized_path = normalize_user_auto_pathing_route(route)?;
     let path = working_directory
         .as_ref()
@@ -435,7 +459,7 @@ pub fn plan_auto_pathing(
         route: route.to_string(),
         normalized_path,
         summary,
-        execution_plan: task.execution_plan(),
+        execution_plan: build_execution_plan(&task),
         dispatched: false,
         completed: false,
         notes:

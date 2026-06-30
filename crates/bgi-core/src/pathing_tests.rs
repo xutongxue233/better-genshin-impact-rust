@@ -319,6 +319,177 @@ fn pathing_execution_plan_skips_pre_teleport_delay_after_legacy_fast_endpoints()
 }
 
 #[test]
+fn pathing_execution_plan_applies_track_conversion_to_waypoints_and_segment_seed() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": {
+                "name": "route",
+                "type": "collect",
+                "map_name": "Teyvat",
+                "map_match_method": "featureMatch"
+            },
+            "positions": [
+                { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                { "x": 3.0, "y": 4.0, "type": "target", "action": "pick_up_collect" },
+                { "x": 5.0, "y": 6.0, "type": "teleport" }
+            ]
+        }"#,
+    )
+    .unwrap();
+    let mut contexts = Vec::new();
+
+    let plan = task.execution_plan_with_track_converter(|context| {
+        contexts.push((
+            context.map_name.to_string(),
+            context.map_match_method.map(str::to_string),
+            context.global_index,
+            context.segment_index,
+            context.segment_waypoint_index,
+            context.waypoint_type.to_string(),
+            context.action.map(str::to_string),
+        ));
+        Some(PathingPoint {
+            x: context.route_point.x + 1_000.0,
+            y: context.route_point.y + 2_000.0,
+        })
+    });
+
+    assert_eq!(
+        contexts,
+        vec![
+            (
+                "Teyvat".to_string(),
+                Some("featureMatch".to_string()),
+                0,
+                0,
+                0,
+                "path".to_string(),
+                None
+            ),
+            (
+                "Teyvat".to_string(),
+                Some("featureMatch".to_string()),
+                1,
+                0,
+                1,
+                "target".to_string(),
+                Some("pick_up_collect".to_string())
+            ),
+            (
+                "Teyvat".to_string(),
+                Some("featureMatch".to_string()),
+                2,
+                1,
+                0,
+                "teleport".to_string(),
+                None
+            )
+        ]
+    );
+    assert_eq!(
+        plan.segments[0].seed_previous_position,
+        Some(PathingPoint {
+            x: 1_001.0,
+            y: 2_002.0
+        })
+    );
+    assert_eq!(
+        plan.segments[0].seed_previous_position_coordinate_space,
+        Some(PathingCoordinateSpace::LegacyTrackMap)
+    );
+    assert!(!plan.segments[0].seed_previous_position_requires_track_conversion);
+    assert!(!plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::CoordinateConversion));
+    assert!(plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::InputDispatch));
+    assert!(plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::MovementTermination));
+
+    let target = &plan.segments[0].waypoints[1];
+    assert_eq!(
+        target.track_point,
+        Some(PathingPoint {
+            x: 1_003.0,
+            y: 2_004.0
+        })
+    );
+    assert!(!target.track_conversion_pending);
+    let target_contract = &plan.movement_contract.segments[0].waypoints[1];
+    assert_eq!(target_contract.track_point, target.track_point);
+    assert!(!target_contract.track_conversion_pending);
+    let move_close_contract = target_contract
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::MoveCloseTo)
+        .unwrap();
+    assert_eq!(move_close_contract.target_point, target.track_point);
+    assert_eq!(
+        move_close_contract.coordinate_space,
+        Some(PathingCoordinateSpace::LegacyTrackMap)
+    );
+    assert!(!move_close_contract.requires_track_conversion);
+    assert!(!move_close_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::CoordinateConversion));
+    assert!(move_close_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::InputDispatch));
+}
+
+#[test]
+fn pathing_execution_plan_keeps_coordinate_conversion_pending_when_converter_declines_point() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                { "x": 3.0, "y": 4.0, "type": "target", "action": "pick_up_collect" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan_with_track_converter(|context| {
+        (context.global_index == 0).then_some(PathingPoint { x: 10.0, y: 20.0 })
+    });
+
+    assert_eq!(
+        plan.segments[0].seed_previous_position,
+        Some(PathingPoint { x: 10.0, y: 20.0 })
+    );
+    assert_eq!(
+        plan.segments[0].seed_previous_position_coordinate_space,
+        Some(PathingCoordinateSpace::LegacyTrackMap)
+    );
+    let declined = &plan.movement_contract.segments[0].waypoints[1];
+    assert_eq!(declined.track_point, None);
+    assert!(declined.track_conversion_pending);
+    let move_close_contract = declined
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::MoveCloseTo)
+        .unwrap();
+    assert_eq!(
+        move_close_contract.coordinate_space,
+        Some(PathingCoordinateSpace::RouteJson)
+    );
+    assert!(move_close_contract.requires_track_conversion);
+    assert!(move_close_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::CoordinateConversion));
+    assert!(plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&PathingMovementDependency::CoordinateConversion));
+}
+
+#[test]
 fn pathing_movement_contract_aggregates_present_phase_dependencies_only() {
     let task = PathingTask::from_json(
         r#"{

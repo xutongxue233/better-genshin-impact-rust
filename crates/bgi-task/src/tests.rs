@@ -20590,6 +20590,127 @@ fn auto_pathing_movement_contract_report_preserves_pre_teleport_delay_between_se
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn auto_pathing_movement_contract_consumes_converted_track_points_without_claiming_completion() {
+    let root = unique_test_root("auto-pathing-converted-track-points");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("converted.json"),
+        r#"{
+                "info": { "name": "converted route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing_with_track_converter(&root, "liyue/converted.json", |context| {
+        Some(bgi_core::PathingPoint {
+            x: context.route_point.x + 10.0,
+            y: context.route_point.y + 20.0,
+        })
+    })
+    .unwrap();
+    assert_eq!(
+        plan.normalized_path,
+        PathBuf::from("liyue").join("converted.json")
+    );
+    let waypoint = &plan.execution_plan.movement_contract.segments[0].waypoints[0];
+    assert_eq!(
+        waypoint.track_point,
+        Some(bgi_core::PathingPoint { x: 11.0, y: 22.0 })
+    );
+    let move_to = waypoint
+        .phase_contracts
+        .iter()
+        .find(|phase| phase.phase == bgi_core::PathingWaypointPhase::MoveTo)
+        .unwrap();
+    assert_eq!(
+        move_to.coordinate_space,
+        Some(bgi_core::PathingCoordinateSpace::LegacyTrackMap)
+    );
+    assert!(!move_to.requires_track_conversion);
+    assert!(!move_to
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
+    let mut runtime = UnsupportedAutoPathingMovementRuntime;
+
+    let report = execute_auto_pathing_movement_contract_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(report.movement_contract_consumed);
+    assert!(!report.movement_completed);
+    assert!(!report.native_pathing_completed);
+    assert!(!report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::NativePending
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_converted_track_points_preserve_teleport_route_coordinates() {
+    let root = unique_test_root("auto-pathing-converted-teleport-route-coordinates");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("teleport.json"),
+        r#"{
+                "info": { "name": "converted teleport", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 5.0, "y": 6.0, "type": "teleport", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing_with_track_converter(&root, "liyue/teleport.json", |context| {
+        Some(bgi_core::PathingPoint {
+            x: context.route_point.x + 100.0,
+            y: context.route_point.y + 200.0,
+        })
+    })
+    .unwrap();
+    let waypoint = &plan.execution_plan.movement_contract.segments[0].waypoints[0];
+    assert_eq!(
+        waypoint.track_point,
+        Some(bgi_core::PathingPoint { x: 105.0, y: 206.0 })
+    );
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            let CommonJobExecutionPlan::Teleport(teleport) = common_job_plan else {
+                panic!("expected Teleport common-job plan");
+            };
+            let target = teleport.target.as_ref().unwrap();
+            assert_eq!((target.x, target.y), (5.0, 6.0));
+            Ok(None)
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 1);
+    assert!(!report.native_pathing_completed);
+    assert!(report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .any(
+            |phase| phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport
+                && phase.status == PathingBoundaryStatus::Unsupported
+        ));
+    let _ = fs::remove_dir_all(root);
+}
+
 #[derive(Default)]
 struct CompletingAutoPathingMovementRuntime {
     phases: Vec<bgi_core::PathingWaypointPhase>,
