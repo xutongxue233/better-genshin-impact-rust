@@ -181,8 +181,8 @@ use bgi_task::{
     CHOOSE_TALK_OPTION_ICON, CHOOSE_TALK_OPTION_VK_SPACE, COMMON_BTN_WHITE_CONFIRM,
     QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
     QUICK_TELEPORT_MAP_SCALE_BUTTON, QUICK_TELEPORT_MAP_SETTINGS_BUTTON,
-    RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY,
-    USE_REDEEM_CODE_TASK_KEY,
+    RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_PAIMON_MENU, RETURN_MAIN_UI_TASK_KEY,
+    TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
 };
 #[cfg(test)]
 use bgi_task::{
@@ -9169,6 +9169,23 @@ fn desktop_talk_ui_locator(capture_size: VisionSize) -> bgi_vision::Result<BvLoc
         .plan(BvLocatorOperation::IsExist, Some(100)))
 }
 
+fn desktop_main_ui_locator(capture_size: VisionSize) -> bgi_vision::Result<BvLocatorPlan> {
+    let page = bgi_vision::BvPage {
+        capture_size,
+        ..bgi_vision::BvPage::default()
+    };
+    let roi = Rect::new(
+        0,
+        0,
+        (capture_size.width / 2) as i32,
+        (capture_size.height / 2) as i32,
+    )?;
+    let image = BvImage::new(RETURN_MAIN_UI_PAIMON_MENU)?;
+    Ok(page
+        .locator_for_image(&image, Some(roi), 0.8)?
+        .plan(BvLocatorOperation::IsExist, Some(100)))
+}
+
 fn desktop_talk_option_icon_locator(capture_size: VisionSize) -> bgi_vision::Result<BvLocatorPlan> {
     let page = bgi_vision::BvPage {
         capture_size,
@@ -9288,6 +9305,7 @@ where
 struct DesktopSelectLastTalkOptionRule<'a> {
     talk_ui_locator: &'a BvLocatorPlan,
     option_icon_locator: &'a BvLocatorPlan,
+    main_ui_locator: Option<(&'a BvLocatorPlan, bool)>,
     end_locator: Option<(&'a BvLocatorPlan, &'a str)>,
     max_iterations: u32,
     success_on_talk_ui_closed: bool,
@@ -9323,6 +9341,20 @@ where
         let talk_ui_open = talk_ui_region.is_exist();
 
         if !talk_ui_open {
+            if let Some((locator, result)) = rule.main_ui_locator {
+                let main_ui_region = common
+                    .vision_backend()
+                    .find(&image.pixels, image.size, &locator.recognition_object)
+                    .map_err(|error| {
+                        TaskError::VisionPlan(format!(
+                            "{} main UI template lookup failed: {error}",
+                            rule.task_name
+                        ))
+                    })?;
+                if main_ui_region.is_exist() {
+                    return Ok(result);
+                }
+            }
             if let Some((locator, label)) = rule.end_locator {
                 let end_region = common
                     .vision_backend()
@@ -9380,6 +9412,11 @@ where
 
     if rule.success_on_retry_exhausted {
         return Ok(true);
+    }
+    if let Some((locator, result)) = rule.main_ui_locator {
+        if desktop_locator_exists_on_capture(common, locator, rule.task_name, "main UI")? {
+            return Ok(result);
+        }
     }
     if let Some((locator, label)) = rule.end_locator {
         return desktop_locator_exists_on_capture(common, locator, rule.task_name, label);
@@ -13176,12 +13213,15 @@ fn execute_desktop_go_to_crafting_bench_live(
         desktop_talk_option_icon_locator(plan.capture_size).map_err(|error| {
             format!("GoToCraftingBench talk-option icon locator setup failed: {error}")
         })?;
+    let main_ui_locator = desktop_main_ui_locator(plan.capture_size)
+        .map_err(|error| format!("GoToCraftingBench main UI locator setup failed: {error}"))?;
     let mut runtime = DesktopGoToCraftingBenchRuntime::new(
         common_runtime,
         plan.capture_size,
         pick_key_locator,
         plan.locators.talk_ui.clone(),
         option_icon_locator,
+        main_ui_locator,
     );
     execute_go_to_crafting_bench_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
@@ -13246,6 +13286,7 @@ struct DesktopGoToCraftingBenchRuntime<F, I, C> {
     pick_key_locator: BvLocatorPlan,
     talk_ui_locator: BvLocatorPlan,
     option_icon_locator: BvLocatorPlan,
+    main_ui_locator: BvLocatorPlan,
 }
 
 impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
@@ -13255,6 +13296,7 @@ impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
         pick_key_locator: BvLocatorPlan,
         talk_ui_locator: BvLocatorPlan,
         option_icon_locator: BvLocatorPlan,
+        main_ui_locator: BvLocatorPlan,
     ) -> Self {
         Self {
             common,
@@ -13262,6 +13304,7 @@ impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
             pick_key_locator,
             talk_ui_locator,
             option_icon_locator,
+            main_ui_locator,
         }
     }
 }
@@ -13383,6 +13426,7 @@ where
             DesktopSelectLastTalkOptionRule {
                 talk_ui_locator: &self.talk_ui_locator,
                 option_icon_locator: &self.option_icon_locator,
+                main_ui_locator: Some((&self.main_ui_locator, false)),
                 end_locator: Some((until_locator, "crafting page confirm")),
                 max_iterations: DESKTOP_SELECT_LAST_TALK_OPTION_DEFAULT_RETRIES,
                 success_on_talk_ui_closed: false,
@@ -13649,20 +13693,20 @@ where
     fn select_last_adventurers_guild_talk_option_until_end(
         &mut self,
         max_times: Option<u8>,
-        until_paimon_menu: bool,
+        _until_paimon_menu: bool,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         let max_iterations = max_times
             .map(u32::from)
             .unwrap_or(DESKTOP_SELECT_LAST_TALK_OPTION_DEFAULT_RETRIES);
-        let end_locator = until_paimon_menu.then_some((&self.paimon_menu_locator, "Paimon menu"));
         let completed = desktop_select_last_talk_option_until_end(
             &mut self.common,
             DesktopSelectLastTalkOptionRule {
                 talk_ui_locator: &self.talk_ui_locator,
                 option_icon_locator: &self.option_icon_locator,
-                end_locator,
+                main_ui_locator: Some((&self.paimon_menu_locator, true)),
+                end_locator: None,
                 max_iterations,
-                success_on_talk_ui_closed: !until_paimon_menu,
+                success_on_talk_ui_closed: false,
                 success_on_retry_exhausted: max_times.is_some(),
                 task_name: "GoToAdventurersGuild",
             },
@@ -18842,6 +18886,344 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    const DESKTOP_TALK_OPTION_TEST_TALK_PATH: &str = "desktop-talk-option-test-talk.bgr";
+    const DESKTOP_TALK_OPTION_TEST_OPTION_PATH: &str = "desktop-talk-option-test-option.bgr";
+    const DESKTOP_TALK_OPTION_TEST_END_PATH: &str = "desktop-talk-option-test-end.bgr";
+    const DESKTOP_TALK_OPTION_TEST_MAIN_PATH: &str = "desktop-talk-option-test-main.bgr";
+
+    struct DesktopTalkOptionTestAssets {
+        capture_size: VisionSize,
+        talk_template: BgrImage,
+        option_template: BgrImage,
+        end_template: BgrImage,
+        main_template: BgrImage,
+        talk_locator: BvLocatorPlan,
+        option_locator: BvLocatorPlan,
+        end_locator: BvLocatorPlan,
+        main_locator: BvLocatorPlan,
+    }
+
+    impl DesktopTalkOptionTestAssets {
+        fn new() -> Self {
+            let capture_size = VisionSize::new(48, 40);
+            Self {
+                capture_size,
+                talk_template: desktop_talk_option_test_template(15),
+                option_template: desktop_talk_option_test_template(75),
+                end_template: desktop_talk_option_test_template(135),
+                main_template: desktop_talk_option_test_template(195),
+                talk_locator: desktop_talk_option_test_locator(
+                    DESKTOP_TALK_OPTION_TEST_TALK_PATH,
+                    capture_size,
+                    BvLocatorOperation::IsExist,
+                ),
+                option_locator: desktop_talk_option_test_locator(
+                    DESKTOP_TALK_OPTION_TEST_OPTION_PATH,
+                    capture_size,
+                    BvLocatorOperation::FindAll,
+                ),
+                end_locator: desktop_talk_option_test_locator(
+                    DESKTOP_TALK_OPTION_TEST_END_PATH,
+                    capture_size,
+                    BvLocatorOperation::IsExist,
+                ),
+                main_locator: desktop_talk_option_test_locator(
+                    DESKTOP_TALK_OPTION_TEST_MAIN_PATH,
+                    capture_size,
+                    BvLocatorOperation::IsExist,
+                ),
+            }
+        }
+
+        fn frame(&self, placements: &[(&BgrImage, u32, u32)]) -> BgrImage {
+            let mut frame = desktop_talk_option_test_blank_frame(self.capture_size);
+            for (template, x, y) in placements {
+                desktop_talk_option_test_paint_template(
+                    &mut frame.pixels,
+                    self.capture_size,
+                    template,
+                    *x,
+                    *y,
+                );
+            }
+            frame
+        }
+
+        fn runtime(
+            &self,
+            frames: impl IntoIterator<Item = BgrImage>,
+        ) -> bgi_task::TemplateCommonJobRuntime<
+            PureRustVisionBackend,
+            DesktopTalkOptionTestFrameSource,
+            DesktopTalkOptionTestInputDriver,
+            DesktopTalkOptionTestClock,
+        > {
+            let backend = PureRustVisionBackend::new()
+                .with_template(
+                    DESKTOP_TALK_OPTION_TEST_TALK_PATH,
+                    self.talk_template.clone(),
+                )
+                .with_template(
+                    DESKTOP_TALK_OPTION_TEST_OPTION_PATH,
+                    self.option_template.clone(),
+                )
+                .with_template(DESKTOP_TALK_OPTION_TEST_END_PATH, self.end_template.clone())
+                .with_template(
+                    DESKTOP_TALK_OPTION_TEST_MAIN_PATH,
+                    self.main_template.clone(),
+                );
+            bgi_task::TemplateCommonJobRuntime::new(
+                backend,
+                DesktopTalkOptionTestFrameSource::new(frames),
+                DesktopTalkOptionTestInputDriver::default(),
+                DesktopTalkOptionTestClock::default(),
+            )
+        }
+    }
+
+    fn desktop_talk_option_test_template(seed: u8) -> BgrImage {
+        let colors = [
+            [seed, 30, 220],
+            [220, seed, 40],
+            [50, 210, seed],
+            [seed.wrapping_add(70), 120, 80],
+        ];
+        let pixels: Vec<u8> = colors.into_iter().flatten().collect();
+        BgrImage::new(VisionSize::new(2, 2), pixels).unwrap()
+    }
+
+    fn desktop_talk_option_test_locator(
+        path: &'static str,
+        capture_size: VisionSize,
+        operation: BvLocatorOperation,
+    ) -> BvLocatorPlan {
+        let mut recognition_object = bgi_vision::RecognitionObject::template_match_in(
+            PathBuf::from(path),
+            Rect::new(0, 0, capture_size.width as i32, capture_size.height as i32).unwrap(),
+        );
+        recognition_object.name = Some(path.to_string());
+        recognition_object.template.mode = bgi_vision::TemplateMatchMode::SqDiffNormed;
+        recognition_object.template.threshold = 0.99;
+        recognition_object.template.use_3_channels = true;
+        BvLocatorPlan {
+            operation,
+            recognition_object,
+            timeout_ms: 100,
+            retry_interval_ms: 100,
+            retry_count: 1,
+            retry_action: None,
+        }
+    }
+
+    fn desktop_talk_option_test_blank_frame(size: VisionSize) -> BgrImage {
+        BgrImage::new(
+            size,
+            vec![0; size.width as usize * size.height as usize * 3],
+        )
+        .unwrap()
+    }
+
+    fn desktop_talk_option_test_paint_template(
+        pixels: &mut [u8],
+        size: VisionSize,
+        template: &BgrImage,
+        x: u32,
+        y: u32,
+    ) {
+        assert!(x + template.size.width <= size.width);
+        assert!(y + template.size.height <= size.height);
+        for ty in 0..template.size.height {
+            for tx in 0..template.size.width {
+                let source = ((ty * template.size.width + tx) * 3) as usize;
+                let target = (((y + ty) * size.width + x + tx) * 3) as usize;
+                pixels[target..target + 3].copy_from_slice(&template.pixels[source..source + 3]);
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct DesktopTalkOptionTestFrameSource {
+        frames: VecDeque<BgrImage>,
+        captures: usize,
+    }
+
+    impl DesktopTalkOptionTestFrameSource {
+        fn new(frames: impl IntoIterator<Item = BgrImage>) -> Self {
+            Self {
+                frames: frames.into_iter().collect(),
+                captures: 0,
+            }
+        }
+    }
+
+    impl CommonJobFrameSource for DesktopTalkOptionTestFrameSource {
+        fn capture_frame(&mut self) -> bgi_task::Result<BgrImage> {
+            self.captures += 1;
+            self.frames.pop_front().ok_or_else(|| {
+                TaskError::CommonJobExecution(
+                    "desktop talk-option test frame queue exhausted".into(),
+                )
+            })
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct DesktopTalkOptionTestInputDriver {
+        input_batches: Vec<Vec<InputEvent>>,
+        clicks: Vec<(i32, i32)>,
+    }
+
+    impl CommonJobInputDriver for DesktopTalkOptionTestInputDriver {
+        fn dispatch_input(&mut self, events: &[InputEvent]) -> bgi_task::Result<()> {
+            self.input_batches.push(events.to_vec());
+            Ok(())
+        }
+
+        fn click_capture_point(&mut self, x: i32, y: i32) -> bgi_task::Result<()> {
+            self.clicks.push((x, y));
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct DesktopTalkOptionTestClock {
+        waits: Vec<u32>,
+    }
+
+    impl CommonJobClock for DesktopTalkOptionTestClock {
+        fn wait(&mut self, milliseconds: u32) -> bgi_task::Result<()> {
+            self.waits.push(milliseconds);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn desktop_talk_option_drain_clicks_lowest_option_icon() {
+        let assets = DesktopTalkOptionTestAssets::new();
+        let frame = assets.frame(&[
+            (&assets.talk_template, 1, 1),
+            (&assets.option_template, 10, 10),
+            (&assets.option_template, 10, 25),
+        ]);
+        let mut runtime = assets.runtime([frame]);
+
+        let completed = desktop_select_last_talk_option_until_end(
+            &mut runtime,
+            DesktopSelectLastTalkOptionRule {
+                talk_ui_locator: &assets.talk_locator,
+                option_icon_locator: &assets.option_locator,
+                main_ui_locator: None,
+                end_locator: None,
+                max_iterations: 1,
+                success_on_talk_ui_closed: false,
+                success_on_retry_exhausted: true,
+                task_name: "DesktopTalkOptionTest",
+            },
+        )
+        .unwrap();
+        let (_, frame_source, input_driver, clock, _) = runtime.into_parts();
+
+        assert!(completed);
+        assert_eq!(frame_source.captures, 1);
+        assert_eq!(input_driver.clicks, vec![(11, 26)]);
+        assert!(input_driver.input_batches.is_empty());
+        assert_eq!(clock.waits, vec![DESKTOP_SELECT_LAST_TALK_OPTION_DELAY_MS]);
+    }
+
+    #[test]
+    fn desktop_talk_option_drain_presses_space_when_option_missing() {
+        let assets = DesktopTalkOptionTestAssets::new();
+        let frame = assets.frame(&[(&assets.talk_template, 1, 1)]);
+        let mut runtime = assets.runtime([frame]);
+
+        let completed = desktop_select_last_talk_option_until_end(
+            &mut runtime,
+            DesktopSelectLastTalkOptionRule {
+                talk_ui_locator: &assets.talk_locator,
+                option_icon_locator: &assets.option_locator,
+                main_ui_locator: None,
+                end_locator: None,
+                max_iterations: 1,
+                success_on_talk_ui_closed: false,
+                success_on_retry_exhausted: true,
+                task_name: "DesktopTalkOptionTest",
+            },
+        )
+        .unwrap();
+        let (_, frame_source, input_driver, clock, _) = runtime.into_parts();
+
+        assert!(completed);
+        assert_eq!(frame_source.captures, 1);
+        assert!(input_driver.clicks.is_empty());
+        assert_eq!(
+            input_driver.input_batches,
+            vec![InputSequence::new()
+                .key_press(CHOOSE_TALK_OPTION_VK_SPACE)
+                .events()
+                .to_vec()]
+        );
+        assert_eq!(clock.waits, vec![DESKTOP_SELECT_LAST_TALK_OPTION_DELAY_MS]);
+    }
+
+    #[test]
+    fn desktop_talk_option_drain_stops_on_end_locator() {
+        let assets = DesktopTalkOptionTestAssets::new();
+        let frame = assets.frame(&[(&assets.end_template, 20, 1)]);
+        let mut runtime = assets.runtime([frame]);
+
+        let completed = desktop_select_last_talk_option_until_end(
+            &mut runtime,
+            DesktopSelectLastTalkOptionRule {
+                talk_ui_locator: &assets.talk_locator,
+                option_icon_locator: &assets.option_locator,
+                main_ui_locator: None,
+                end_locator: Some((&assets.end_locator, "end")),
+                max_iterations: 20,
+                success_on_talk_ui_closed: false,
+                success_on_retry_exhausted: false,
+                task_name: "DesktopTalkOptionTest",
+            },
+        )
+        .unwrap();
+        let (_, frame_source, input_driver, clock, _) = runtime.into_parts();
+
+        assert!(completed);
+        assert_eq!(frame_source.captures, 1);
+        assert!(input_driver.clicks.is_empty());
+        assert!(input_driver.input_batches.is_empty());
+        assert!(clock.waits.is_empty());
+    }
+
+    #[test]
+    fn desktop_talk_option_drain_stops_on_main_ui_with_configured_result() {
+        let assets = DesktopTalkOptionTestAssets::new();
+        let frame = assets.frame(&[(&assets.main_template, 4, 4), (&assets.end_template, 20, 1)]);
+        let mut runtime = assets.runtime([frame]);
+
+        let completed = desktop_select_last_talk_option_until_end(
+            &mut runtime,
+            DesktopSelectLastTalkOptionRule {
+                talk_ui_locator: &assets.talk_locator,
+                option_icon_locator: &assets.option_locator,
+                main_ui_locator: Some((&assets.main_locator, false)),
+                end_locator: Some((&assets.end_locator, "end")),
+                max_iterations: 20,
+                success_on_talk_ui_closed: false,
+                success_on_retry_exhausted: false,
+                task_name: "DesktopTalkOptionTest",
+            },
+        )
+        .unwrap();
+        let (_, frame_source, input_driver, clock, _) = runtime.into_parts();
+
+        assert!(!completed);
+        assert_eq!(frame_source.captures, 1);
+        assert!(input_driver.clicks.is_empty());
+        assert!(input_driver.input_batches.is_empty());
+        assert!(clock.waits.is_empty());
+    }
 
     #[test]
     fn desktop_updater_path_defaults_to_rust_sidecar_name() {
