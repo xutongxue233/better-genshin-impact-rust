@@ -178,10 +178,11 @@ use bgi_task::{
     AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH, AUTO_OPEN_CHEST_TASK_KEY, AUTO_PICK_PICK_KEY_ASSET,
     AUTO_STYGIAN_ONSLAUGHT_TASK_KEY, AUTO_TRACK_DEFAULT_CAPTURE_WIDTH, AUTO_TRACK_PATH_TASK_KEY,
     AUTO_TRACK_TASK_KEY, AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY,
-    COMMON_BTN_WHITE_CONFIRM, QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY,
-    QUICK_SERENITEA_POT_TASK_KEY, QUICK_TELEPORT_MAP_SCALE_BUTTON,
-    QUICK_TELEPORT_MAP_SETTINGS_BUTTON, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS,
-    RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
+    CHOOSE_TALK_OPTION_ICON, CHOOSE_TALK_OPTION_VK_SPACE, COMMON_BTN_WHITE_CONFIRM,
+    QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
+    QUICK_TELEPORT_MAP_SCALE_BUTTON, QUICK_TELEPORT_MAP_SETTINGS_BUTTON,
+    RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY,
+    USE_REDEEM_CODE_TASK_KEY,
 };
 #[cfg(test)]
 use bgi_task::{
@@ -223,6 +224,8 @@ const SCRIPT_IMPORT_CLIPBOARD_EVENT: &str = "script-repo://clipboard-import-dete
 const BACKGROUND_UPDATE_EVENT: &str = "desktop-update://background-check";
 const HTML_MASK_WINDOW_PREFIX: &str = "html-mask-";
 const HTML_MASK_POSITION_SYNC_INTERVAL: Duration = Duration::from_millis(250);
+const DESKTOP_SELECT_LAST_TALK_OPTION_DEFAULT_RETRIES: u32 = 2_400;
+const DESKTOP_SELECT_LAST_TALK_OPTION_DELAY_MS: u32 = 200;
 const HTML_MASK_BRIDGE_SCRIPT: &str = r#"
 (function () {
   if (window.htmlMask && window.htmlMask.__betterGiRustBridge) return;
@@ -9166,6 +9169,23 @@ fn desktop_talk_ui_locator(capture_size: VisionSize) -> bgi_vision::Result<BvLoc
         .plan(BvLocatorOperation::IsExist, Some(100)))
 }
 
+fn desktop_talk_option_icon_locator(capture_size: VisionSize) -> bgi_vision::Result<BvLocatorPlan> {
+    let page = bgi_vision::BvPage {
+        capture_size,
+        ..bgi_vision::BvPage::default()
+    };
+    let roi = Rect::new(
+        (capture_size.width / 2) as i32,
+        (capture_size.height / 12) as i32,
+        (capture_size.width - capture_size.width / 2 - capture_size.width / 6) as i32,
+        (capture_size.height - capture_size.height / 12 - 10) as i32,
+    )?;
+    let image = BvImage::new(CHOOSE_TALK_OPTION_ICON)?;
+    Ok(page
+        .locator_for_image(&image, Some(roi), 0.8)?
+        .plan(BvLocatorOperation::FindAll, Some(100)))
+}
+
 fn desktop_quick_serenitea_pot_interaction_text_roi(
     pick_key_rect: Rect,
     capture_size: VisionSize,
@@ -9263,6 +9283,117 @@ where
             ))
         })?;
     Ok(region.is_exist())
+}
+
+struct DesktopSelectLastTalkOptionRule<'a> {
+    talk_ui_locator: &'a BvLocatorPlan,
+    option_icon_locator: &'a BvLocatorPlan,
+    end_locator: Option<(&'a BvLocatorPlan, &'a str)>,
+    max_iterations: u32,
+    success_on_talk_ui_closed: bool,
+    success_on_retry_exhausted: bool,
+    task_name: &'a str,
+}
+
+fn desktop_select_last_talk_option_until_end<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    rule: DesktopSelectLastTalkOptionRule<'_>,
+) -> bgi_task::Result<bool>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    let max_iterations = rule.max_iterations.max(1);
+    for _ in 0..max_iterations {
+        let image = common.frame_source_mut().capture_frame()?;
+        let talk_ui_region = common
+            .vision_backend()
+            .find(
+                &image.pixels,
+                image.size,
+                &rule.talk_ui_locator.recognition_object,
+            )
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "{} talk UI template lookup failed: {error}",
+                    rule.task_name
+                ))
+            })?;
+        let talk_ui_open = talk_ui_region.is_exist();
+
+        if !talk_ui_open {
+            if let Some((locator, label)) = rule.end_locator {
+                let end_region = common
+                    .vision_backend()
+                    .find(&image.pixels, image.size, &locator.recognition_object)
+                    .map_err(|error| {
+                        TaskError::VisionPlan(format!(
+                            "{} {label} template lookup failed: {error}",
+                            rule.task_name
+                        ))
+                    })?;
+                if end_region.is_exist() {
+                    return Ok(true);
+                }
+            }
+            if rule.success_on_talk_ui_closed {
+                return Ok(true);
+            }
+        } else {
+            let mut option_regions = common
+                .vision_backend()
+                .find_multi(
+                    &image.pixels,
+                    image.size,
+                    &rule.option_icon_locator.recognition_object,
+                )
+                .map_err(|error| {
+                    TaskError::VisionPlan(format!(
+                        "{} talk-option icon lookup failed: {error}",
+                        rule.task_name
+                    ))
+                })?;
+            option_regions.retain(|region| region.is_exist());
+            option_regions.sort_by_key(|region| std::cmp::Reverse(region.rect.y));
+            if let Some(last_option) = option_regions.first() {
+                let center = last_option.rect.center();
+                common
+                    .input_driver_mut()
+                    .click_capture_point(center.x, center.y)?;
+            } else {
+                let events = InputSequence::new()
+                    .key_press(CHOOSE_TALK_OPTION_VK_SPACE)
+                    .events()
+                    .to_vec();
+                CommonJobRuntime::dispatch_input(common, &events)?;
+            }
+        }
+
+        CommonJobRuntime::execute_page_command(
+            common,
+            &BvPageCommand::Wait {
+                milliseconds: DESKTOP_SELECT_LAST_TALK_OPTION_DELAY_MS,
+            },
+        )?;
+    }
+
+    if rule.success_on_retry_exhausted {
+        return Ok(true);
+    }
+    if let Some((locator, label)) = rule.end_locator {
+        return desktop_locator_exists_on_capture(common, locator, rule.task_name, label);
+    }
+    if rule.success_on_talk_ui_closed {
+        return desktop_locator_exists_on_capture(
+            common,
+            rule.talk_ui_locator,
+            rule.task_name,
+            "talk UI",
+        )
+        .map(|talk_ui_open| !talk_ui_open);
+    }
+    Ok(false)
 }
 
 fn desktop_quick_serenitea_pot_ocr_text_from_regions(regions: &[OcrResultRegion]) -> String {
@@ -13041,11 +13172,16 @@ fn execute_desktop_go_to_crafting_bench_live(
     );
     let pick_key_locator = desktop_auto_pick_key_locator(plan.capture_size)
         .map_err(|error| format!("GoToCraftingBench F-key locator setup failed: {error}"))?;
+    let option_icon_locator =
+        desktop_talk_option_icon_locator(plan.capture_size).map_err(|error| {
+            format!("GoToCraftingBench talk-option icon locator setup failed: {error}")
+        })?;
     let mut runtime = DesktopGoToCraftingBenchRuntime::new(
         common_runtime,
         plan.capture_size,
         pick_key_locator,
         plan.locators.talk_ui.clone(),
+        option_icon_locator,
     );
     execute_go_to_crafting_bench_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
@@ -13060,12 +13196,7 @@ fn desktop_go_to_crafting_bench_live_preflight(
                 desktop_common_job_pathing_live_preflight("GoToCraftingBench", &rule.pathing_json)?;
             }
             GoToCraftingBenchStepAction::InteractionRetry { .. } => {}
-            GoToCraftingBenchStepAction::SelectLastTalkOptionUntilEnd { .. } => {
-                return Err(
-                    "GoToCraftingBench live execution requires desktop talk-option selection adapter"
-                        .to_string(),
-                );
-            }
+            GoToCraftingBenchStepAction::SelectLastTalkOptionUntilEnd { .. } => {}
             GoToCraftingBenchStepAction::RecognizeResinCounts { .. } => {
                 return Err(
                     "GoToCraftingBench live execution requires desktop resin-count OCR adapter"
@@ -13114,6 +13245,7 @@ struct DesktopGoToCraftingBenchRuntime<F, I, C> {
     capture_size: VisionSize,
     pick_key_locator: BvLocatorPlan,
     talk_ui_locator: BvLocatorPlan,
+    option_icon_locator: BvLocatorPlan,
 }
 
 impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
@@ -13122,12 +13254,14 @@ impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
         capture_size: VisionSize,
         pick_key_locator: BvLocatorPlan,
         talk_ui_locator: BvLocatorPlan,
+        option_icon_locator: BvLocatorPlan,
     ) -> Self {
         Self {
             common,
             capture_size,
             pick_key_locator,
             talk_ui_locator,
+            option_icon_locator,
         }
     }
 }
@@ -13242,12 +13376,21 @@ where
 
     fn select_last_crafting_bench_talk_option_until_end(
         &mut self,
-        _until_locator: &BvLocatorPlan,
+        until_locator: &BvLocatorPlan,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
-        Err(TaskError::CommonJobExecution(
-            "GoToCraftingBench live execution requires desktop talk-option selection adapter"
-                .to_string(),
-        ))
+        let completed = desktop_select_last_talk_option_until_end(
+            &mut self.common,
+            DesktopSelectLastTalkOptionRule {
+                talk_ui_locator: &self.talk_ui_locator,
+                option_icon_locator: &self.option_icon_locator,
+                end_locator: Some((until_locator, "crafting page confirm")),
+                max_iterations: DESKTOP_SELECT_LAST_TALK_OPTION_DEFAULT_RETRIES,
+                success_on_talk_ui_closed: false,
+                success_on_retry_exhausted: false,
+                task_name: "GoToCraftingBench",
+            },
+        )?;
+        Ok(CommonJobRuntimeOutcome::Matched(completed))
     }
 
     fn recognize_crafting_bench_resin_counts(
@@ -13306,15 +13449,21 @@ fn execute_desktop_go_to_adventurers_guild_live(
         .map_err(|error| format!("GoToAdventurersGuild F-key locator setup failed: {error}"))?;
     let talk_ui_locator = desktop_talk_ui_locator(plan.capture_size)
         .map_err(|error| format!("GoToAdventurersGuild talk UI locator setup failed: {error}"))?;
-    let mut runtime = DesktopGoToAdventurersGuildRuntime::new(
-        common_runtime,
+    let option_icon_locator =
+        desktop_talk_option_icon_locator(plan.capture_size).map_err(|error| {
+            format!("GoToAdventurersGuild talk-option icon locator setup failed: {error}")
+        })?;
+    let mut runtime = DesktopGoToAdventurersGuildRuntime {
+        common: common_runtime,
         config,
         window,
         cancellation,
-        plan.capture_size,
+        capture_size: plan.capture_size,
         pick_key_locator,
         talk_ui_locator,
-    );
+        option_icon_locator,
+        paimon_menu_locator: plan.locators.paimon_menu.clone(),
+    };
     execute_go_to_adventurers_guild_plan(plan, &mut runtime).map_err(|error| error.to_string())
 }
 
@@ -13326,28 +13475,8 @@ struct DesktopGoToAdventurersGuildRuntime<'a, F, I, C> {
     capture_size: VisionSize,
     pick_key_locator: BvLocatorPlan,
     talk_ui_locator: BvLocatorPlan,
-}
-
-impl<'a, F, I, C> DesktopGoToAdventurersGuildRuntime<'a, F, I, C> {
-    fn new(
-        common: PureTemplateCommonJobRuntime<F, I, C>,
-        config: &'a AppConfig,
-        window: &'a GameWindowMatch,
-        cancellation: Arc<InputCancellationToken>,
-        capture_size: VisionSize,
-        pick_key_locator: BvLocatorPlan,
-        talk_ui_locator: BvLocatorPlan,
-    ) -> Self {
-        Self {
-            common,
-            config,
-            window,
-            cancellation,
-            capture_size,
-            pick_key_locator,
-            talk_ui_locator,
-        }
-    }
+    option_icon_locator: BvLocatorPlan,
+    paimon_menu_locator: BvLocatorPlan,
 }
 
 impl<F, I, C> DesktopGoToAdventurersGuildRuntime<'_, F, I, C>
@@ -13519,13 +13648,26 @@ where
 
     fn select_last_adventurers_guild_talk_option_until_end(
         &mut self,
-        _max_times: Option<u8>,
-        _until_paimon_menu: bool,
+        max_times: Option<u8>,
+        until_paimon_menu: bool,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
-        Err(TaskError::CommonJobExecution(
-            "GoToAdventurersGuild live execution requires desktop talk-option drain adapter"
-                .to_string(),
-        ))
+        let max_iterations = max_times
+            .map(u32::from)
+            .unwrap_or(DESKTOP_SELECT_LAST_TALK_OPTION_DEFAULT_RETRIES);
+        let end_locator = until_paimon_menu.then_some((&self.paimon_menu_locator, "Paimon menu"));
+        let completed = desktop_select_last_talk_option_until_end(
+            &mut self.common,
+            DesktopSelectLastTalkOptionRule {
+                talk_ui_locator: &self.talk_ui_locator,
+                option_icon_locator: &self.option_icon_locator,
+                end_locator,
+                max_iterations,
+                success_on_talk_ui_closed: !until_paimon_menu,
+                success_on_retry_exhausted: max_times.is_some(),
+                task_name: "GoToAdventurersGuild",
+            },
+        )?;
+        Ok(CommonJobRuntimeOutcome::Matched(completed))
     }
 
     fn run_one_key_adventurers_guild_expedition(
@@ -13570,12 +13712,7 @@ fn desktop_go_to_adventurers_guild_live_preflight(
                 )?;
             }
             GoToAdventurersGuildStepAction::InteractionRetry { .. } => {}
-            GoToAdventurersGuildStepAction::SelectLastTalkOptionUntilEnd { .. } => {
-                return Err(format!(
-                    "GoToAdventurersGuild live execution requires desktop talk-option drain adapter at phase {:?} ({})",
-                    step.phase, step.label
-                ));
-            }
+            GoToAdventurersGuildStepAction::SelectLastTalkOptionUntilEnd { .. } => {}
             _ => {}
         }
     }
@@ -19224,7 +19361,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_crafting_bench_preflight_reports_interaction_after_pathing_contract() {
+    fn desktop_go_to_crafting_bench_preflight_reports_resin_ocr_after_talk_option_adapter() {
         let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
             bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
             Some(&serde_json::json!({ "country": "璃月" })),
@@ -19244,18 +19381,18 @@ mod tests {
 
         let error = desktop_go_to_crafting_bench_live_preflight(&plan).unwrap_err();
 
-        assert!(error.contains(
-            "GoToCraftingBench live execution requires desktop talk-option selection adapter"
-        ));
+        assert!(error
+            .contains("GoToCraftingBench live execution requires desktop resin-count OCR adapter"));
+        assert!(!error.contains("talk-option selection adapter"));
         assert!(!error.contains("crafting-bench interaction adapter"));
         assert!(!error.contains("native PathExecutor adapter"));
     }
 
     #[test]
-    fn desktop_go_to_adventurers_guild_preflight_reports_catherine_after_pathing_contract() {
+    fn desktop_go_to_adventurers_guild_preflight_accepts_talk_option_drain_adapter() {
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) = bgi_task::plan_common_job(
             bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY,
-            Some(&serde_json::json!({ "country": "蒙德" })),
+            Some(&serde_json::json!({ "country": "蒙德", "onlyDoOnce": true })),
         )
         .unwrap() else {
             panic!("expected GoToAdventurersGuild common job plan");
@@ -19270,21 +19407,14 @@ mod tests {
         assert!(pathing_report.waypoint_count > 0);
         assert!(!pathing_report.native_pathing_completed);
 
-        let error = desktop_go_to_adventurers_guild_live_preflight(&plan).unwrap_err();
-
-        assert!(error.contains(
-            "GoToAdventurersGuild live execution requires desktop talk-option drain adapter"
-        ));
-        assert!(error.contains("DailyReward"));
-        assert!(!error.contains("Catherine interaction adapter"));
-        assert!(!error.contains("native PathExecutor adapter"));
+        desktop_go_to_adventurers_guild_live_preflight(&plan).unwrap();
     }
 
     #[test]
     fn desktop_go_to_adventurers_guild_live_preflights_capture_before_catherine_adapter() {
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(plan)) = bgi_task::plan_common_job(
             bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY,
-            Some(&serde_json::json!({ "country": "蒙德" })),
+            Some(&serde_json::json!({ "country": "蒙德", "onlyDoOnce": true })),
         )
         .unwrap() else {
             panic!("expected GoToAdventurersGuild common job plan");
@@ -19327,13 +19457,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            adapter_error.contains(
-                "GoToAdventurersGuild live execution requires desktop talk-option drain adapter"
-            ) || adapter_error.contains(
-                "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter"
-            )
-        );
+        assert!(adapter_error.contains(
+            "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter"
+        ));
         assert!(!adapter_error.contains("desktop runtime adapter wiring after preflight"));
     }
 
@@ -19393,12 +19519,7 @@ mod tests {
             config: None,
         };
 
-        let default_error =
-            desktop_go_to_adventurers_guild_live_preflight(&default_plan).unwrap_err();
-
-        assert!(default_error.contains("desktop talk-option drain adapter"));
-        assert!(!default_error.contains("desktop Catherine interaction adapter"));
-        assert!(!default_error.contains("SkippedUnsupportedPartyJob"));
+        desktop_go_to_adventurers_guild_live_preflight(&default_plan).unwrap();
 
         let config = serde_json::json!({
             "country": "蒙德",
@@ -19415,12 +19536,7 @@ mod tests {
             config: None,
         };
 
-        let only_once_error =
-            desktop_go_to_adventurers_guild_live_preflight(&only_once_plan).unwrap_err();
-
-        assert!(only_once_error.contains("desktop talk-option drain adapter"));
-        assert!(!only_once_error.contains("desktop Catherine interaction adapter"));
-        assert!(!only_once_error.contains("SkippedUnsupportedEncounterJob"));
+        desktop_go_to_adventurers_guild_live_preflight(&only_once_plan).unwrap();
     }
 
     #[test]
@@ -19492,7 +19608,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_adventurers_guild_preflight_reports_next_adapter_boundaries() {
+    fn desktop_go_to_adventurers_guild_preflight_accepts_talk_option_drain_boundaries() {
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut default_plan)) =
             bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
         else {
@@ -19506,13 +19622,7 @@ mod tests {
             }
         }
 
-        let default_error =
-            desktop_go_to_adventurers_guild_live_preflight(&default_plan).unwrap_err();
-
-        assert!(default_error.contains("desktop talk-option drain adapter"));
-        assert!(default_error.contains("DailyReward"));
-        assert!(default_error.contains("select trailing dialogue options after daily reward"));
-        assert!(!default_error.contains("desktop Catherine interaction adapter"));
+        desktop_go_to_adventurers_guild_live_preflight(&default_plan).unwrap();
 
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut daily_drain_plan)) =
             bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
@@ -19531,12 +19641,7 @@ mod tests {
             }
         }
 
-        let daily_drain_error =
-            desktop_go_to_adventurers_guild_live_preflight(&daily_drain_plan).unwrap_err();
-
-        assert!(daily_drain_error.contains("desktop talk-option drain adapter"));
-        assert!(daily_drain_error.contains("DailyReward"));
-        assert!(daily_drain_error.contains("select trailing dialogue options after daily reward"));
+        desktop_go_to_adventurers_guild_live_preflight(&daily_drain_plan).unwrap();
 
         let Some(CommonJobExecutionPlan::GoToAdventurersGuild(mut cleanup_plan)) =
             bgi_task::plan_common_job(bgi_task::GO_TO_ADVENTURERS_GUILD_TASK_KEY, None).unwrap()
@@ -19561,12 +19666,7 @@ mod tests {
             }
         }
 
-        let cleanup_error =
-            desktop_go_to_adventurers_guild_live_preflight(&cleanup_plan).unwrap_err();
-
-        assert!(cleanup_error.contains("desktop talk-option drain adapter"));
-        assert!(cleanup_error.contains("Cleanup"));
-        assert!(cleanup_error.contains("select last option to exit remaining dialogue"));
+        desktop_go_to_adventurers_guild_live_preflight(&cleanup_plan).unwrap();
     }
 
     #[test]
