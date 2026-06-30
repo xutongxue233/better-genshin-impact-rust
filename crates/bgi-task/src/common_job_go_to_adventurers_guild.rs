@@ -565,7 +565,7 @@ pub fn plan_go_to_adventurers_guild(
         daily_reward_rule,
         expedition_rule,
         steps,
-        notes: "Legacy Adventurers' Guild pathing, Catherine interaction, daily reward dialogue, and one-key expedition flow are represented and executable as a Rust state machine through injectable hooks; bundled PathExecutor JSON can be validated through the shared movement-contract preflight and the desktop live route wires the state machine to existing nested common-job bridges while preserving explicit PathExecutor movement, Catherine interaction, talk-option drain/probe, OCR, and expedition click adapter gaps.".to_string(),
+        notes: "Legacy Adventurers' Guild pathing, Catherine interaction, daily reward dialogue, and one-key expedition flow are represented and executable as a Rust state machine through injectable hooks; bundled PathExecutor JSON can be validated through the shared movement-contract preflight and the desktop live route wires the state machine to existing nested common-job bridges plus a capture/OCR/send-input adapter for Catherine F-interaction retry while preserving explicit PathExecutor movement, talk-option drain, OCR, and expedition click adapter gaps.".to_string(),
     })
 }
 
