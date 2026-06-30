@@ -20553,6 +20553,43 @@ fn auto_pathing_movement_contract_consumer_marks_completed_only_after_all_phase_
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn auto_pathing_movement_contract_report_preserves_pre_teleport_delay_between_segments() {
+    let root = unique_test_root("auto-pathing-movement-pre-teleport-delay");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("delay_route.json"),
+        r#"{
+                "info": { "name": "delay route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "target", "action": "pick_up_collect" },
+                    { "x": 5.0, "y": 6.0, "type": "teleport" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/delay_route.json").unwrap();
+    let mut runtime = CompletingAutoPathingMovementRuntime::default();
+
+    let report = execute_auto_pathing_movement_contract_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert_eq!(plan.execution_plan.segment_count, 2);
+    assert_eq!(
+        plan.execution_plan.movement_contract.segments[1].pre_teleport_delay_ms,
+        1_000
+    );
+    assert_eq!(report.segment_reports.len(), 2);
+    assert_eq!(report.segment_reports[0].pre_teleport_delay_ms, 0);
+    assert!(!report.segment_reports[0].starts_with_teleport);
+    assert_eq!(report.segment_reports[1].pre_teleport_delay_ms, 1_000);
+    assert!(report.segment_reports[1].starts_with_teleport);
+    assert!(report.movement_completed);
+    assert!(report.native_pathing_completed);
+    let _ = fs::remove_dir_all(root);
+}
+
 #[derive(Default)]
 struct CompletingAutoPathingMovementRuntime {
     phases: Vec<bgi_core::PathingWaypointPhase>,

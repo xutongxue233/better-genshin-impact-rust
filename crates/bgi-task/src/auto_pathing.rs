@@ -142,6 +142,8 @@ pub struct AutoPathingMovementFailedPhase {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PathingMovementSegmentBoundaryReport {
     pub segment_index: usize,
+    pub starts_with_teleport: bool,
+    pub pre_teleport_delay_ms: u32,
     pub waypoint_reports: Vec<PathingMovementWaypointBoundaryReport>,
 }
 
@@ -504,6 +506,8 @@ where
     for segment in &contract.segments {
         let mut segment_report = PathingMovementSegmentBoundaryReport {
             segment_index: segment.segment_index,
+            starts_with_teleport: segment.starts_with_teleport,
+            pre_teleport_delay_ms: segment.pre_teleport_delay_ms,
             waypoint_reports: Vec::new(),
         };
 
