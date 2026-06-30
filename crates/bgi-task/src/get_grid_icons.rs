@@ -1,5 +1,5 @@
 use bgi_core::config::GetGridIconsConfig;
-use bgi_vision::{Rect, Size};
+use bgi_vision::{OcrResult, Rect, Size};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -171,7 +171,7 @@ pub struct GetGridIconsArtifactSetFilterRule {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GetGridIconsFlowerWithoutGlyphRule {
-    pub x_from_name_region_width: f64,
+    pub x_from_capture_width: f64,
     pub y_from_detected_line_height: f64,
     pub width_from_capture_width: f64,
     pub height_from_detected_line_height: f64,
@@ -186,6 +186,28 @@ pub struct ArtifactSetFilterIconCropRule {
     pub x_formula: String,
     pub y_formula: String,
     pub clamps_to_item_region: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GetGridIconsArtifactSetFlowerOcrPlan {
+    pub flower_with_glyph_text: String,
+    pub flower_with_glyph_rect: Rect,
+    pub flower_without_glyph_roi_in_name_region: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GetGridIconsArtifactSetFlowerNameDecision {
+    pub flower_name: String,
+    pub flower_with_glyph_text: String,
+    pub flower_without_glyph_ocr_text: String,
+    pub flower_with_glyph_rect: Rect,
+    pub flower_without_glyph_roi_in_name_region: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GetGridIconsArtifactSetIconCropPlan {
+    pub source_rect_in_item_region: Rect,
+    pub normalized_size: Size,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -532,7 +554,7 @@ where
 
     let mut existing_file_names = HashSet::new();
     for item in state.grid_items.clone() {
-        if state.saved_icons.len() as u64 >= plan.config_rule.max_num_to_get {
+        if state.clicked_items >= plan.config_rule.max_num_to_get {
             state.max_num_reached = true;
             state.skipped_icons.push(GetGridIconsSkippedPng {
                 item: Some(item),
@@ -1072,7 +1094,7 @@ fn artifact_set_filter_rule() -> GetGridIconsArtifactSetFilterRule {
             height_from_capture_width: 0.208,
         },
         flower_without_glyph_roi: GetGridIconsFlowerWithoutGlyphRule {
-            x_from_name_region_width: 0.028,
+            x_from_capture_width: 0.028,
             y_from_detected_line_height: 0.0,
             width_from_capture_width: 0.228,
             height_from_detected_line_height: 1.0,
@@ -1092,6 +1114,100 @@ fn artifact_set_filter_rule() -> GetGridIconsArtifactSetFilterRule {
             clamps_to_item_region: true,
         },
     }
+}
+
+pub fn plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
+    rule: &GetGridIconsArtifactSetFilterRule,
+    capture_size: Size,
+    name_region_ocr: &OcrResult,
+) -> Option<GetGridIconsArtifactSetFlowerOcrPlan> {
+    let mut regions = name_region_ocr.regions.iter().collect::<Vec<_>>();
+    regions.sort_by_key(|region| region.rect.center().y);
+    let flower_with_glyph = regions
+        .into_iter()
+        .skip_while(|region| !region.text.contains(&rule.anchor_text))
+        .nth(1)?;
+
+    let roi_rule = &rule.flower_without_glyph_roi;
+    let capture_width = capture_size.width as f64;
+    let line_rect = flower_with_glyph.rect;
+    let flower_without_glyph_roi_in_name_region = Rect::new(
+        (capture_width * roi_rule.x_from_capture_width) as i32,
+        (line_rect.y as f64 - line_rect.height as f64 * roi_rule.y_from_detected_line_height)
+            as i32,
+        (capture_width * roi_rule.width_from_capture_width) as i32,
+        (line_rect.height as f64 * roi_rule.height_from_detected_line_height) as i32,
+    )
+    .ok()?;
+
+    Some(GetGridIconsArtifactSetFlowerOcrPlan {
+        flower_with_glyph_text: flower_with_glyph.text.clone(),
+        flower_with_glyph_rect: line_rect,
+        flower_without_glyph_roi_in_name_region,
+    })
+}
+
+pub fn resolve_get_grid_icons_artifact_set_flower_name(
+    flower_with_glyph_text: &str,
+    flower_without_glyph_ocr_text: &str,
+) -> Option<String> {
+    let source = flower_with_glyph_text.trim();
+    let recognized_without_glyph = flower_without_glyph_ocr_text.trim();
+    let source_len = source.chars().count();
+    let suffix_len = recognized_without_glyph.chars().count();
+    if suffix_len > source_len {
+        return None;
+    }
+
+    Some(source.chars().skip(source_len - suffix_len).collect())
+}
+
+pub fn decide_get_grid_icons_artifact_set_flower_name(
+    rule: &GetGridIconsArtifactSetFilterRule,
+    capture_size: Size,
+    name_region_ocr: &OcrResult,
+    flower_without_glyph_ocr_text: &str,
+) -> Option<GetGridIconsArtifactSetFlowerNameDecision> {
+    let ocr_plan = plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
+        rule,
+        capture_size,
+        name_region_ocr,
+    )?;
+    let flower_name = resolve_get_grid_icons_artifact_set_flower_name(
+        &ocr_plan.flower_with_glyph_text,
+        flower_without_glyph_ocr_text,
+    )?;
+
+    Some(GetGridIconsArtifactSetFlowerNameDecision {
+        flower_name,
+        flower_with_glyph_text: ocr_plan.flower_with_glyph_text,
+        flower_without_glyph_ocr_text: flower_without_glyph_ocr_text.to_string(),
+        flower_with_glyph_rect: ocr_plan.flower_with_glyph_rect,
+        flower_without_glyph_roi_in_name_region: ocr_plan.flower_without_glyph_roi_in_name_region,
+    })
+}
+
+pub fn plan_get_grid_icons_artifact_set_icon_crop(
+    rule: &ArtifactSetFilterIconCropRule,
+    item_region_size: Size,
+    asset_scale: f64,
+) -> Option<GetGridIconsArtifactSetIconCropPlan> {
+    let source_width = rule.source_width as f64;
+    let source_height = rule.source_height as f64;
+    let source_rect = Rect::new(
+        (item_region_size.width as f64 / 2.0 - 237.0 * asset_scale - source_width / 2.0) as i32,
+        (item_region_size.height as f64 / 2.0 - source_height / 2.0) as i32,
+        rule.source_width as i32,
+        rule.source_height as i32,
+    )
+    .ok()?
+    .clamp_to(item_region_size)
+    .ok()?;
+
+    Some(GetGridIconsArtifactSetIconCropPlan {
+        source_rect_in_item_region: source_rect,
+        normalized_size: Size::new(rule.normalized_width, rule.normalized_height),
+    })
 }
 
 fn model_accuracy_rule() -> GetGridIconsModelAccuracyRule {
@@ -1315,15 +1431,13 @@ mod get_grid_icons_runtime_tests {
         assert_eq!(runtime.open_inventory_tab_calls, 1);
         assert_eq!(runtime.manual_open_calls, 0);
         assert_eq!(runtime.enumerate_calls, 1);
-        assert_eq!(runtime.click_calls, 3);
-        assert_eq!(runtime.star_suffix_calls, 3);
-        assert_eq!(runtime.save_calls, 2);
+        assert_eq!(runtime.click_calls, 2);
+        assert_eq!(runtime.star_suffix_calls, 2);
+        assert_eq!(runtime.save_calls, 1);
         assert_eq!(runtime.cleanup_calls, 1);
-        assert_eq!(
-            runtime.saved_file_names,
-            vec!["Sword★.png".to_string(), "Bow.png".to_string()]
-        );
-        assert_eq!(report.state.saved_icons.len(), 2);
+        assert_eq!(runtime.saved_file_names, vec!["Sword★.png".to_string()]);
+        assert_eq!(report.state.clicked_items, 2);
+        assert_eq!(report.state.saved_icons.len(), 1);
         assert_eq!(report.state.saved_icons[0].star_suffix, "★");
         assert!(report.state.max_num_reached);
         assert!(report.state.skipped_icons.iter().any(|skipped| {
@@ -1332,7 +1446,47 @@ mod get_grid_icons_runtime_tests {
         }));
         assert!(report.state.skipped_icons.iter().any(|skipped| {
             skipped.reason == GetGridIconsSkipReason::MaxNumToGetReached
-                && skipped.item == Some(grid_item(3))
+                && skipped.item == Some(grid_item(2))
+        }));
+    }
+
+    #[test]
+    fn get_grid_icons_executor_uses_artifact_set_filter_capture_branch() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "ArtifactSetFilter",
+                "maxNumToGet": 1
+            }),
+        )))
+        .unwrap();
+        let mut runtime = FakeGetGridIconsRuntime::with_items(vec![grid_item(0)])
+            .with_names(vec![Some("昔日宗室之花".to_string())]);
+
+        let report = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert_eq!(runtime.manual_open_calls, 1);
+        assert_eq!(runtime.return_main_ui_calls, 0);
+        assert_eq!(runtime.open_inventory_tab_calls, 0);
+        assert_eq!(runtime.enumerate_calls, 1);
+        assert_eq!(runtime.click_calls, 1);
+        assert_eq!(runtime.item_name_ocr_calls, 0);
+        assert_eq!(runtime.star_suffix_calls, 0);
+        assert_eq!(runtime.capture_icon_calls, 0);
+        assert_eq!(runtime.artifact_flower_ocr_calls, 1);
+        assert_eq!(runtime.artifact_icon_crop_calls, 1);
+        assert_eq!(runtime.save_calls, 1);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert_eq!(runtime.saved_file_names, vec!["昔日宗室之花.png"]);
+        assert_eq!(report.state.saved_icons.len(), 1);
+        assert_eq!(report.state.saved_icons[0].file_name, "昔日宗室之花.png");
+        assert!(report.action_reports.iter().any(|report| {
+            report.action == GetGridIconsStepAction::OcrArtifactSetFlowerName
+                && report.status == GetGridIconsRuntimeActionStatus::Executed
+        }));
+        assert!(report.action_reports.iter().any(|report| {
+            report.action == GetGridIconsStepAction::CropArtifactSetIcon
+                && report.status == GetGridIconsRuntimeActionStatus::Executed
         }));
     }
 
@@ -1368,6 +1522,8 @@ mod get_grid_icons_runtime_tests {
         item_name_ocr_calls: u32,
         star_suffix_calls: u32,
         capture_icon_calls: u32,
+        artifact_flower_ocr_calls: u32,
+        artifact_icon_crop_calls: u32,
         save_calls: u32,
         cleanup_calls: u32,
         fail_enumerate: bool,
@@ -1499,7 +1655,7 @@ mod get_grid_icons_runtime_tests {
             item: &GetGridIconsGridItem,
             _rule: &GetGridIconsArtifactSetFilterRule,
         ) -> Result<Option<String>> {
-            self.item_name_ocr_calls += 1;
+            self.artifact_flower_ocr_calls += 1;
             Ok(self.name_for(item))
         }
 
@@ -1508,7 +1664,7 @@ mod get_grid_icons_runtime_tests {
             item: &GetGridIconsGridItem,
             _rule: &GetGridIconsArtifactSetFilterRule,
         ) -> Result<GetGridIconsPngData> {
-            self.capture_icon_calls += 1;
+            self.artifact_icon_crop_calls += 1;
             Ok(GetGridIconsPngData {
                 bytes: vec![item.item_index as u8, 1],
             })

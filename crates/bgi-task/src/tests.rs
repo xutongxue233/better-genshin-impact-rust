@@ -15,8 +15,8 @@ use bgi_core::{
 };
 use bgi_input::{InputCancellationToken, InputEvent, MouseButton};
 use bgi_vision::{
-    BgrImage, BgrPixel, BvLocatorOperation, BvLocatorPlan, BvPageCommand, OcrResultRegion, Point,
-    PureRustVisionBackend, Rect, RgbPixel, Size, TemplateMatchMode,
+    BgrImage, BgrPixel, BvLocatorOperation, BvLocatorPlan, BvPageCommand, OcrResult,
+    OcrResultRegion, Point, PureRustVisionBackend, Rect, RgbPixel, Size, TemplateMatchMode,
 };
 use std::collections::VecDeque;
 use std::fs;
@@ -14765,6 +14765,142 @@ fn get_grid_icons_plan_handles_numeric_grid_star_suffix_and_manual_special_grids
     );
     assert_eq!(salvage_plan.grid_rule.grid_template.columns, 9);
     assert_eq!(salvage_plan.grid_rule.grid_template.s2_round, 28);
+}
+
+#[test]
+fn get_grid_icons_artifact_set_filter_flower_name_decision_matches_legacy_double_ocr() {
+    let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "gridName": "ArtifactSetFilter"
+        }),
+    )))
+    .unwrap();
+    let rule = plan.artifact_set_filter_rule.as_ref().unwrap();
+    let name_region_ocr = OcrResult {
+        regions: vec![
+            OcrResultRegion {
+                rect: Rect {
+                    x: 20,
+                    y: 160,
+                    width: 160,
+                    height: 20,
+                },
+                text: "后续噪声".to_string(),
+                score: 0.7,
+            },
+            OcrResultRegion {
+                rect: Rect {
+                    x: 12,
+                    y: 90,
+                    width: 140,
+                    height: 20,
+                },
+                text: "套装包含".to_string(),
+                score: 0.9,
+            },
+            OcrResultRegion {
+                rect: Rect {
+                    x: 10,
+                    y: 120,
+                    width: 210,
+                    height: 24,
+                },
+                text: "⚘ 昔日宗室之花".to_string(),
+                score: 0.9,
+            },
+        ],
+    };
+
+    let ocr_plan = plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
+        rule,
+        Size::new(1920, 1080),
+        &name_region_ocr,
+    )
+    .unwrap();
+
+    assert_eq!(ocr_plan.flower_with_glyph_text, "⚘ 昔日宗室之花");
+    assert_eq!(
+        ocr_plan.flower_without_glyph_roi_in_name_region,
+        Rect {
+            x: 53,
+            y: 120,
+            width: 437,
+            height: 24
+        }
+    );
+
+    let decision = decide_get_grid_icons_artifact_set_flower_name(
+        rule,
+        Size::new(1920, 1080),
+        &name_region_ocr,
+        "昔日宗室之花",
+    )
+    .unwrap();
+    assert_eq!(decision.flower_name, "昔日宗室之花");
+    assert_eq!(
+        resolve_get_grid_icons_artifact_set_flower_name(" ⚘ 昔日宗室之花 ", "宗室之花"),
+        Some("宗室之花".to_string())
+    );
+
+    let missing_anchor = OcrResult {
+        regions: vec![OcrResultRegion {
+            rect: Rect {
+                x: 10,
+                y: 120,
+                width: 210,
+                height: 24,
+            },
+            text: "⚘ 昔日宗室之花".to_string(),
+            score: 0.9,
+        }],
+    };
+    assert!(plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
+        rule,
+        Size::new(1920, 1080),
+        &missing_anchor,
+    )
+    .is_none());
+    assert!(resolve_get_grid_icons_artifact_set_flower_name("短名", "过长的识别结果").is_none());
+}
+
+#[test]
+fn get_grid_icons_artifact_set_filter_icon_crop_plan_matches_legacy_formula() {
+    let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+        &serde_json::json!({
+            "gridName": "ArtifactSetFilter"
+        }),
+    )))
+    .unwrap();
+    let rule = &plan
+        .artifact_set_filter_rule
+        .as_ref()
+        .unwrap()
+        .icon_crop_rule;
+
+    let crop = plan_get_grid_icons_artifact_set_icon_crop(rule, Size::new(640, 120), 1.0).unwrap();
+    assert_eq!(
+        crop.source_rect_in_item_region,
+        Rect {
+            x: 53,
+            y: 30,
+            width: 60,
+            height: 60
+        }
+    );
+    assert_eq!(crop.normalized_size, Size::new(125, 125));
+
+    let clamped = plan_get_grid_icons_artifact_set_icon_crop(rule, Size::new(200, 80), 1.0)
+        .unwrap()
+        .source_rect_in_item_region;
+    assert_eq!(
+        clamped,
+        Rect {
+            x: 0,
+            y: 10,
+            width: 0,
+            height: 60
+        }
+    );
 }
 
 #[test]
