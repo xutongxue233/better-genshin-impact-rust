@@ -71,29 +71,28 @@ use bgi_task::{
     execute_auto_track_plan, execute_auto_wood_plan, execute_blessing_of_the_welkin_moon_live,
     execute_check_rewards_plan, execute_choose_talk_option_plan,
     execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
-    execute_claim_mail_rewards_live, execute_go_to_adventurers_guild_plan,
-    execute_go_to_crafting_bench_plan, execute_independent_task_live_if_available,
-    execute_independent_task_with_cancel, execute_lower_head_then_walk_to_plan,
-    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
-    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
-    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
-    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
-    execute_team_context_combat_script_inputs, execute_teleport_plan, execute_use_redeem_code_plan,
-    execute_walk_to_f_live, execute_wonderland_cycle_live, execute_wonderland_cycle_plan,
-    extract_redeem_codes_from_text, independent_tasks, parse_auto_pick_text_list, plan_auto_cook,
-    plan_auto_eat, plan_auto_fight, plan_auto_fish, plan_auto_music_game, plan_auto_open_chest,
-    plan_auto_pathing, plan_auto_pick, plan_auto_wood, plan_quick_buy,
-    plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot, plan_quick_teleport,
-    plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
+    execute_claim_mail_rewards_live, execute_count_inventory_item_plan,
+    execute_go_to_adventurers_guild_plan, execute_go_to_crafting_bench_plan,
+    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
+    execute_lower_head_then_walk_to_plan, execute_macro_hotkey_plan,
+    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
+    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
+    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
+    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
+    execute_teleport_plan, execute_use_redeem_code_plan, execute_walk_to_f_live,
+    execute_wonderland_cycle_live, execute_wonderland_cycle_plan, extract_redeem_codes_from_text,
+    independent_tasks, parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight,
+    plan_auto_fish, plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick,
+    plan_auto_wood, plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
+    plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
     redeem_code_entries_from_strings, reduce_lower_head_then_walk_to_tracking_frame,
     runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
     switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
     AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
     AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
     AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
-    AutoEatFoodStepAction, AutoEatFoodStepCondition, AutoEatRuntime, AutoEatTemplateLocator,
-    AutoEatTickExecutionReport, AutoEatTickObservation, AutoEatTriggerState,
-    AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
+    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
     AutoFishOverlayAction, AutoFishRuntime, AutoFishTemplateLocator, AutoFishTickExecutionReport,
@@ -132,10 +131,9 @@ use bgi_task::{
     CombatTeamPlaybackExecution, CommonJobClock, CommonJobExecutionPlan, CommonJobFrameSource,
     CommonJobInputDriver, CommonJobLiveExecutionReport, CommonJobRuntime, CommonJobRuntimeOutcome,
     CommonJobStepAction, CountInventoryGridIconMatch, CountInventoryGridItemFrame,
-    CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
-    CountInventoryItemStepAction, CountInventoryItemStepCondition,
-    CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
-    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
+    CountInventoryItemCount, CountInventoryItemExecutionPlan, CountInventoryItemExecutionReport,
+    CountInventoryItemRuntime, CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule,
+    DispatcherRuntime, GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
     GoToAdventurersGuildNestedOutcome, GoToAdventurersGuildPathingRule,
     GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
     GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
@@ -174,9 +172,9 @@ use bgi_task::{
     TeleportMoveMapCenterDecision, TeleportMoveMapRule, TeleportRuntime, TeleportStepAction,
     TeleportTargetPlan, UseRedeemCodeExecutionConfig, UseRedeemCodeExecutionPlan,
     UseRedeemCodeExecutionReport, UseRedeemCodeRuntime, WalkToFExecutionPlan,
-    WalkToFExecutionReport, WonderlandCycleExecutionPlan, WonderlandCycleExecutionReport,
-    AUTO_BOSS_TASK_KEY, AUTO_DOMAIN_TASK_KEY, AUTO_GENIUS_INVOKATION_TASK_KEY,
-    AUTO_LEY_LINE_OUTCROP_TASK_KEY, AUTO_MUSIC_GAME_TASK_KEY,
+    WalkToFExecutionReport, WeaponOrePrescrollRule, WonderlandCycleExecutionPlan,
+    WonderlandCycleExecutionReport, AUTO_BOSS_TASK_KEY, AUTO_DOMAIN_TASK_KEY,
+    AUTO_GENIUS_INVOKATION_TASK_KEY, AUTO_LEY_LINE_OUTCROP_TASK_KEY, AUTO_MUSIC_GAME_TASK_KEY,
     AUTO_OPEN_CHEST_DEFAULT_CAPTURE_WIDTH, AUTO_OPEN_CHEST_TASK_KEY, AUTO_PICK_PICK_KEY_ASSET,
     AUTO_STYGIAN_ONSLAUGHT_TASK_KEY, AUTO_TRACK_DEFAULT_CAPTURE_WIDTH, AUTO_TRACK_PATH_TASK_KEY,
     AUTO_TRACK_TASK_KEY, AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY,
@@ -184,6 +182,11 @@ use bgi_task::{
     QUICK_SERENITEA_POT_TASK_KEY, QUICK_TELEPORT_MAP_SCALE_BUTTON,
     QUICK_TELEPORT_MAP_SETTINGS_BUTTON, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS,
     RETURN_MAIN_UI_TASK_KEY, TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
+};
+#[cfg(test)]
+use bgi_task::{
+    AutoEatFoodStepAction, AutoEatFoodStepCondition, CountInventoryItemStepAction,
+    CountInventoryItemStepCondition,
 };
 use bgi_vision::{
     convert_bgr_image, crop_bgr_image, in_range_mask, recognition_type_infos,
@@ -6778,6 +6781,12 @@ fn execute_desktop_auto_eat_food_live(
         ));
     }
     if matches!(plan.mode, AutoEatFoodPlanMode::InventoryFood { .. }) {
+        let window = game_window.ok_or_else(|| {
+            TaskError::CommonJobExecution(
+                "AutoEatFood inventory-food live execution requires a detected game window"
+                    .to_string(),
+            )
+        })?;
         desktop_inventory_live_preflight(
             config,
             game_window,
@@ -6786,12 +6795,28 @@ fn execute_desktop_auto_eat_food_live(
             &cancellation,
         )
         .map_err(TaskError::CommonJobExecution)?;
-        desktop_auto_eat_food_inventory_live_preflight(plan)
-            .map_err(TaskError::CommonJobExecution)?;
-        return Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop runtime adapter wiring after preflight"
-                .to_string(),
-        ));
+        let (global_input, _capture_size) =
+            desktop_common_job_global_input(config, window, "AutoEatFood inventory-food")
+                .map_err(TaskError::CommonJobExecution)?;
+        let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+            TaskError::CommonJobExecution(
+                "AutoEatFood inventory-food live execution has no capture frame source".to_string(),
+            )
+        })?;
+        let input_driver = global_input
+            .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+        let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+            frame_source,
+            input_driver,
+            CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+        );
+        let mut runtime = DesktopAutoEatFoodInventoryRuntime::new(
+            common_runtime,
+            config,
+            plan.capture_size,
+            cancellation,
+        );
+        return execute_auto_eat_food_plan(plan, &mut runtime);
     }
 
     let mut runtime = DesktopAutoEatFoodRuntime::new(cancellation);
@@ -6960,6 +6985,219 @@ impl AutoEatFoodRuntime for DesktopAutoEatFoodRuntime {
     }
 }
 
+struct DesktopAutoEatFoodInventoryRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    key_bindings_config: KeyBindingsConfig,
+    capture_size: VisionSize,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl<F, I, C> DesktopAutoEatFoodInventoryRuntime<F, I, C> {
+    fn new(
+        common: PureTemplateCommonJobRuntime<F, I, C>,
+        config: &AppConfig,
+        capture_size: VisionSize,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            common,
+            key_bindings_config: config.key_bindings_config.clone(),
+            capture_size,
+            cancellation,
+        }
+    }
+}
+
+impl<F, I, C> DesktopAutoEatFoodInventoryRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "AutoEatFood inventory-food live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn wait_ms(&mut self, milliseconds: u64) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(
+            &mut self.common,
+            &BvPageCommand::Wait {
+                milliseconds: desktop_inventory_wait_milliseconds(milliseconds),
+            },
+        )
+    }
+
+    fn execute_return_main_ui(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        let plan = plan_return_main_ui(self.capture_size, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS)?;
+        let report = execute_return_main_ui_plan(&plan, &mut self.common)?;
+        Ok(CommonJobRuntimeOutcome::Matched(report.completed))
+    }
+}
+
+impl<F, I, C> AutoEatFoodRuntime for DesktopAutoEatFoodInventoryRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn execute_auto_eat_food_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        if task_key == RETURN_MAIN_UI_TASK_KEY {
+            return self.execute_return_main_ui();
+        }
+        Err(TaskError::CommonJobExecution(format!(
+            "AutoEatFood inventory-food live execution requires desktop nested common-job adapter for {task_key}"
+        )))
+    }
+
+    fn open_auto_eat_food_inventory(
+        &mut self,
+        rule: &CountInventoryOpenInventoryRule,
+    ) -> bgi_task::Result<CountInventoryOpenInventoryOutcome> {
+        self.ensure_not_cancelled()?;
+        desktop_open_inventory_with_common_runtime(
+            &mut self.common,
+            &self.key_bindings_config,
+            self.capture_size,
+            rule,
+            "AutoEatFood inventory-food",
+        )
+    }
+
+    fn confirm_auto_eat_food_expired_item_prompt(
+        &mut self,
+        _confirm_asset: &str,
+        _crop_bottom_ratio: f64,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
+                .to_string(),
+        ))
+    }
+
+    fn open_auto_eat_food_inventory_tab(
+        &mut self,
+        _rule: &CountInventoryOpenInventoryRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop inventory tab adapter"
+                .to_string(),
+        ))
+    }
+
+    fn load_auto_eat_food_grid_icon_classifier(
+        &mut self,
+        _rule: &GridIconClassifierRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
+                .to_string(),
+        ))
+    }
+
+    fn enumerate_auto_eat_food_grid_items(
+        &mut self,
+        _template: &GridTemplate,
+        _detection_rule: &GridItemDetectionRule,
+        _scroll_rule: &GridScrollRule,
+    ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop inventory grid enumeration adapter"
+                .to_string(),
+        ))
+    }
+
+    fn crop_auto_eat_food_grid_icons(
+        &mut self,
+        _items: &[CountInventoryGridItemFrame],
+        _rule: &GridIconCropRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop grid icon crop adapter"
+                .to_string(),
+        ))
+    }
+
+    fn infer_auto_eat_food_grid_icons(
+        &mut self,
+        _items: &[CountInventoryGridItemFrame],
+        _rule: &GridIconClassifierRule,
+    ) -> bgi_task::Result<Vec<CountInventoryGridIconMatch>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop GridIcon inference adapter"
+                .to_string(),
+        ))
+    }
+
+    fn ocr_auto_eat_food_item_count(
+        &mut self,
+        _matched: &CountInventoryGridIconMatch,
+        _rule: &GridItemCountOcrRule,
+    ) -> bgi_task::Result<Option<String>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop item-count OCR adapter"
+                .to_string(),
+        ))
+    }
+
+    fn click_auto_eat_food_item(
+        &mut self,
+        _matched: &CountInventoryGridIconMatch,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop matched-food click adapter"
+                .to_string(),
+        ))
+    }
+
+    fn delay_auto_eat_food_after_item_click(
+        &mut self,
+        duration_ms: u64,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        self.wait_ms(duration_ms)
+    }
+
+    fn click_auto_eat_food_white_confirm_if_present(
+        &mut self,
+        _asset: &str,
+    ) -> bgi_task::Result<bool> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory-food live execution requires desktop white-confirm click adapter"
+                .to_string(),
+        ))
+    }
+
+    fn clear_auto_eat_food_vision_drawings(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+
+    fn log_auto_eat_food(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+}
+
+#[cfg(test)]
 fn desktop_auto_eat_food_inventory_live_preflight(
     plan: &AutoEatFoodExecutionPlan,
 ) -> Result<(), String> {
@@ -7010,6 +7248,7 @@ fn desktop_auto_eat_food_inventory_live_preflight(
     Ok(())
 }
 
+#[cfg(test)]
 fn desktop_auto_eat_food_preflight_condition_applies(
     plan: &AutoEatFoodExecutionPlan,
     condition: AutoEatFoodStepCondition,
@@ -11963,19 +12202,35 @@ fn execute_desktop_count_inventory_item_live(
         plan.capture_size,
         &cancellation,
     )?;
-    desktop_count_inventory_item_live_preflight(plan)?;
-    Err(
-        "CountInventoryItem live execution requires desktop runtime adapter wiring after preflight"
-            .to_string(),
-    )
+    let (global_input, _capture_size) =
+        desktop_common_job_global_input(config, window, "CountInventoryItem")?;
+    let frame_source = global_input.common_job_frame_source().ok_or_else(|| {
+        "CountInventoryItem live execution has no capture frame source".to_string()
+    })?;
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+    );
+    let mut runtime = DesktopCountInventoryItemRuntime::new(
+        common_runtime,
+        config,
+        plan.capture_size,
+        cancellation,
+    );
+    execute_count_inventory_item_plan(plan, &mut runtime).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn desktop_count_inventory_item_live_preflight(
     plan: &CountInventoryItemExecutionPlan,
 ) -> Result<(), String> {
     desktop_inventory_count_plan_live_preflight("CountInventoryItem", plan)
 }
 
+#[cfg(test)]
 fn desktop_inventory_count_plan_live_preflight(
     task_name: &str,
     plan: &CountInventoryItemExecutionPlan,
@@ -11994,12 +12249,7 @@ fn desktop_inventory_count_plan_live_preflight(
                 ));
             }
             CountInventoryItemStepAction::GenshinAction { action }
-                if *action == GenshinAction::OpenInventory =>
-            {
-                return Err(format!(
-                    "{task_name} live execution requires desktop inventory-opening adapter"
-                ));
-            }
+                if *action == GenshinAction::OpenInventory => {}
             CountInventoryItemStepAction::GenshinAction { action } => {
                 return Err(format!(
                     "{task_name} live execution requires desktop Genshin action adapter for {action:?}"
@@ -12054,6 +12304,7 @@ fn desktop_inventory_count_plan_live_preflight(
     Ok(())
 }
 
+#[cfg(test)]
 fn desktop_count_inventory_item_preflight_condition_applies(
     plan: &CountInventoryItemExecutionPlan,
     condition: CountInventoryItemStepCondition,
@@ -12069,6 +12320,369 @@ fn desktop_count_inventory_item_preflight_condition_applies(
         CountInventoryItemStepCondition::WhenWeaponOreRequested => plan
             .search_mode
             .needs_weapon_ore_prescroll(&plan.grid_screen_name),
+    }
+}
+
+struct DesktopCountInventoryItemRuntime<F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    key_bindings_config: KeyBindingsConfig,
+    capture_size: VisionSize,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl<F, I, C> DesktopCountInventoryItemRuntime<F, I, C> {
+    fn new(
+        common: PureTemplateCommonJobRuntime<F, I, C>,
+        config: &AppConfig,
+        capture_size: VisionSize,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            common,
+            key_bindings_config: config.key_bindings_config.clone(),
+            capture_size,
+            cancellation,
+        }
+    }
+}
+
+impl<F, I, C> DesktopCountInventoryItemRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "CountInventoryItem live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn execute_return_main_ui(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        let plan = plan_return_main_ui(self.capture_size, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS)?;
+        let report = execute_return_main_ui_plan(&plan, &mut self.common)?;
+        Ok(CommonJobRuntimeOutcome::Matched(report.completed))
+    }
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopCountInventoryItemRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> CountInventoryItemRuntime for DesktopCountInventoryItemRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn execute_count_inventory_common_job(
+        &mut self,
+        task_key: &str,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        if task_key == RETURN_MAIN_UI_TASK_KEY {
+            return self.execute_return_main_ui();
+        }
+        Err(TaskError::CommonJobExecution(format!(
+            "CountInventoryItem live execution requires desktop nested common-job adapter for {task_key}"
+        )))
+    }
+
+    fn open_count_inventory(
+        &mut self,
+        rule: &CountInventoryOpenInventoryRule,
+    ) -> bgi_task::Result<CountInventoryOpenInventoryOutcome> {
+        self.ensure_not_cancelled()?;
+        desktop_open_inventory_with_common_runtime(
+            &mut self.common,
+            &self.key_bindings_config,
+            self.capture_size,
+            rule,
+            "CountInventoryItem",
+        )
+    }
+
+    fn confirm_count_inventory_expired_item_prompt(
+        &mut self,
+        _confirm_asset: &str,
+        _crop_bottom_ratio: f64,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop expired-item prompt adapter"
+                .to_string(),
+        ))
+    }
+
+    fn open_count_inventory_tab(
+        &mut self,
+        _rule: &CountInventoryOpenInventoryRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop inventory tab adapter".to_string(),
+        ))
+    }
+
+    fn load_count_inventory_grid_icon_classifier(
+        &mut self,
+        _rule: &GridIconClassifierRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
+                .to_string(),
+        ))
+    }
+
+    fn pre_scroll_count_inventory_weapon_ore(
+        &mut self,
+        _rule: &WeaponOrePrescrollRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop weapon-ore prescroll adapter"
+                .to_string(),
+        ))
+    }
+
+    fn enumerate_count_inventory_grid_items(
+        &mut self,
+        _template: &GridTemplate,
+        _detection_rule: &GridItemDetectionRule,
+        _scroll_rule: &GridScrollRule,
+    ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop inventory grid enumeration adapter"
+                .to_string(),
+        ))
+    }
+
+    fn crop_count_inventory_grid_icons(
+        &mut self,
+        _items: &[CountInventoryGridItemFrame],
+        _rule: &GridIconCropRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop grid icon crop adapter".to_string(),
+        ))
+    }
+
+    fn infer_count_inventory_grid_icons(
+        &mut self,
+        _items: &[CountInventoryGridItemFrame],
+        _rule: &GridIconClassifierRule,
+    ) -> bgi_task::Result<Vec<CountInventoryGridIconMatch>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop GridIcon inference adapter"
+                .to_string(),
+        ))
+    }
+
+    fn ocr_count_inventory_item_counts(
+        &mut self,
+        _matches: &[CountInventoryGridIconMatch],
+        _rule: &GridItemCountOcrRule,
+    ) -> bgi_task::Result<Vec<CountInventoryItemCount>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "CountInventoryItem live execution requires desktop item-count OCR adapter".to_string(),
+        ))
+    }
+
+    fn clear_count_inventory_vision_drawings(
+        &mut self,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        self.ensure_not_cancelled()?;
+        Ok(CommonJobRuntimeOutcome::None)
+    }
+}
+
+fn desktop_open_inventory_with_common_runtime<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    key_bindings: &KeyBindingsConfig,
+    capture_size: VisionSize,
+    rule: &CountInventoryOpenInventoryRule,
+    task_name: &str,
+) -> bgi_task::Result<CountInventoryOpenInventoryOutcome>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    let events = input_events_for_action(
+        key_bindings,
+        rule.open_inventory_action,
+        KeyActionType::KeyPress,
+    )
+    .map_err(|error| {
+        TaskError::CommonJobExecution(format!(
+            "{task_name} live execution failed to build OpenInventory input events: {error}"
+        ))
+    })?;
+    CommonJobRuntime::dispatch_input(common, &events)?;
+    CommonJobRuntime::execute_page_command(
+        common,
+        &BvPageCommand::Wait {
+            milliseconds: desktop_inventory_wait_milliseconds(rule.open_wait_ms),
+        },
+    )?;
+
+    let expired_prompt_roi =
+        desktop_inventory_bottom_roi(capture_size, rule.expired_item_prompt_crop_bottom_ratio)?;
+    let expired_prompt_locator = desktop_inventory_locator(
+        &rule.expired_item_prompt_confirm_asset,
+        0.8,
+        expired_prompt_roi,
+        rule.expired_item_prompt_wait_ms,
+        capture_size,
+    )?;
+    let expired_item_prompt_detected =
+        desktop_inventory_locator_exists(common, &expired_prompt_locator)?;
+
+    let tab_roi = desktop_inventory_tab_roi(capture_size, rule.tab_assets.roi_top_ratio)?;
+    let checked_tab_locator = desktop_inventory_locator(
+        &rule.tab_assets.checked_asset,
+        rule.tab_assets.checked_threshold,
+        tab_roi,
+        100,
+        capture_size,
+    )?;
+    let checked_tab_detected = desktop_inventory_locator_exists(common, &checked_tab_locator)?;
+    let unchecked_tab_detected = if checked_tab_detected {
+        false
+    } else {
+        let unchecked_tab_locator = desktop_inventory_locator(
+            &rule.tab_assets.unchecked_asset,
+            rule.tab_assets.unchecked_threshold,
+            tab_roi,
+            100,
+            capture_size,
+        )?;
+        desktop_inventory_locator_exists(common, &unchecked_tab_locator)?
+    };
+
+    Ok(CountInventoryOpenInventoryOutcome {
+        expired_item_prompt_detected,
+        inventory_tab_checked: checked_tab_detected,
+        still_on_main_ui: !expired_item_prompt_detected
+            && !checked_tab_detected
+            && !unchecked_tab_detected,
+    })
+}
+
+fn desktop_inventory_wait_milliseconds(milliseconds: u64) -> u32 {
+    milliseconds.min(u64::from(u32::MAX)) as u32
+}
+
+fn desktop_inventory_bottom_roi(
+    capture_size: VisionSize,
+    bottom_ratio: f64,
+) -> bgi_task::Result<Rect> {
+    let ratio = desktop_inventory_unit_ratio(bottom_ratio);
+    let capture_width = capture_size.width as i32;
+    let capture_height = capture_size.height as i32;
+    let height = ((capture_size.height as f64) * ratio).round() as i32;
+    let height = height.clamp(1, capture_height.max(1));
+    let y = capture_height.saturating_sub(height);
+    Rect::new(0, y, capture_width, height).map_err(|error| TaskError::VisionPlan(error.to_string()))
+}
+
+fn desktop_inventory_tab_roi(capture_size: VisionSize, top_ratio: f64) -> bgi_task::Result<Rect> {
+    let ratio = desktop_inventory_unit_ratio(top_ratio);
+    let capture_width = capture_size.width as i32;
+    let capture_height = capture_size.height as i32;
+    let height = ((capture_size.height as f64) * ratio).ceil() as i32;
+    let height = height.clamp(1, capture_height.max(1));
+    Rect::new(0, 0, capture_width, height).map_err(|error| TaskError::VisionPlan(error.to_string()))
+}
+
+fn desktop_inventory_unit_ratio(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn desktop_inventory_locator(
+    asset: &str,
+    threshold: f64,
+    roi: Rect,
+    timeout_ms: u64,
+    capture_size: VisionSize,
+) -> bgi_task::Result<BvLocatorPlan> {
+    let image = BvImage::new(asset).map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    let mut recognition_object = image
+        .to_recognition_object_for_screen(Some(roi), threshold, capture_size)
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    recognition_object.template.draw_on_window = false;
+    let timeout_ms = desktop_inventory_wait_milliseconds(timeout_ms).max(1);
+    let retry_interval_ms = 250;
+    Ok(BvLocatorPlan {
+        operation: BvLocatorOperation::IsExist,
+        recognition_object,
+        timeout_ms,
+        retry_interval_ms,
+        retry_count: std::cmp::max(1, timeout_ms / retry_interval_ms),
+        retry_action: None,
+    })
+}
+
+fn desktop_inventory_locator_exists<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    locator: &BvLocatorPlan,
+) -> bgi_task::Result<bool>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    match CommonJobRuntime::execute_locator(common, locator)? {
+        CommonJobRuntimeOutcome::Matched(value) => Ok(value),
+        CommonJobRuntimeOutcome::None => Ok(false),
     }
 }
 
@@ -20730,21 +21344,11 @@ mod tests {
             .contains("AutoEatFood inventory-food live execution requires a detected game window"));
         assert!(!message.contains("inventory grid/ONNX/OCR/click adapters"));
 
-        let window = desktop_test_game_window(1920, 1080);
-        let error = execute_desktop_script_dispatcher_live_plan(
-            &AppConfig::default(),
-            Some(&window),
-            Arc::new(InputCancellationToken::new()),
-            &ScriptDispatcherExecutionPlan::AutoEatFood(plan),
-        )
-        .unwrap_err();
-
-        assert!(matches!(
-            error,
-            TaskError::CommonJobExecution(message)
-                if message.contains("AutoEatFood inventory-food live execution requires desktop inventory-opening adapter")
-                    && !message.contains("inventory grid/ONNX/OCR/click adapters")
+        let static_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
+        assert!(static_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
         ));
+        assert!(!static_error.contains("inventory grid/ONNX/OCR/click adapters"));
     }
 
     #[test]
@@ -20830,27 +21434,13 @@ mod tests {
             panic!("expected CountInventoryItem plan");
         };
 
-        let open_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
-        assert!(open_error.contains(
-            "CountInventoryItem live execution requires desktop inventory-opening adapter"
-        ));
-        assert!(!open_error.contains("grid/ONNX/OCR/click adapters"));
-
-        let mut after_open = plan.clone();
-        after_open.steps.retain(|step| {
-            !matches!(
-                step.action,
-                CountInventoryItemStepAction::GenshinAction {
-                    action: GenshinAction::OpenInventory
-                }
-            )
-        });
-        let prompt_error = desktop_count_inventory_item_live_preflight(&after_open).unwrap_err();
+        let prompt_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
         assert!(prompt_error.contains(
             "CountInventoryItem live execution requires desktop expired-item prompt adapter"
         ));
+        assert!(!prompt_error.contains("grid/ONNX/OCR/click adapters"));
 
-        let mut after_prompt = after_open.clone();
+        let mut after_prompt = plan.clone();
         after_prompt.steps.retain(|step| {
             !matches!(
                 step.action,
@@ -20884,32 +21474,13 @@ mod tests {
         )
         .unwrap();
 
-        let open_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
-        assert!(open_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop inventory-opening adapter"
-        ));
-        assert!(!open_error.contains("grid/ONNX/OCR/click adapters"));
-
-        let mut after_open = plan.clone();
-        after_open
-            .inventory_plan
-            .as_mut()
-            .unwrap()
-            .steps
-            .retain(|step| {
-                !matches!(
-                    step.action,
-                    CountInventoryItemStepAction::GenshinAction {
-                        action: GenshinAction::OpenInventory
-                    }
-                )
-            });
-        let prompt_error = desktop_auto_eat_food_inventory_live_preflight(&after_open).unwrap_err();
+        let prompt_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(prompt_error.contains(
             "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
         ));
+        assert!(!prompt_error.contains("grid/ONNX/OCR/click adapters"));
 
-        let mut after_prompt = after_open.clone();
+        let mut after_prompt = plan.clone();
         after_prompt
             .inventory_plan
             .as_mut()
