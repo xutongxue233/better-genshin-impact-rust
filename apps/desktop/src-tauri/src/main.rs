@@ -72,27 +72,29 @@ use bgi_task::{
     execute_check_rewards_plan, execute_choose_talk_option_plan,
     execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
     execute_claim_mail_rewards_live, execute_count_inventory_item_plan,
-    execute_go_to_adventurers_guild_plan, execute_go_to_crafting_bench_plan,
-    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
-    execute_lower_head_then_walk_to_plan, execute_macro_hotkey_plan,
-    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
-    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
-    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
-    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
+    execute_get_grid_icons_plan, execute_go_to_adventurers_guild_plan,
+    execute_go_to_crafting_bench_plan, execute_independent_task_live_if_available,
+    execute_independent_task_with_cancel, execute_lower_head_then_walk_to_plan,
+    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
+    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
+    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
+    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
+    execute_team_context_combat_script_inputs,
     execute_team_context_combat_script_inputs_with_frame, execute_teleport_plan,
     execute_use_redeem_code_plan, execute_walk_to_f_live, execute_wonderland_cycle_live,
     execute_wonderland_cycle_plan, extract_redeem_codes_from_text, independent_tasks,
     parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight, plan_auto_fish,
     plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
-    plan_quick_buy, plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot,
-    plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
-    redeem_code_entries_from_strings, reduce_lower_head_then_walk_to_tracking_frame,
-    runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
-    switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
-    AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
-    AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
-    AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
-    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    plan_get_grid_icons, plan_quick_buy, plan_quick_enhance_artifact_macro,
+    plan_quick_serenitea_pot, plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro,
+    plan_wonderland_cycle, redeem_code_entries_from_strings,
+    reduce_lower_head_then_walk_to_tracking_frame, runtime_triggers, select_triggers_for_tick,
+    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
+    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
+    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
+    AutoEatExecutionConfig, AutoEatExecutionPlan, AutoEatFoodExecutionPlan,
+    AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime, AutoEatRuntime,
+    AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
@@ -135,6 +137,9 @@ use bgi_task::{
     CountInventoryGridItemFrame, CountInventoryItemCount, CountInventoryItemExecutionPlan,
     CountInventoryItemExecutionReport, CountInventoryItemRuntime,
     CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
+    GetGridIconsArtifactSetFilterRule, GetGridIconsExecutionConfig, GetGridIconsExecutionReport,
+    GetGridIconsGridItem, GetGridIconsGridRule, GetGridIconsOutputRule, GetGridIconsPngData,
+    GetGridIconsRuntime, GetGridIconsStarSuffixRule, GetGridIconsWidthRelativeRect,
     GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
     GoToAdventurersGuildNestedOutcome, GoToAdventurersGuildPathingRule,
     GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
@@ -144,8 +149,8 @@ use bgi_task::{
     GoToCraftingBenchRuntime, GoToCraftingBenchStepAction, GoToSereniteaPotEntryMode,
     GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
     GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
-    GridItemDetectionRule, GridScrollRule, GridTemplate, IndependentTaskExecution,
-    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate, IndependentTaskExecution,
+    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport, InventoryTabAssetPair,
     LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
     LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
     LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
@@ -7543,9 +7548,19 @@ fn execute_desktop_independent_task_live_plan(
         Some("AutoArtifactSalvage") => Err(TaskError::CommonJobExecution(
             "AutoArtifactSalvage desktop live adapter remains pending: capture, OCR, OpenCV, ONNX, input/click, overlay, ClearScript-compatible filtering, and destructive confirmation adapters are not wired".to_string(),
         )),
-        Some("GetGridIcons") => Err(TaskError::CommonJobExecution(
-            "GetGridIcons desktop live adapter remains pending: capture, OpenCV enumeration, Paddle OCR, input/click, filesystem PNG save, overlay cleanup, and optional ONNX/prototype adapters are not wired".to_string(),
-        )),
+        Some("GetGridIcons") => {
+            let report = execute_desktop_get_grid_icons_live_plan(
+                app_root,
+                config,
+                game_window,
+                cancellation,
+                plan,
+            )
+            .map_err(TaskError::CommonJobExecution)?;
+            Ok(Some(IndependentTaskLiveExecutionReport::GetGridIcons(
+                report,
+            )))
+        }
         Some(USE_REDEEM_CODE_TASK_KEY) => {
             let redeem_config = UseRedeemCodeExecutionConfig::from_value(plan.config.as_ref());
             if redeem_config.codes.is_empty() {
@@ -7690,6 +7705,220 @@ fn desktop_independent_live_adapter_gap(task_key: &str, pending_adapters: &str) 
     TaskError::CommonJobExecution(format!(
         "{task_key} desktop live adapter remains pending: {pending_adapters} adapters are not wired"
     ))
+}
+
+fn execute_desktop_get_grid_icons_live_plan(
+    app_root: &Path,
+    config: &AppConfig,
+    game_window: Option<&GameWindowMatch>,
+    cancellation: Arc<InputCancellationToken>,
+    invocation_plan: &bgi_task::TaskInvocationPlan,
+) -> Result<GetGridIconsExecutionReport, String> {
+    let execution_config = GetGridIconsExecutionConfig::from_value(invocation_plan.config.as_ref());
+    let plan = plan_get_grid_icons(execution_config).map_err(|error| error.to_string())?;
+    if plan.config_rule.max_num_to_get > 0 {
+        desktop_common_capture_live_preflight(
+            config,
+            game_window,
+            "GetGridIcons",
+            plan.capture_size,
+            &cancellation,
+        )?;
+    } else if cancellation.is_cancelled() {
+        return Err("GetGridIcons live execution cancelled".to_string());
+    }
+
+    let mut runtime = DesktopGetGridIconsRuntime::new(app_root, cancellation);
+    execute_get_grid_icons_plan(&plan, &mut runtime).map_err(|error| error.to_string())
+}
+
+struct DesktopGetGridIconsRuntime {
+    app_root: PathBuf,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl DesktopGetGridIconsRuntime {
+    fn new(app_root: &Path, cancellation: Arc<InputCancellationToken>) -> Self {
+        Self {
+            app_root: app_root.to_path_buf(),
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "GetGridIcons live execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl GetGridIconsRuntime for DesktopGetGridIconsRuntime {
+    fn create_get_grid_icons_output_dir(
+        &mut self,
+        output_rule: &GetGridIconsOutputRule,
+        grid_screen_name: &GridScreenName,
+    ) -> bgi_task::Result<PathBuf> {
+        self.ensure_not_cancelled()?;
+        let timestamp = Local::now().format("%Y%m%d%H%M%S").to_string();
+        let relative = output_rule
+            .output_directory_pattern
+            .replace("{GridScreenName}", &format!("{grid_screen_name:?}"))
+            .replace("{yyyyMMddHHmmss}", &timestamp);
+        let relative_path = Path::new(&relative);
+        if relative_path.is_absolute()
+            || relative_path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::Prefix(_)
+                        | std::path::Component::RootDir
+                        | std::path::Component::ParentDir
+                )
+            })
+        {
+            return Err(TaskError::CommonJobExecution(format!(
+                "GetGridIcons output directory pattern must stay inside the app root: {relative}"
+            )));
+        }
+        let output_dir = self.app_root.join(relative_path);
+        fs::create_dir_all(&output_dir).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons live execution could not create output directory {}: {error}",
+                output_dir.display()
+            ))
+        })?;
+        Ok(output_dir)
+    }
+
+    fn return_get_grid_icons_main_ui(
+        &mut self,
+        grid_screen_name: &GridScreenName,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(format!(
+            "GetGridIcons live execution requires desktop ReturnMainUi and inventory opening adapters before scanning {grid_screen_name:?}"
+        )))
+    }
+
+    fn open_get_grid_icons_inventory_tab(
+        &mut self,
+        _grid_screen_name: &GridScreenName,
+        _inventory_tab_assets: &InventoryTabAssetPair,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop inventory tab opening adapter"
+                .to_string(),
+        ))
+    }
+
+    fn require_get_grid_icons_manual_open(
+        &mut self,
+        grid_screen_name: &GridScreenName,
+        message: &str,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(format!(
+            "GetGridIcons live execution requires desktop manual-open confirmation adapter for {grid_screen_name:?}: {message}"
+        )))
+    }
+
+    fn enumerate_get_grid_icons_grid_items(
+        &mut self,
+        _grid_rule: &GetGridIconsGridRule,
+        _artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
+    ) -> bgi_task::Result<Vec<GetGridIconsGridItem>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop grid enumeration adapter".to_string(),
+        ))
+    }
+
+    fn click_get_grid_icons_item(
+        &mut self,
+        _item: &GetGridIconsGridItem,
+        _wait_after_click_ms: u64,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop item click adapter".to_string(),
+        ))
+    }
+
+    fn ocr_get_grid_icons_item_name(
+        &mut self,
+        _item: &GetGridIconsGridItem,
+        _roi: &GetGridIconsWidthRelativeRect,
+    ) -> bgi_task::Result<Option<String>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop item-name OCR adapter".to_string(),
+        ))
+    }
+
+    fn count_get_grid_icons_star_suffix(
+        &mut self,
+        _item: &GetGridIconsGridItem,
+        _rule: &GetGridIconsStarSuffixRule,
+    ) -> bgi_task::Result<u8> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop star contour adapter".to_string(),
+        ))
+    }
+
+    fn capture_get_grid_icons_item_icon_png(
+        &mut self,
+        _item: &GetGridIconsGridItem,
+    ) -> bgi_task::Result<GetGridIconsPngData> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop item icon capture adapter".to_string(),
+        ))
+    }
+
+    fn ocr_get_grid_icons_artifact_set_flower_name(
+        &mut self,
+        _item: &GetGridIconsGridItem,
+        _rule: &GetGridIconsArtifactSetFilterRule,
+    ) -> bgi_task::Result<Option<String>> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop artifact-set OCR adapter".to_string(),
+        ))
+    }
+
+    fn crop_get_grid_icons_artifact_set_icon_png(
+        &mut self,
+        _item: &GetGridIconsGridItem,
+        _rule: &GetGridIconsArtifactSetFilterRule,
+    ) -> bgi_task::Result<GetGridIconsPngData> {
+        self.ensure_not_cancelled()?;
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop artifact-set icon crop adapter"
+                .to_string(),
+        ))
+    }
+
+    fn save_get_grid_icons_png(
+        &mut self,
+        output_dir: &Path,
+        file_name: &str,
+        png: &GetGridIconsPngData,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        fs::write(output_dir.join(file_name), &png.bytes).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons live execution could not save PNG {file_name}: {error}"
+            ))
+        })
+    }
+
+    fn clear_get_grid_icons_vision_overlay(&mut self) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23313,7 +23542,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_independent_task_live_plan_reports_get_grid_icons_adapter_gap() {
+    fn desktop_independent_task_live_plan_reports_get_grid_icons_missing_window_boundary() {
         let plan = desktop_independent_task_invocation_plan("GetGridIcons");
 
         let error = execute_desktop_independent_task_live_plan(
@@ -23328,14 +23557,84 @@ mod tests {
         assert!(matches!(
             error,
             TaskError::CommonJobExecution(message)
-                if message.contains("GetGridIcons desktop live adapter remains pending")
-                    && message.contains("capture")
-                    && message.contains("OpenCV enumeration")
-                    && message.contains("Paddle OCR")
-                    && message.contains("filesystem")
-                    && message.contains("overlay")
-                    && message.contains("ONNX")
+                if message.contains("GetGridIcons live execution requires a detected game window")
         ));
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_live_plan_completes_zero_max_without_scanning() {
+        let root = desktop_test_temp_root("get-grid-icons-zero-max");
+        let plan = bgi_task::TaskInvocationPlan {
+            kind: bgi_task::TaskInvocationKind::RunIndependentTask,
+            task_key: Some("GetGridIcons".to_string()),
+            catalog_entry: bgi_task::find_task_catalog_entry("GetGridIcons"),
+            interval_ms: None,
+            clears_existing_triggers: false,
+            config: Some(serde_json::json!({
+                "gridName": "Weapons",
+                "maxNumToGet": 0
+            })),
+            uses_linked_cancellation: true,
+        };
+
+        let live_report = execute_desktop_independent_task_live_plan(
+            &root,
+            &AppConfig::default(),
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap()
+        .expect("expected GetGridIcons live report");
+
+        assert_eq!(live_report.task_name(), "GetGridIcons");
+        assert!(live_report.completed());
+        let IndependentTaskLiveExecutionReport::GetGridIcons(report) = live_report else {
+            panic!("expected GetGridIcons report");
+        };
+        assert!(report.completed);
+        assert!(report.state.max_num_reached);
+        assert_eq!(report.state.grid_items.len(), 0);
+        assert_eq!(report.state.saved_icons.len(), 0);
+        assert_eq!(report.state.skipped_icons.len(), 1);
+        assert!(report.state.cleanup_completed);
+        assert!(report
+            .state
+            .output_dir
+            .as_ref()
+            .unwrap()
+            .starts_with(root.join("log").join("gridIcons")));
+        assert!(report.action_reports.iter().any(|action| {
+            action.action == bgi_task::GetGridIconsStepAction::EnumerateGridItems
+                && action.status == bgi_task::GetGridIconsRuntimeActionStatus::Skipped
+        }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_live_plan_reports_next_inventory_adapter_boundary() {
+        let root = desktop_test_temp_root("get-grid-icons-boundary");
+        let plan = desktop_independent_task_invocation_plan("GetGridIcons");
+        let window = desktop_test_game_window(1920, 1080);
+
+        let error = execute_desktop_independent_task_live_plan(
+            &root,
+            &AppConfig::default(),
+            Some(&window),
+            Arc::new(InputCancellationToken::new()),
+            &plan,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("GetGridIcons live execution requires desktop ReturnMainUi and inventory opening adapters")
+                    && !message.contains("desktop live adapter remains pending")
+        ));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
