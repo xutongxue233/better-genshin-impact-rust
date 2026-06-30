@@ -254,6 +254,7 @@ pub enum GetGridIconsStepAction {
     OpenInventoryTab,
     RequireManualGridOpen,
     EnumerateGridItems,
+    StopWhenGridScanIncomplete,
     ClickItemAndWait,
     OcrItemName,
     CountStarsWhenConfigured,
@@ -276,6 +277,12 @@ pub struct GetGridIconsPngData {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GetGridIconsGridEnumeration {
+    pub items: Vec<GetGridIconsGridItem>,
+    pub scan_complete: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GetGridIconsRuntimeActionStatus {
     Executed,
@@ -287,6 +294,7 @@ pub enum GetGridIconsRuntimeActionStatus {
 pub enum GetGridIconsSkipReason {
     MaxNumToGetZero,
     MaxNumToGetReached,
+    GridScanIncomplete,
     MissingOcrItemName,
     DuplicateFileName,
     SaveFailed,
@@ -385,6 +393,7 @@ pub struct GetGridIconsExecutorState {
     pub auto_open_inventory_completed: Option<bool>,
     pub manual_open_completed: Option<bool>,
     pub grid_items: Vec<GetGridIconsGridItem>,
+    pub grid_scan_complete: bool,
     pub clicked_items: u64,
     pub saved_icons: Vec<GetGridIconsSavedPng>,
     pub skipped_icons: Vec<GetGridIconsSkippedPng>,
@@ -425,7 +434,7 @@ pub trait GetGridIconsRuntime {
         &mut self,
         grid_rule: &GetGridIconsGridRule,
         artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
-    ) -> Result<Vec<GetGridIconsGridItem>>;
+    ) -> Result<GetGridIconsGridEnumeration>;
 
     fn click_get_grid_icons_item(
         &mut self,
@@ -539,18 +548,29 @@ where
 
     execute_get_grid_icons_open_grid(plan, runtime, state, action_reports)?;
 
-    let grid_items = runtime.enumerate_get_grid_icons_grid_items(
+    let enumeration = runtime.enumerate_get_grid_icons_grid_items(
         &plan.grid_rule,
         plan.artifact_set_filter_rule.as_ref(),
     )?;
-    state.grid_items = grid_items;
+    state.grid_items = enumeration.items;
+    state.grid_scan_complete = enumeration.scan_complete;
     action_reports.push(GetGridIconsRuntimeActionReport::executed(
         GetGridIconsStepPhase::ScanGrid,
         GetGridIconsStepAction::EnumerateGridItems,
         None,
         None,
-        format!("{} grid item(s)", state.grid_items.len()),
+        format!(
+            "{} grid item(s); scan_complete={}",
+            state.grid_items.len(),
+            state.grid_scan_complete
+        ),
     ));
+
+    if !state.grid_scan_complete
+        && (state.grid_items.len() as u64) < plan.config_rule.max_num_to_get
+    {
+        return fail_get_grid_icons_incomplete_scan(state, action_reports);
+    }
 
     let mut existing_file_names = HashSet::new();
     for item in state.grid_items.clone() {
@@ -584,7 +604,38 @@ where
         )?;
     }
 
+    if state.clicked_items >= plan.config_rule.max_num_to_get {
+        state.max_num_reached = true;
+    }
+
+    if !state.grid_scan_complete && !state.max_num_reached {
+        return fail_get_grid_icons_incomplete_scan(state, action_reports);
+    }
+
     Ok(())
+}
+
+fn fail_get_grid_icons_incomplete_scan(
+    state: &mut GetGridIconsExecutorState,
+    action_reports: &mut Vec<GetGridIconsRuntimeActionReport>,
+) -> Result<()> {
+    state.skipped_icons.push(GetGridIconsSkippedPng {
+        item: None,
+        reason: GetGridIconsSkipReason::GridScanIncomplete,
+        item_name: None,
+        file_name: None,
+    });
+    let message =
+        "GetGridIcons grid enumeration did not complete; full desktop GridScroller adapter remains pending after visible-page enumeration";
+    action_reports.push(GetGridIconsRuntimeActionReport::failed(
+        GetGridIconsStepPhase::ScanGrid,
+        GetGridIconsStepAction::StopWhenGridScanIncomplete,
+        None,
+        None,
+        GetGridIconsSkipReason::GridScanIncomplete,
+        message,
+    ));
+    Err(TaskError::CommonJobExecution(message.to_string()))
 }
 
 fn execute_get_grid_icons_open_grid<R>(
@@ -872,7 +923,7 @@ pub fn plan_get_grid_icons(
         pending_native: vec![
             "desktop live adapters are not wired yet for TaskRunner/ISoloTask cancellation lifecycle".to_string(),
             "desktop live adapters are partially wired for ordinary inventory ReturnMainUi/OpenInventory/tab handling and visible-page cell clicks; manual-open prompts and special-grid input dispatch remain pending".to_string(),
-            "desktop live adapters are partially wired for ordinary inventory current-visible-page enumeration/crop; full GridScroller page scrolling, OpenCV ArtifactSetFilterScreen contour enumeration, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
+            "desktop live adapters are partially wired for ordinary inventory current-visible-page enumeration/crop with scan_complete=false contract protection; full GridScroller page scrolling, OpenCV ArtifactSetFilterScreen contour enumeration, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
             "desktop live adapters are not wired yet for Paddle OCR item names, artifact-set flower names, optional star contour suffix detection, live cropped-icon PNG encoding, and overlay cleanup".to_string(),
             "optional GridIconsAccuracyTestTask ONNX/prototype inference live adapter remains pending".to_string(),
         ],
@@ -1253,6 +1304,10 @@ fn get_grid_icons_steps(grid: &GridScreenName, star_as_suffix: bool) -> Vec<GetG
         GetGridIconsStepAction::EnumerateGridItems,
     ));
     steps.push(step(
+        GetGridIconsStepPhase::ScanGrid,
+        GetGridIconsStepAction::StopWhenGridScanIncomplete,
+    ));
+    steps.push(step(
         GetGridIconsStepPhase::CaptureItem,
         GetGridIconsStepAction::ClickItemAndWait,
     ));
@@ -1506,10 +1561,89 @@ mod get_grid_icons_runtime_tests {
         assert_eq!(runtime.cleanup_calls, 1);
     }
 
+    #[test]
+    fn get_grid_icons_executor_rejects_incomplete_grid_scan_without_max_reached() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "maxNumToGet": 2
+            }),
+        )))
+        .unwrap();
+        let mut runtime =
+            FakeGetGridIconsRuntime::with_items(vec![grid_item(0)]).with_grid_scan_complete(false);
+
+        let error = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("grid enumeration did not complete")
+                    && message.contains("GridScroller adapter remains pending")
+        ));
+        assert_eq!(runtime.enumerate_calls, 1);
+        assert_eq!(runtime.click_calls, 0);
+        assert_eq!(runtime.save_calls, 0);
+        assert_eq!(runtime.cleanup_calls, 1);
+    }
+
+    #[test]
+    fn get_grid_icons_executor_allows_incomplete_grid_scan_when_max_reached() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "maxNumToGet": 1
+            }),
+        )))
+        .unwrap();
+        let mut runtime = FakeGetGridIconsRuntime::with_items(vec![grid_item(0), grid_item(1)])
+            .with_grid_scan_complete(false);
+
+        let report = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert!(!report.state.grid_scan_complete);
+        assert!(report.state.max_num_reached);
+        assert_eq!(runtime.enumerate_calls, 1);
+        assert_eq!(runtime.click_calls, 1);
+        assert_eq!(runtime.save_calls, 1);
+        assert_eq!(runtime.cleanup_calls, 1);
+        assert!(report.action_reports.iter().any(|report| {
+            report.action == GetGridIconsStepAction::StopWhenMaxCountReached
+                && report.status == GetGridIconsRuntimeActionStatus::Skipped
+        }));
+    }
+
+    #[test]
+    fn get_grid_icons_executor_marks_exact_incomplete_visible_count_as_max_reached() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "maxNumToGet": 1
+            }),
+        )))
+        .unwrap();
+        let mut runtime =
+            FakeGetGridIconsRuntime::with_items(vec![grid_item(0)]).with_grid_scan_complete(false);
+
+        let report = execute_get_grid_icons_plan(&plan, &mut runtime).unwrap();
+
+        assert!(report.completed);
+        assert!(!report.state.grid_scan_complete);
+        assert!(report.state.max_num_reached);
+        assert_eq!(runtime.click_calls, 1);
+        assert_eq!(runtime.save_calls, 1);
+        assert!(!report
+            .action_reports
+            .iter()
+            .any(|report| { report.action == GetGridIconsStepAction::StopWhenMaxCountReached }));
+    }
+
     #[derive(Debug, Default)]
     struct FakeGetGridIconsRuntime {
         output_dir: PathBuf,
         grid_items: Vec<GetGridIconsGridItem>,
+        grid_scan_complete: bool,
         names: Vec<Option<String>>,
         star_counts: Vec<u8>,
         saved_file_names: Vec<String>,
@@ -1534,8 +1668,14 @@ mod get_grid_icons_runtime_tests {
             Self {
                 output_dir: PathBuf::from("target/get-grid-icons-test"),
                 grid_items,
+                grid_scan_complete: true,
                 ..Self::default()
             }
+        }
+
+        fn with_grid_scan_complete(mut self, scan_complete: bool) -> Self {
+            self.grid_scan_complete = scan_complete;
+            self
         }
 
         fn with_names(mut self, names: Vec<Option<String>>) -> Self {
@@ -1603,14 +1743,17 @@ mod get_grid_icons_runtime_tests {
             &mut self,
             _grid_rule: &GetGridIconsGridRule,
             _artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
-        ) -> Result<Vec<GetGridIconsGridItem>> {
+        ) -> Result<GetGridIconsGridEnumeration> {
             self.enumerate_calls += 1;
             if self.fail_enumerate {
                 return Err(TaskError::CommonJobExecution(
                     "enumerate failed".to_string(),
                 ));
             }
-            Ok(self.grid_items.clone())
+            Ok(GetGridIconsGridEnumeration {
+                items: self.grid_items.clone(),
+                scan_complete: self.grid_scan_complete,
+            })
         }
 
         fn click_get_grid_icons_item(

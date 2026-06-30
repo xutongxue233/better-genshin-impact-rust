@@ -138,37 +138,38 @@ use bgi_task::{
     CountInventoryItemExecutionReport, CountInventoryItemRuntime,
     CountInventoryOpenInventoryOutcome, CountInventoryOpenInventoryRule, DispatcherRuntime,
     GetGridIconsArtifactSetFilterRule, GetGridIconsExecutionConfig, GetGridIconsExecutionReport,
-    GetGridIconsGridItem, GetGridIconsGridRule, GetGridIconsOutputRule, GetGridIconsPngData,
-    GetGridIconsRuntime, GetGridIconsStarSuffixRule, GetGridIconsWidthRelativeRect,
-    GoToAdventurersGuildExecutionPlan, GoToAdventurersGuildInteractionRule,
-    GoToAdventurersGuildNestedOutcome, GoToAdventurersGuildPathingRule,
-    GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction, GoToAdventurersGuildStepCondition,
-    GoToCraftingBenchExecutionPlan, GoToCraftingBenchExecutionReport,
-    GoToCraftingBenchInteractionRule, GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts,
-    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
-    GoToCraftingBenchRuntime, GoToCraftingBenchStepAction, GoToSereniteaPotEntryMode,
-    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotStepAction,
-    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
-    GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate, IndependentTaskExecution,
-    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport, InventoryTabAssetPair,
-    LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
-    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
-    LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
-    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
-    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
-    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
-    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
-    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
-    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
-    QuickSereniteaPotExecutionReport, QuickSereniteaPotInteractionOutcome,
-    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
-    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
-    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
-    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
-    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
-    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
-    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
-    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GetGridIconsGridEnumeration, GetGridIconsGridItem, GetGridIconsGridRule,
+    GetGridIconsOutputRule, GetGridIconsPngData, GetGridIconsRuntime, GetGridIconsStarSuffixRule,
+    GetGridIconsWidthRelativeRect, GoToAdventurersGuildExecutionPlan,
+    GoToAdventurersGuildInteractionRule, GoToAdventurersGuildNestedOutcome,
+    GoToAdventurersGuildPathingRule, GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction,
+    GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
+    GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
+    GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
+    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
+    GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
+    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GridIconClassifierRule,
+    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
+    GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
+    IndependentTaskLiveExecutionReport, InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan,
+    LowerHeadThenWalkToExecutionReport, LowerHeadThenWalkToFKeyRule,
+    LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime, LowerHeadThenWalkToStepResult,
+    LowerHeadThenWalkToTrackingObservation, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
+    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
+    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
+    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
+    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
+    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
+    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
+    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
+    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
+    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
+    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
+    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
+    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
+    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
+    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
+    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScanPickDropsExecutionPlan, ScanPickDropsExecutionReport, ScriptDispatcherExecutionPlan,
     ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan, SetTimeExecutionReport, ShellConfig,
     ShellExecutionResult, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
@@ -8008,7 +8009,7 @@ where
         &mut self,
         grid_rule: &GetGridIconsGridRule,
         artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
-    ) -> bgi_task::Result<Vec<GetGridIconsGridItem>> {
+    ) -> bgi_task::Result<GetGridIconsGridEnumeration> {
         self.ensure_not_cancelled()?;
         if artifact_set_filter_rule.is_some() || grid_rule.uses_artifact_set_filter_screen {
             return Err(TaskError::CommonJobExecution(
@@ -8037,14 +8038,17 @@ where
             &visible_items,
             &icon_crop_rule,
         )?;
-        Ok(visible_items
-            .into_iter()
-            .map(|item| GetGridIconsGridItem {
-                page_index: item.page_index,
-                item_index: item.item_index,
-                rect: item.rect,
-            })
-            .collect())
+        Ok(GetGridIconsGridEnumeration {
+            items: visible_items
+                .into_iter()
+                .map(|item| GetGridIconsGridItem {
+                    page_index: item.page_index,
+                    item_index: item.item_index,
+                    rect: item.rect,
+                })
+                .collect(),
+            scan_complete: false,
+        })
     }
 
     fn click_get_grid_icons_item(
@@ -23820,6 +23824,7 @@ mod tests {
         };
         assert!(report.completed);
         assert!(report.state.max_num_reached);
+        assert!(!report.state.grid_scan_complete);
         assert_eq!(report.state.grid_items.len(), 0);
         assert_eq!(report.state.saved_icons.len(), 0);
         assert_eq!(report.state.skipped_icons.len(), 1);
@@ -23935,9 +23940,11 @@ mod tests {
             Arc::new(InputCancellationToken::new()),
         );
 
-        let items = runtime
+        let enumeration = runtime
             .enumerate_get_grid_icons_grid_items(&grid_rule, None)
             .unwrap();
+        assert!(!enumeration.scan_complete);
+        let items = enumeration.items;
         assert_eq!(items.len(), 6);
         assert_eq!(runtime.visible_grid_icons.len(), 6);
         assert!(items.iter().all(|item| item.page_index == 0));
