@@ -7717,31 +7717,108 @@ fn execute_desktop_get_grid_icons_live_plan(
     let execution_config = GetGridIconsExecutionConfig::from_value(invocation_plan.config.as_ref());
     let plan = plan_get_grid_icons(execution_config).map_err(|error| error.to_string())?;
     if plan.config_rule.max_num_to_get > 0 {
+        let window = game_window.ok_or_else(|| {
+            "GetGridIcons live execution requires a detected game window".to_string()
+        })?;
         desktop_common_capture_live_preflight(
             config,
-            game_window,
+            Some(window),
             "GetGridIcons",
             plan.capture_size,
             &cancellation,
         )?;
+        let (global_input, _capture_size) =
+            desktop_common_job_global_input(config, window, "GetGridIcons")?;
+        let frame_source = global_input
+            .common_job_frame_source()
+            .ok_or_else(|| "GetGridIcons live execution has no capture frame source".to_string())?;
+        let input_driver = global_input
+            .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+        let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+            frame_source,
+            input_driver,
+            CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+        );
+        let mut runtime = DesktopGetGridIconsRuntime::new(
+            app_root,
+            Some(common_runtime),
+            config,
+            plan.capture_size,
+            cancellation,
+        );
+        return execute_get_grid_icons_plan(&plan, &mut runtime).map_err(|error| error.to_string());
     } else if cancellation.is_cancelled() {
         return Err("GetGridIcons live execution cancelled".to_string());
     }
 
-    let mut runtime = DesktopGetGridIconsRuntime::new(app_root, cancellation);
+    let mut runtime = DesktopGetGridIconsRuntime::new(
+        app_root,
+        None::<
+            PureTemplateCommonJobRuntime<
+                DesktopGetGridIconsEmptyFrameSource,
+                DesktopGetGridIconsEmptyInputDriver,
+                CancellableCommonJobClock,
+            >,
+        >,
+        config,
+        plan.capture_size,
+        cancellation,
+    );
     execute_get_grid_icons_plan(&plan, &mut runtime).map_err(|error| error.to_string())
 }
 
-struct DesktopGetGridIconsRuntime {
-    app_root: PathBuf,
-    cancellation: Arc<InputCancellationToken>,
+#[derive(Debug)]
+struct DesktopGetGridIconsEmptyFrameSource;
+
+impl CommonJobFrameSource for DesktopGetGridIconsEmptyFrameSource {
+    fn capture_frame(&mut self) -> bgi_task::Result<BgrImage> {
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop frame source".to_string(),
+        ))
+    }
 }
 
-impl DesktopGetGridIconsRuntime {
-    fn new(app_root: &Path, cancellation: Arc<InputCancellationToken>) -> Self {
+#[derive(Debug)]
+struct DesktopGetGridIconsEmptyInputDriver;
+
+impl CommonJobInputDriver for DesktopGetGridIconsEmptyInputDriver {
+    fn dispatch_input(&mut self, _events: &[InputEvent]) -> bgi_task::Result<()> {
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop input driver".to_string(),
+        ))
+    }
+
+    fn click_capture_point(&mut self, _x: i32, _y: i32) -> bgi_task::Result<()> {
+        Err(TaskError::CommonJobExecution(
+            "GetGridIcons live execution requires desktop input driver".to_string(),
+        ))
+    }
+}
+
+struct DesktopGetGridIconsRuntime<F, I, C> {
+    app_root: PathBuf,
+    common: Option<PureTemplateCommonJobRuntime<F, I, C>>,
+    key_bindings_config: KeyBindingsConfig,
+    capture_size: VisionSize,
+    cancellation: Arc<InputCancellationToken>,
+    visible_grid_icons: Vec<BgrImage>,
+}
+
+impl<F, I, C> DesktopGetGridIconsRuntime<F, I, C> {
+    fn new(
+        app_root: &Path,
+        common: Option<PureTemplateCommonJobRuntime<F, I, C>>,
+        config: &AppConfig,
+        capture_size: VisionSize,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
         Self {
             app_root: app_root.to_path_buf(),
+            common,
+            key_bindings_config: config.key_bindings_config.clone(),
+            capture_size,
             cancellation,
+            visible_grid_icons: Vec::new(),
         }
     }
 
@@ -7755,7 +7832,63 @@ impl DesktopGetGridIconsRuntime {
     }
 }
 
-impl GetGridIconsRuntime for DesktopGetGridIconsRuntime {
+impl<F, I, C> DesktopGetGridIconsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn common_mut(
+        &mut self,
+        boundary: &str,
+    ) -> bgi_task::Result<&mut PureTemplateCommonJobRuntime<F, I, C>> {
+        self.common.as_mut().ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons live execution requires desktop {boundary} adapter"
+            ))
+        })
+    }
+
+    fn execute_return_main_ui(&mut self) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        let capture_size = self.capture_size;
+        let common = self.common_mut("ReturnMainUi")?;
+        let plan = plan_return_main_ui(capture_size, RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS)?;
+        let report = execute_return_main_ui_plan(&plan, common)?;
+        if report.completed {
+            Ok(())
+        } else {
+            Err(TaskError::CommonJobExecution(
+                "GetGridIcons live execution could not return to main UI before opening inventory"
+                    .to_string(),
+            ))
+        }
+    }
+
+    fn inventory_rule(
+        &self,
+        inventory_tab_assets: &InventoryTabAssetPair,
+    ) -> CountInventoryOpenInventoryRule {
+        CountInventoryOpenInventoryRule {
+            open_inventory_action: GenshinAction::OpenInventory,
+            open_wait_ms: 1_200,
+            retry_attempts: 5,
+            retry_when_main_ui_detected: true,
+            expired_item_prompt_confirm_asset: "Common/Element:btn_white_confirm.png".to_string(),
+            expired_item_prompt_crop_bottom_ratio: 0.2,
+            expired_item_prompt_wait_ms: 300,
+            tab_assets: inventory_tab_assets.clone(),
+            after_tab_ready_wait_ms: 800,
+        }
+    }
+}
+
+impl<F, I, C> GetGridIconsRuntime for DesktopGetGridIconsRuntime<F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
     fn create_get_grid_icons_output_dir(
         &mut self,
         output_rule: &GetGridIconsOutputRule,
@@ -7797,19 +7930,65 @@ impl GetGridIconsRuntime for DesktopGetGridIconsRuntime {
         grid_screen_name: &GridScreenName,
     ) -> bgi_task::Result<()> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(format!(
-            "GetGridIcons live execution requires desktop ReturnMainUi and inventory opening adapters before scanning {grid_screen_name:?}"
-        )))
+        if grid_screen_name.inventory_tab_assets().is_none() {
+            return Err(TaskError::CommonJobExecution(format!(
+                "GetGridIcons live execution requires desktop manual-open adapter before scanning {grid_screen_name:?}"
+            )));
+        }
+        self.execute_return_main_ui()
     }
 
     fn open_get_grid_icons_inventory_tab(
         &mut self,
         _grid_screen_name: &GridScreenName,
-        _inventory_tab_assets: &InventoryTabAssetPair,
+        inventory_tab_assets: &InventoryTabAssetPair,
     ) -> bgi_task::Result<()> {
         self.ensure_not_cancelled()?;
+        let rule = self.inventory_rule(inventory_tab_assets);
+        let key_bindings_config = self.key_bindings_config.clone();
+        let capture_size = self.capture_size;
+        let attempts = rule.retry_attempts.max(1);
+        for attempt in 0..attempts {
+            self.ensure_not_cancelled()?;
+            let common = self.common_mut("inventory opening")?;
+            let open_outcome = desktop_open_inventory_with_common_runtime(
+                common,
+                &key_bindings_config,
+                capture_size,
+                &rule,
+                "GetGridIcons",
+            )?;
+            if open_outcome.expired_item_prompt_detected {
+                desktop_confirm_inventory_expired_item_prompt_with_common_runtime(
+                    common,
+                    capture_size,
+                    &rule.expired_item_prompt_confirm_asset,
+                    rule.expired_item_prompt_crop_bottom_ratio,
+                )?;
+            }
+            if open_outcome.inventory_tab_checked {
+                return Ok(());
+            }
+            let tab_ready = match desktop_open_inventory_tab_with_common_runtime(
+                common,
+                capture_size,
+                &rule,
+            )? {
+                CommonJobRuntimeOutcome::Matched(value) => value,
+                CommonJobRuntimeOutcome::None => false,
+            };
+            if tab_ready {
+                return Ok(());
+            }
+            if !(rule.retry_when_main_ui_detected
+                && open_outcome.still_on_main_ui
+                && attempt + 1 < attempts)
+            {
+                break;
+            }
+        }
         Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop inventory tab opening adapter"
+            "GetGridIcons live execution could not confirm requested inventory tab after opening inventory"
                 .to_string(),
         ))
     }
@@ -7827,24 +8006,65 @@ impl GetGridIconsRuntime for DesktopGetGridIconsRuntime {
 
     fn enumerate_get_grid_icons_grid_items(
         &mut self,
-        _grid_rule: &GetGridIconsGridRule,
-        _artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
+        grid_rule: &GetGridIconsGridRule,
+        artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
     ) -> bgi_task::Result<Vec<GetGridIconsGridItem>> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop grid enumeration adapter".to_string(),
-        ))
+        if artifact_set_filter_rule.is_some() || grid_rule.uses_artifact_set_filter_screen {
+            return Err(TaskError::CommonJobExecution(
+                "GetGridIcons live execution requires desktop ArtifactSetFilter grid enumeration adapter"
+                    .to_string(),
+            ));
+        }
+        let capture_size = self.capture_size;
+        let common = self.common_mut("visible inventory grid enumeration")?;
+        let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
+            common,
+            capture_size,
+            &grid_rule.grid_template,
+            &grid_rule.detection_rule,
+        )?;
+        let icon_crop_rule = GridIconCropRule {
+            normalized_width: 125,
+            normalized_height: 153,
+            icon_crop: Rect::new(0, 0, 125, 125)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+            bottom_crop: Rect::new(0, 126, 125, 27)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
+        };
+        self.visible_grid_icons = desktop_crop_inventory_grid_icons_with_common_runtime(
+            common,
+            &visible_items,
+            &icon_crop_rule,
+        )?;
+        Ok(visible_items
+            .into_iter()
+            .map(|item| GetGridIconsGridItem {
+                page_index: item.page_index,
+                item_index: item.item_index,
+                rect: item.rect,
+            })
+            .collect())
     }
 
     fn click_get_grid_icons_item(
         &mut self,
-        _item: &GetGridIconsGridItem,
-        _wait_after_click_ms: u64,
+        item: &GetGridIconsGridItem,
+        wait_after_click_ms: u64,
     ) -> bgi_task::Result<()> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop item click adapter".to_string(),
-        ))
+        let center = item.rect.center();
+        let common = self.common_mut("item click")?;
+        common
+            .input_driver_mut()
+            .click_capture_point(center.x, center.y)?;
+        CommonJobRuntime::execute_page_command(
+            common,
+            &BvPageCommand::Wait {
+                milliseconds: desktop_inventory_wait_milliseconds(wait_after_click_ms),
+            },
+        )?;
+        Ok(())
     }
 
     fn ocr_get_grid_icons_item_name(
@@ -7871,11 +8091,17 @@ impl GetGridIconsRuntime for DesktopGetGridIconsRuntime {
 
     fn capture_get_grid_icons_item_icon_png(
         &mut self,
-        _item: &GetGridIconsGridItem,
+        item: &GetGridIconsGridItem,
     ) -> bgi_task::Result<GetGridIconsPngData> {
         self.ensure_not_cancelled()?;
+        if let Some(icon) = self.visible_grid_icons.get(item.item_index as usize) {
+            return Err(TaskError::CommonJobExecution(format!(
+                "GetGridIcons live execution requires desktop PNG encoding adapter after visible-page crop cached item {} ({}x{})",
+                item.item_index, icon.size.width, icon.size.height
+            )));
+        }
         Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop item icon capture adapter".to_string(),
+            "GetGridIcons live execution requires desktop item icon capture adapter after visible-page crop cache miss".to_string(),
         ))
     }
 
@@ -23630,11 +23856,104 @@ mod tests {
         assert!(matches!(
             error,
             TaskError::CommonJobExecution(message)
-                if message.contains("GetGridIcons live execution requires desktop ReturnMainUi and inventory opening adapters")
+                if !message.contains("GetGridIcons live execution requires desktop ReturnMainUi and inventory opening adapters")
                     && !message.contains("desktop live adapter remains pending")
         ));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_inventory_rule_matches_shared_defaults() {
+        let runtime = DesktopGetGridIconsRuntime::new(
+            Path::new("."),
+            None::<
+                PureTemplateCommonJobRuntime<
+                    DesktopGetGridIconsEmptyFrameSource,
+                    DesktopGetGridIconsEmptyInputDriver,
+                    CancellableCommonJobClock,
+                >,
+            >,
+            &AppConfig::default(),
+            VisionSize::new(1920, 1080),
+            Arc::new(InputCancellationToken::new()),
+        );
+        let tab_assets = GridScreenName::Weapons.inventory_tab_assets().unwrap();
+
+        let rule = runtime.inventory_rule(&tab_assets);
+
+        assert_eq!(rule.open_inventory_action, GenshinAction::OpenInventory);
+        assert_eq!(rule.open_wait_ms, 1_200);
+        assert_eq!(rule.retry_attempts, 5);
+        assert!(rule.retry_when_main_ui_detected);
+        assert_eq!(
+            rule.expired_item_prompt_confirm_asset,
+            "Common/Element:btn_white_confirm.png"
+        );
+        assert_eq!(rule.expired_item_prompt_crop_bottom_ratio, 0.2);
+        assert_eq!(rule.expired_item_prompt_wait_ms, 300);
+        assert_eq!(rule.tab_assets, tab_assets);
+        assert_eq!(rule.after_tab_ready_wait_ms, 800);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_visible_inventory_route_maps_items_and_clicks_center() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let template = GridTemplate {
+            roi_1080p: Rect::new(200, 150, 300, 220).unwrap(),
+            columns: 3,
+            s1_round: 3,
+            round_milliseconds: 40,
+            s2_round: 32,
+            s3_scale: 0.024,
+        };
+        let mut grid_rule = plan_get_grid_icons(GetGridIconsExecutionConfig::default())
+            .unwrap()
+            .grid_rule;
+        grid_rule.grid_template = template;
+        grid_rule.detection_rule = desktop_test_inventory_grid_detection_rule();
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        for rect in [
+            Rect::new(220, 170, 60, 80).unwrap(),
+            Rect::new(310, 170, 60, 80).unwrap(),
+            Rect::new(400, 170, 60, 80).unwrap(),
+            Rect::new(220, 270, 60, 80).unwrap(),
+        ] {
+            draw_desktop_bgr_rect_edge(&mut frame, rect, [245, 245, 245]);
+        }
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([frame.clone(), frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopGetGridIconsRuntime::new(
+            Path::new("."),
+            Some(common_runtime),
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+
+        let items = runtime
+            .enumerate_get_grid_icons_grid_items(&grid_rule, None)
+            .unwrap();
+        assert_eq!(items.len(), 6);
+        assert_eq!(runtime.visible_grid_icons.len(), 6);
+        assert!(items.iter().all(|item| item.page_index == 0));
+        assert_eq!(
+            items.iter().map(|item| item.item_index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(items[0].rect, Rect::new(219, 169, 62, 82).unwrap());
+
+        runtime.click_get_grid_icons_item(&items[0], 300).unwrap();
+
+        let common = runtime.common.take().unwrap();
+        let (_, frame_source, input_driver, clock, _) = common.into_parts();
+        assert_eq!(frame_source.captures, 2);
+        assert_eq!(input_driver.clicks, vec![(250, 210)]);
+        assert_eq!(clock.waits, vec![300]);
     }
 
     #[test]

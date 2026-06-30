@@ -871,9 +871,9 @@ pub fn plan_get_grid_icons(
         steps: get_grid_icons_steps(&grid_screen_name, config.get_grid_icons_config.star_as_suffix),
         pending_native: vec![
             "desktop live adapters are not wired yet for TaskRunner/ISoloTask cancellation lifecycle".to_string(),
-            "desktop live adapters are not wired yet for ReturnMainUiTask, inventory tab opening, manual-open prompts, and SendInput mouse/keyboard dispatch".to_string(),
-            "desktop live adapters are not wired yet for GameCaptureRegion capture, ImageRegion crop/click behavior, OpenCV GridScreen/ArtifactSetFilterScreen contour enumeration, GridCell clustering, and phase-correlation scrolling".to_string(),
-            "desktop live adapters are not wired yet for Paddle OCR item names, artifact-set flower names, optional star contour suffix detection, PNG filesystem writes, and overlay cleanup".to_string(),
+            "desktop live adapters are partially wired for ordinary inventory ReturnMainUi/OpenInventory/tab handling and visible-page cell clicks; manual-open prompts and special-grid input dispatch remain pending".to_string(),
+            "desktop live adapters are partially wired for ordinary inventory current-visible-page enumeration/crop; full GridScroller page scrolling, OpenCV ArtifactSetFilterScreen contour enumeration, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
+            "desktop live adapters are not wired yet for Paddle OCR item names, artifact-set flower names, optional star contour suffix detection, live cropped-icon PNG encoding, and overlay cleanup".to_string(),
             "optional GridIconsAccuracyTestTask ONNX/prototype inference live adapter remains pending".to_string(),
         ],
     })
