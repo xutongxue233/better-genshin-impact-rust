@@ -13346,6 +13346,18 @@ fn independent_task_invocation_context_expands_auto_pathing_plan() {
     assert_eq!(auto_pathing_plan.execution_plan.segment_count, 1);
     assert_eq!(auto_pathing_plan.execution_plan.waypoint_count, 2);
     assert_eq!(auto_pathing_plan.execution_plan.expected_fight_count, 1);
+    assert_eq!(
+        auto_pathing_plan.execution_plan.segments[0].waypoints[0].track_point,
+        Some(bgi_core::PathingPoint {
+            x: 32766.0,
+            y: 16380.0,
+        })
+    );
+    assert!(!auto_pathing_plan
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
     assert!(
         auto_pathing_plan
             .execution_plan
@@ -20543,6 +20555,18 @@ fn independent_auto_pathing_returns_execution_plan_for_user_route() {
     assert_eq!(plan.execution_plan.waypoint_count, 2);
     assert_eq!(plan.execution_plan.expected_fight_count, 1);
     assert!(plan.execution_plan.autopick_realtime_trigger_enabled);
+    assert_eq!(
+        plan.execution_plan.segments[0].waypoints[0].track_point,
+        Some(bgi_core::PathingPoint {
+            x: 32766.0,
+            y: 16380.0,
+        })
+    );
+    assert!(!plan
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
     assert!(!plan.dispatched);
     let _ = fs::remove_dir_all(root);
 }
@@ -20952,6 +20976,68 @@ fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phase
         action_report.common_job_live_execution,
         Some(CommonJobLiveExecutionReport::SetTime(_))
     ));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_accepts_injected_movement_runtime_without_claiming_full_completion()
+{
+    let root = unique_test_root("auto-pathing-action-boundary-injected-movement");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("movement_ready.json"),
+        r#"{
+                "info": { "name": "movement ready route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash", "action": "log_output", "action_params": "arrived" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/movement_ready.json").unwrap();
+    let expected_phase_count = plan
+        .execution_plan
+        .movement_contract
+        .segments
+        .iter()
+        .flat_map(|segment| segment.waypoints.iter())
+        .map(|waypoint| waypoint.phase_contracts.len())
+        .sum::<usize>();
+    let mut movement_runtime = CompletingAutoPathingMovementRuntime::default();
+
+    let report = execute_auto_pathing_action_boundary_with_movement_runtime(
+        &plan,
+        Size::new(1920, 1080),
+        &mut movement_runtime,
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            panic!("log_output action should not call the common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert!(report.boundary_completed);
+    assert!(report.movement_attempted);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::Completed
+    );
+    assert!(!report.native_pathing_completed);
+    let movement_report = report
+        .movement_report
+        .as_ref()
+        .expect("expected movement report");
+    assert!(movement_report.native_pathing_completed);
+    assert_eq!(movement_report.executed_phases, expected_phase_count);
+    assert_eq!(movement_runtime.phases.len(), expected_phase_count);
+    assert_eq!(report.executed_actions, 0);
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected log_output action report");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Reported);
+    assert!(action_report.message.contains("arrived"));
     let _ = fs::remove_dir_all(root);
 }
 

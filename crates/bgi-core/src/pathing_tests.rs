@@ -3,6 +3,28 @@ use crate::GenshinAction;
 use std::fs;
 
 #[test]
+fn legacy_track_map_point_converts_teyvat_route_coordinates() {
+    assert_eq!(
+        legacy_track_map_point("Teyvat", PathingPoint { x: 1.0, y: 2.0 }),
+        Some(PathingPoint {
+            x: 32766.0,
+            y: 16380.0,
+        })
+    );
+    assert_eq!(
+        legacy_track_map_point("teyvat", PathingPoint { x: -5.5, y: 7.25 }),
+        Some(PathingPoint {
+            x: 32779.0,
+            y: 16369.5,
+        })
+    );
+    assert_eq!(
+        legacy_track_map_point("Enkanomiya", PathingPoint { x: 1.0, y: 2.0 }),
+        None
+    );
+}
+
+#[test]
 fn deserializes_existing_snake_case_pathing_json() {
     let json = r#"{
         "info": {

@@ -3,10 +3,11 @@ use crate::{
     TeleportExecutionReport, TELEPORT_TASK_KEY,
 };
 use bgi_core::{
-    read_pathing_task, PathingActionPlan, PathingCommonJobActionPlan, PathingCoordinateSpace,
-    PathingExecutionPlan, PathingLogOutputActionPlan, PathingMovementDependency,
-    PathingMovementPhaseContract, PathingMovementSegmentContract, PathingMovementWaypointContract,
-    PathingPoint, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
+    legacy_track_map_point_for_pathing, read_pathing_task, PathingActionPlan,
+    PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
+    PathingLogOutputActionPlan, PathingMovementDependency, PathingMovementPhaseContract,
+    PathingMovementSegmentContract, PathingMovementWaypointContract, PathingPoint,
+    PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
     PathingTrackConversionContext, PathingWaypointPhase, PathingWaypointPlan,
 };
 use bgi_vision::Size;
@@ -421,7 +422,18 @@ pub fn plan_auto_pathing(
     working_directory: impl AsRef<Path>,
     route: &str,
 ) -> Result<AutoPathingExecutionPlan> {
-    plan_auto_pathing_with_execution_plan(working_directory, route, |task| task.execution_plan())
+    plan_auto_pathing_with_legacy_track_converter(working_directory, route)
+}
+
+pub fn plan_auto_pathing_with_legacy_track_converter(
+    working_directory: impl AsRef<Path>,
+    route: &str,
+) -> Result<AutoPathingExecutionPlan> {
+    plan_auto_pathing_with_track_converter(
+        working_directory,
+        route,
+        legacy_track_map_point_for_pathing,
+    )
 }
 
 pub fn plan_auto_pathing_with_track_converter<F>(
@@ -463,7 +475,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; native movement dispatch remains pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, while native movement dispatch remains pending."
                 .to_string(),
     })
 }
@@ -868,22 +880,67 @@ fn auto_pathing_preflight_phases(
 pub fn execute_auto_pathing_action_boundary_with_live_executor<F>(
     plan: &AutoPathingExecutionPlan,
     capture_size: Size,
-    mut live_executor: F,
+    live_executor: F,
 ) -> Result<AutoPathingActionBoundaryReport>
 where
     F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
 {
-    let movement_contract = &plan.execution_plan.movement_contract;
     let mut movement_runtime = UnsupportedAutoPathingMovementRuntime;
-    let movement_report =
-        execute_auto_pathing_movement_contract_with_runtime(plan, &mut movement_runtime)?;
+    execute_auto_pathing_action_boundary_with_movement_runtime(
+        plan,
+        capture_size,
+        &mut movement_runtime,
+        live_executor,
+    )
+}
+
+pub fn execute_auto_pathing_action_boundary_with_movement_runtime<R, F>(
+    plan: &AutoPathingExecutionPlan,
+    capture_size: Size,
+    movement_runtime: &mut R,
+    live_executor: F,
+) -> Result<AutoPathingActionBoundaryReport>
+where
+    R: AutoPathingMovementRuntime,
+    F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
+{
+    execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
+        plan,
+        capture_size,
+        movement_runtime,
+        || false,
+        live_executor,
+    )
+}
+
+pub fn execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation<R, F, C>(
+    plan: &AutoPathingExecutionPlan,
+    capture_size: Size,
+    movement_runtime: &mut R,
+    should_cancel: C,
+    mut live_executor: F,
+) -> Result<AutoPathingActionBoundaryReport>
+where
+    R: AutoPathingMovementRuntime,
+    F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
+    C: FnMut() -> bool,
+{
+    let movement_contract = &plan.execution_plan.movement_contract;
+    let movement_report = execute_auto_pathing_movement_contract_with_runtime_and_cancellation(
+        plan,
+        movement_runtime,
+        should_cancel,
+    )?;
+    let movement_attempted = movement_report.executed_phases > 0
+        || movement_report.failed_phases > 0
+        || movement_report.cancelled_phases > 0;
     let mut report = AutoPathingActionBoundaryReport {
         source: plan.source,
         route: plan.route.clone(),
         normalized_path: plan.normalized_path.clone(),
         completion_scope: AutoPathingActionBoundaryCompletionScope::ActionBoundaryOnly,
         boundary_completed: false,
-        movement_attempted: false,
+        movement_attempted,
         movement_completion_status: movement_report.movement_completion_status,
         native_pathing_completed: false,
         movement_executor_ready: movement_contract.movement_executor_ready,
@@ -899,7 +956,7 @@ where
         unsupported_phases: 0,
         waypoint_reports: Vec::new(),
         notes:
-            "Pathing runtime boundary reports ready pure actions, can hand mapped run-actions and teleport phases to a caller-provided live executor, and consumes Teleport navigation seeds into previous-position reports when the live bridge provides them; movement, final navigation state writes, combat, recovery, and camera phases remain native-pending."
+            "Pathing runtime boundary reports ready pure actions, can hand mapped run-actions and teleport phases to a caller-provided live executor, consumes the movement contract through an injectable movement runtime, and consumes Teleport navigation seeds into previous-position reports when the live bridge provides them; desktop movement adapters, final navigation state writes, combat, recovery, and camera phases remain native-pending."
                 .to_string(),
     };
 

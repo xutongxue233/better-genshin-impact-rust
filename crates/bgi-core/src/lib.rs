@@ -41,10 +41,11 @@ pub use notification::{
     RecordingNotificationWebSocketClient, RecordingNotificationWindowsToastClient,
 };
 pub use pathing::{
-    plan_linnea_mining_action, read_pathing_task, LinneaMiningActionPlan,
-    LinneaMiningAlignmentRule, LinneaMiningCleanupRule, LinneaMiningClusterRule,
-    LinneaMiningDetectionRule, LinneaMiningDetectionSource, LinneaMiningMineRule,
-    LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType,
+    legacy_track_map_coordinate_rule, legacy_track_map_point, legacy_track_map_point_for_pathing,
+    plan_linnea_mining_action, read_pathing_task, LegacyTrackMapCoordinateRule,
+    LinneaMiningActionPlan, LinneaMiningAlignmentRule, LinneaMiningCleanupRule,
+    LinneaMiningClusterRule, LinneaMiningDetectionRule, LinneaMiningDetectionSource,
+    LinneaMiningMineRule, LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType,
     PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
     PathingFarmingExecutionPlan, PathingForceTeleportActionPlan, PathingLogOutputActionPlan,
     PathingMovementContractPlan, PathingMovementDependency, PathingMovementPhaseContract,

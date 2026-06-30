@@ -23071,7 +23071,16 @@ mod tests {
         };
 
         assert!(report.boundary_completed);
+        assert!(!report.movement_attempted);
         assert!(!report.native_pathing_completed);
+        let movement_report = report
+            .movement_report
+            .as_ref()
+            .expect("expected movement contract report");
+        assert!(movement_report.movement_contract_consumed);
+        assert!(!movement_report
+            .movement_pending_dependencies
+            .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
         assert_eq!(report.executed_actions, 0);
         assert_eq!(report.invalid_actions, 0);
         assert!(report.unsupported_phases > 0);

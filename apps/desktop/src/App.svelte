@@ -3117,7 +3117,7 @@
       meta: `${boundary.completion_scope} · ${boundary.movement_completion_status}`,
       details: [
         { label: "Boundary", value: boundary.boundary_completed ? "done" : "pending" },
-        { label: "Movement", value: boundary.movement_attempted ? "attempted" : "not attempted" },
+        { label: "Movement Runtime", value: boundary.movement_attempted ? "attempted" : "pending" },
         {
           label: "Move Contract",
           value: movement?.movement_contract_consumed ? "consumed" : "not consumed",

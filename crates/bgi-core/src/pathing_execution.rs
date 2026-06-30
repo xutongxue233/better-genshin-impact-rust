@@ -362,6 +362,38 @@ pub struct PathingPoint {
     pub y: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct LegacyTrackMapCoordinateRule {
+    pub origin_x: f64,
+    pub origin_y: f64,
+    pub block_width_scale: f64,
+}
+
+pub fn legacy_track_map_coordinate_rule(map_name: &str) -> Option<LegacyTrackMapCoordinateRule> {
+    match map_name.trim() {
+        name if name.eq_ignore_ascii_case("Teyvat") => Some(LegacyTrackMapCoordinateRule {
+            origin_x: 32768.0,
+            origin_y: 16384.0,
+            block_width_scale: 2.0,
+        }),
+        _ => None,
+    }
+}
+
+pub fn legacy_track_map_point(map_name: &str, point: PathingPoint) -> Option<PathingPoint> {
+    let rule = legacy_track_map_coordinate_rule(map_name)?;
+    Some(PathingPoint {
+        x: rule.origin_x - point.x * rule.block_width_scale,
+        y: rule.origin_y - point.y * rule.block_width_scale,
+    })
+}
+
+pub fn legacy_track_map_point_for_pathing(
+    context: PathingTrackConversionContext<'_>,
+) -> Option<PathingPoint> {
+    legacy_track_map_point(context.map_name, context.route_point)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PathingActionUseWaypointType {
