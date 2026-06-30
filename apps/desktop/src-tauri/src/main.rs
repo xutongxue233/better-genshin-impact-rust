@@ -7075,25 +7075,24 @@ where
 
     fn confirm_auto_eat_food_expired_item_prompt(
         &mut self,
-        _confirm_asset: &str,
-        _crop_bottom_ratio: f64,
+        confirm_asset: &str,
+        crop_bottom_ratio: f64,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
-                .to_string(),
-        ))
+        desktop_confirm_inventory_expired_item_prompt_with_common_runtime(
+            &mut self.common,
+            self.capture_size,
+            confirm_asset,
+            crop_bottom_ratio,
+        )
     }
 
     fn open_auto_eat_food_inventory_tab(
         &mut self,
-        _rule: &CountInventoryOpenInventoryRule,
+        rule: &CountInventoryOpenInventoryRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "AutoEatFood inventory-food live execution requires desktop inventory tab adapter"
-                .to_string(),
-        ))
+        desktop_open_inventory_tab_with_common_runtime(&mut self.common, self.capture_size, rule)
     }
 
     fn load_auto_eat_food_grid_icon_classifier(
@@ -12255,16 +12254,8 @@ fn desktop_inventory_count_plan_live_preflight(
                     "{task_name} live execution requires desktop Genshin action adapter for {action:?}"
                 ));
             }
-            CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. } => {
-                return Err(format!(
-                    "{task_name} live execution requires desktop expired-item prompt adapter"
-                ));
-            }
-            CountInventoryItemStepAction::OpenInventoryTab { .. } => {
-                return Err(format!(
-                    "{task_name} live execution requires desktop inventory tab adapter"
-                ));
-            }
+            CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
+            | CountInventoryItemStepAction::OpenInventoryTab { .. } => {}
             CountInventoryItemStepAction::LoadGridIconClassifier { .. } => {
                 return Err(format!(
                     "{task_name} live execution requires desktop GridIcon ONNX/prototype adapter"
@@ -12443,24 +12434,24 @@ where
 
     fn confirm_count_inventory_expired_item_prompt(
         &mut self,
-        _confirm_asset: &str,
-        _crop_bottom_ratio: f64,
+        confirm_asset: &str,
+        crop_bottom_ratio: f64,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop expired-item prompt adapter"
-                .to_string(),
-        ))
+        desktop_confirm_inventory_expired_item_prompt_with_common_runtime(
+            &mut self.common,
+            self.capture_size,
+            confirm_asset,
+            crop_bottom_ratio,
+        )
     }
 
     fn open_count_inventory_tab(
         &mut self,
-        _rule: &CountInventoryOpenInventoryRule,
+        rule: &CountInventoryOpenInventoryRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "CountInventoryItem live execution requires desktop inventory tab adapter".to_string(),
-        ))
+        desktop_open_inventory_tab_with_common_runtime(&mut self.common, self.capture_size, rule)
     }
 
     fn load_count_inventory_grid_icon_classifier(
@@ -12613,6 +12604,76 @@ where
     })
 }
 
+fn desktop_confirm_inventory_expired_item_prompt_with_common_runtime<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    capture_size: VisionSize,
+    confirm_asset: &str,
+    crop_bottom_ratio: f64,
+) -> bgi_task::Result<CommonJobRuntimeOutcome>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    let roi = desktop_inventory_bottom_roi(capture_size, crop_bottom_ratio)?;
+    let locator = desktop_inventory_click_locator(
+        confirm_asset,
+        0.8,
+        roi,
+        DESKTOP_INVENTORY_PROMPT_CLICK_TIMEOUT_MS,
+        capture_size,
+    )?;
+    CommonJobRuntime::execute_locator(common, &locator)
+}
+
+fn desktop_open_inventory_tab_with_common_runtime<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    capture_size: VisionSize,
+    rule: &CountInventoryOpenInventoryRule,
+) -> bgi_task::Result<CommonJobRuntimeOutcome>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    let tab_roi = desktop_inventory_tab_roi(capture_size, rule.tab_assets.roi_top_ratio)?;
+    let click_locator = desktop_inventory_click_locator(
+        &rule.tab_assets.unchecked_asset,
+        rule.tab_assets.unchecked_threshold,
+        tab_roi,
+        DESKTOP_INVENTORY_TAB_CLICK_TIMEOUT_MS,
+        capture_size,
+    )?;
+    let clicked = match CommonJobRuntime::execute_locator(common, &click_locator)? {
+        CommonJobRuntimeOutcome::Matched(value) => value,
+        CommonJobRuntimeOutcome::None => false,
+    };
+    if !clicked {
+        return Ok(CommonJobRuntimeOutcome::Matched(false));
+    }
+
+    CommonJobRuntime::execute_page_command(
+        common,
+        &BvPageCommand::Wait {
+            milliseconds: desktop_inventory_wait_milliseconds(rule.after_tab_ready_wait_ms),
+        },
+    )?;
+    let checked_locator = desktop_inventory_locator(
+        &rule.tab_assets.checked_asset,
+        rule.tab_assets.checked_threshold,
+        tab_roi,
+        DESKTOP_INVENTORY_TAB_CHECK_TIMEOUT_MS,
+        capture_size,
+    )?;
+    Ok(CommonJobRuntimeOutcome::Matched(
+        desktop_inventory_locator_exists(common, &checked_locator)?,
+    ))
+}
+
+const DESKTOP_INVENTORY_PROMPT_CLICK_TIMEOUT_MS: u64 = 300;
+const DESKTOP_INVENTORY_TAB_CLICK_TIMEOUT_MS: u64 = 500;
+const DESKTOP_INVENTORY_TAB_CHECK_TIMEOUT_MS: u64 = 300;
+
 fn desktop_inventory_wait_milliseconds(milliseconds: u64) -> u32 {
     milliseconds.min(u64::from(u32::MAX)) as u32
 }
@@ -12669,6 +12730,18 @@ fn desktop_inventory_locator(
         retry_count: std::cmp::max(1, timeout_ms / retry_interval_ms),
         retry_action: None,
     })
+}
+
+fn desktop_inventory_click_locator(
+    asset: &str,
+    threshold: f64,
+    roi: Rect,
+    timeout_ms: u64,
+    capture_size: VisionSize,
+) -> bgi_task::Result<BvLocatorPlan> {
+    let mut locator = desktop_inventory_locator(asset, threshold, roi, timeout_ms, capture_size)?;
+    locator.operation = BvLocatorOperation::Click;
+    Ok(locator)
 }
 
 fn desktop_inventory_locator_exists<F, I, C>(
@@ -21346,7 +21419,7 @@ mod tests {
 
         let static_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(static_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
+            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
         ));
         assert!(!static_error.contains("inventory grid/ONNX/OCR/click adapters"));
     }
@@ -21434,34 +21507,12 @@ mod tests {
             panic!("expected CountInventoryItem plan");
         };
 
-        let prompt_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
-        assert!(prompt_error.contains(
-            "CountInventoryItem live execution requires desktop expired-item prompt adapter"
-        ));
-        assert!(!prompt_error.contains("grid/ONNX/OCR/click adapters"));
-
-        let mut after_prompt = plan.clone();
-        after_prompt.steps.retain(|step| {
-            !matches!(
-                step.action,
-                CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
-            )
-        });
-        let tab_error = desktop_count_inventory_item_live_preflight(&after_prompt).unwrap_err();
-        assert!(tab_error
-            .contains("CountInventoryItem live execution requires desktop inventory tab adapter"));
-
-        let mut after_tab = after_prompt.clone();
-        after_tab.steps.retain(|step| {
-            !matches!(
-                step.action,
-                CountInventoryItemStepAction::OpenInventoryTab { .. }
-            )
-        });
-        let classifier_error = desktop_count_inventory_item_live_preflight(&after_tab).unwrap_err();
+        let classifier_error = desktop_count_inventory_item_live_preflight(&plan).unwrap_err();
         assert!(classifier_error.contains(
             "CountInventoryItem live execution requires desktop GridIcon ONNX/prototype adapter"
         ));
+        assert!(!classifier_error.contains("expired-item prompt adapter"));
+        assert!(!classifier_error.contains("inventory tab adapter"));
     }
 
     #[test]
@@ -21474,48 +21525,14 @@ mod tests {
         )
         .unwrap();
 
-        let prompt_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
-        assert!(prompt_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop expired-item prompt adapter"
-        ));
-        assert!(!prompt_error.contains("grid/ONNX/OCR/click adapters"));
-
-        let mut after_prompt = plan.clone();
-        after_prompt
-            .inventory_plan
-            .as_mut()
-            .unwrap()
-            .steps
-            .retain(|step| {
-                !matches!(
-                    step.action,
-                    CountInventoryItemStepAction::ConfirmExpiredItemPrompt { .. }
-                )
-            });
-        let tab_error = desktop_auto_eat_food_inventory_live_preflight(&after_prompt).unwrap_err();
-        assert!(tab_error.contains(
-            "AutoEatFood inventory-food live execution requires desktop inventory tab adapter"
-        ));
-
-        let mut after_tab = after_prompt.clone();
-        after_tab
-            .inventory_plan
-            .as_mut()
-            .unwrap()
-            .steps
-            .retain(|step| {
-                !matches!(
-                    step.action,
-                    CountInventoryItemStepAction::OpenInventoryTab { .. }
-                )
-            });
-        let classifier_error =
-            desktop_auto_eat_food_inventory_live_preflight(&after_tab).unwrap_err();
+        let classifier_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(classifier_error.contains(
             "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX/prototype adapter"
         ));
+        assert!(!classifier_error.contains("expired-item prompt adapter"));
+        assert!(!classifier_error.contains("inventory tab adapter"));
 
-        let mut after_inventory_scan = after_tab.clone();
+        let mut after_inventory_scan = plan.clone();
         after_inventory_scan
             .inventory_plan
             .as_mut()
