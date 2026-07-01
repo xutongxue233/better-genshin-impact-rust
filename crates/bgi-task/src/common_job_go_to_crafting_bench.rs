@@ -3,6 +3,7 @@ use crate::{Result, TaskPortState};
 use bgi_core::GenshinAction;
 use bgi_input::{InputEvent, InputSequence};
 use bgi_vision::{BvImage, BvLocatorOperation, BvLocatorPlan, BvPage, BvPageCommand, Rect, Size};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -615,8 +616,35 @@ pub fn plan_go_to_crafting_bench(
         resin_recognition_rule,
         resin_craft_rule,
         steps,
-        notes: "Legacy crafting-bench pathing, dialogue interaction, condensed-resin recognition, and crafting flow are represented and executable through injectable pathing/OCR/craft hooks; bundled PathExecutor JSON can be converted through the shared AutoPathing action boundary with legacy TrackMap conversion, and the desktop live route now consumes the shared movement contract before handing teleport, interaction, OCR, and click work to live adapters. Capture/OCR/send-input adapters for the crafting-bench F interaction retry, legacy-style talk-option draining with crafting-page and main-UI stop checks, condensed-resin reduce/increase/confirm clicks, and selected User/OneDragon MinResinToKeep injection are wired; full desktop movement dispatch and MinResinToKeep resin-count OCR remain pending.".to_string(),
+        notes: "Legacy crafting-bench pathing, dialogue interaction, condensed-resin recognition, and crafting flow are represented and executable through injectable pathing/OCR/craft hooks; bundled PathExecutor JSON can be converted through the shared AutoPathing action boundary with legacy TrackMap conversion, and the desktop live route now consumes the shared movement contract before handing teleport, interaction, OCR, and click work to live adapters. Capture/OCR/send-input adapters for the crafting-bench F interaction retry, legacy-style talk-option draining with crafting-page and main-UI stop checks, resin-count OCR, condensed-resin reduce/increase/confirm clicks, and selected User/OneDragon MinResinToKeep injection are wired; full desktop movement dispatch and real-game crafting-bench OCR/click regression remain pending.".to_string(),
     })
+}
+
+pub fn parse_go_to_crafting_bench_fragile_resin_count_ocr_text(
+    text: &str,
+    fragile_resin_regex: &str,
+) -> Option<i32> {
+    let regex = Regex::new(fragile_resin_regex).ok()?;
+    let capture = regex.captures(text)?;
+    legacy_parse_int(capture.get(1)?.as_str())
+}
+
+pub fn parse_go_to_crafting_bench_condensed_resin_count_ocr_text(text: &str) -> i32 {
+    legacy_parse_int(text).unwrap_or(0)
+}
+
+fn legacy_parse_int(text: &str) -> Option<i32> {
+    let normalized = text
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '０'..='９' => {
+                char::from_u32('0' as u32 + character as u32 - '０' as u32).unwrap_or(character)
+            }
+            _ => character,
+        })
+        .collect::<String>();
+    normalized.parse::<i32>().ok()
 }
 
 fn go_to_crafting_bench_locators(page: &BvPage) -> Result<GoToCraftingBenchLocators> {

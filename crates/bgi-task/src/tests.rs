@@ -27174,6 +27174,44 @@ fn go_to_crafting_bench_plan_preserves_legacy_pathing_interaction_and_condensed_
     );
 }
 
+#[test]
+fn go_to_crafting_bench_resin_count_ocr_text_parsing_preserves_legacy_rules() {
+    assert_eq!(
+        parse_go_to_crafting_bench_fragile_resin_count_ocr_text(
+            "260160",
+            r"(\d+)\s*[/17]\s*(6|60)"
+        ),
+        Some(260)
+    );
+    assert_eq!(
+        parse_go_to_crafting_bench_fragile_resin_count_ocr_text(
+            " １２0 1 60 ",
+            r"(\d+)\s*[/17]\s*(6|60)"
+        ),
+        Some(120)
+    );
+    assert_eq!(
+        parse_go_to_crafting_bench_fragile_resin_count_ocr_text(
+            "no resin",
+            r"(\d+)\s*[/17]\s*(6|60)"
+        ),
+        None
+    );
+
+    assert_eq!(
+        parse_go_to_crafting_bench_condensed_resin_count_ocr_text("3"),
+        3
+    );
+    assert_eq!(
+        parse_go_to_crafting_bench_condensed_resin_count_ocr_text(" ４ "),
+        4
+    );
+    assert_eq!(
+        parse_go_to_crafting_bench_condensed_resin_count_ocr_text("bad"),
+        0
+    );
+}
+
 #[derive(Debug, Default)]
 struct FakeGoToCraftingBenchRuntime {
     locator_outcomes: VecDeque<CommonJobRuntimeOutcome>,

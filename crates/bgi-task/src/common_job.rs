@@ -120,8 +120,10 @@ pub use common_job_go_to_adventurers_guild::{
     GO_TO_ADVENTURERS_GUILD_TASK_KEY,
 };
 pub use common_job_go_to_crafting_bench::{
-    plan_go_to_crafting_bench, GoToCraftingBenchActionPress, GoToCraftingBenchCraftingPageRule,
-    GoToCraftingBenchCropAnchor, GoToCraftingBenchExecutionConfig, GoToCraftingBenchExecutionPlan,
+    parse_go_to_crafting_bench_condensed_resin_count_ocr_text,
+    parse_go_to_crafting_bench_fragile_resin_count_ocr_text, plan_go_to_crafting_bench,
+    GoToCraftingBenchActionPress, GoToCraftingBenchCraftingPageRule, GoToCraftingBenchCropAnchor,
+    GoToCraftingBenchExecutionConfig, GoToCraftingBenchExecutionPlan,
     GoToCraftingBenchInteractionRule, GoToCraftingBenchLocalizedTexts, GoToCraftingBenchLocators,
     GoToCraftingBenchPathingPartyConfig, GoToCraftingBenchPathingRule,
     GoToCraftingBenchRelativeCrop, GoToCraftingBenchResinCraftRule,

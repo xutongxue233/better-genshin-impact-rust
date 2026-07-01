@@ -85,9 +85,10 @@ use bgi_task::{
     execute_team_context_combat_script_inputs_with_frame, execute_teleport_plan,
     execute_use_redeem_code_plan, execute_walk_to_f_live, execute_wonderland_cycle_live,
     execute_wonderland_cycle_plan, extract_redeem_codes_from_text, independent_tasks,
-    parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight, plan_auto_fish,
-    plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
-    plan_choose_talk_option, plan_get_grid_icons,
+    parse_auto_pick_text_list, parse_go_to_crafting_bench_condensed_resin_count_ocr_text,
+    parse_go_to_crafting_bench_fragile_resin_count_ocr_text, plan_auto_cook, plan_auto_eat,
+    plan_auto_fight, plan_auto_fish, plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing,
+    plan_auto_pick, plan_auto_wood, plan_choose_talk_option, plan_get_grid_icons,
     plan_get_grid_icons_artifact_set_flower_without_glyph_ocr,
     plan_get_grid_icons_artifact_set_icon_crop, plan_go_to_crafting_bench, plan_quick_buy,
     plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot, plan_quick_teleport,
@@ -149,37 +150,38 @@ use bgi_task::{
     GetGridIconsWidthRelativeRect, GoToAdventurersGuildExecutionPlan,
     GoToAdventurersGuildInteractionRule, GoToAdventurersGuildNestedOutcome,
     GoToAdventurersGuildPathingRule, GoToAdventurersGuildRuntime, GoToAdventurersGuildStepAction,
-    GoToAdventurersGuildStepCondition, GoToCraftingBenchExecutionPlan,
+    GoToAdventurersGuildStepCondition, GoToCraftingBenchCropAnchor, GoToCraftingBenchExecutionPlan,
     GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
-    GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
-    GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
-    GoToSereniteaPotBagEntryRule, GoToSereniteaPotBuyMaxRule, GoToSereniteaPotDayOfWeek,
-    GoToSereniteaPotEntryOutcome, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
-    GoToSereniteaPotFindAYuanRule, GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule,
-    GoToSereniteaPotOcrRule, GoToSereniteaPotRelativeCrop, GoToSereniteaPotRewardRule,
-    GoToSereniteaPotRuntime, GoToSereniteaPotShopItemLocator, GoToSereniteaPotShopRule,
-    GoToSereniteaPotTimedAction, GoToSereniteaPotTimedActionKind, GridIconClassifierRule,
-    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
-    GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
-    IndependentTaskLiveExecutionReport, InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan,
-    LowerHeadThenWalkToExecutionReport, LowerHeadThenWalkToFKeyRule,
-    LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime, LowerHeadThenWalkToStepResult,
-    LowerHeadThenWalkToTrackingObservation, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
-    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
-    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
-    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
-    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
-    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
-    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
-    QuickSereniteaPotExecutionResult, QuickSereniteaPotInteractionOutcome,
-    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
-    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
-    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
-    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
-    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
-    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
-    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
-    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GoToCraftingBenchPathingRule, GoToCraftingBenchRelativeCrop, GoToCraftingBenchResinCounts,
+    GoToCraftingBenchResinCraftRule, GoToCraftingBenchResinRecognitionRule,
+    GoToCraftingBenchRuntime, GoToCraftingBenchStepAction, GoToSereniteaPotBagEntryRule,
+    GoToSereniteaPotBuyMaxRule, GoToSereniteaPotDayOfWeek, GoToSereniteaPotEntryOutcome,
+    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule,
+    GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule, GoToSereniteaPotOcrRule,
+    GoToSereniteaPotRelativeCrop, GoToSereniteaPotRewardRule, GoToSereniteaPotRuntime,
+    GoToSereniteaPotShopItemLocator, GoToSereniteaPotShopRule, GoToSereniteaPotTimedAction,
+    GoToSereniteaPotTimedActionKind, GridIconClassifierRule, GridIconCropRule,
+    GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate,
+    IndependentTaskExecution, IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
+    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
+    LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
+    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
+    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
+    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
+    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
+    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
+    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
+    QuickSereniteaPotExecutionReport, QuickSereniteaPotExecutionResult,
+    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
+    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
+    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
+    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
+    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
+    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
+    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
+    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
+    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScanPickDropsExecutionPlan, ScanPickDropsExecutionReport, ScriptDispatcherExecutionPlan,
     ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan, SetTimeExecutionReport, ShellConfig,
     ShellExecutionResult, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
@@ -14662,14 +14664,7 @@ fn desktop_go_to_crafting_bench_live_preflight(
             }
             GoToCraftingBenchStepAction::InteractionRetry { .. } => {}
             GoToCraftingBenchStepAction::SelectLastTalkOptionUntilEnd { .. } => {}
-            GoToCraftingBenchStepAction::RecognizeResinCounts { .. } => {
-                if plan.min_resin_to_keep > 0 {
-                    return Err(
-                        "GoToCraftingBench live execution requires desktop resin-count OCR adapter for MinResinToKeep"
-                            .to_string(),
-                    );
-                }
-            }
+            GoToCraftingBenchStepAction::RecognizeResinCounts { .. } => {}
             GoToCraftingBenchStepAction::CraftCondensedResin { .. } => {}
             GoToCraftingBenchStepAction::Log { .. }
             | GoToCraftingBenchStepAction::Page { .. }
@@ -14874,6 +14869,157 @@ where
     }
 }
 
+fn desktop_go_to_crafting_bench_recognize_resin_counts_from_frame(
+    capture: &ImageRegion,
+    vision_backend: &PureRustVisionBackend,
+    rule: &GoToCraftingBenchResinRecognitionRule,
+    ocr_image: &mut impl FnMut(&BgrImage, &str) -> bgi_task::Result<String>,
+    wait_ms: &mut impl FnMut(u32) -> bgi_task::Result<()>,
+) -> bgi_task::Result<Option<GoToCraftingBenchResinCounts>> {
+    let fragile_resin_count = desktop_go_to_crafting_bench_recognize_fragile_resin_count(
+        capture,
+        vision_backend,
+        rule,
+        ocr_image,
+    )?;
+    let Some(condensed_resin_count) = desktop_go_to_crafting_bench_recognize_condensed_resin_count(
+        capture,
+        vision_backend,
+        rule,
+        ocr_image,
+        wait_ms,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(GoToCraftingBenchResinCounts {
+        fragile_resin_count,
+        condensed_resin_count,
+    }))
+}
+
+fn desktop_go_to_crafting_bench_recognize_fragile_resin_count(
+    capture: &ImageRegion,
+    vision_backend: &PureRustVisionBackend,
+    rule: &GoToCraftingBenchResinRecognitionRule,
+    ocr_image: &mut impl FnMut(&BgrImage, &str) -> bgi_task::Result<String>,
+) -> bgi_task::Result<i32> {
+    let mut fragile_resin_count = 0;
+    let Some(anchor) = desktop_go_to_crafting_bench_template_anchor(
+        capture,
+        vision_backend,
+        &rule.fragile_resin_count_locator,
+        "fragile resin count",
+    )?
+    else {
+        return Ok(fragile_resin_count);
+    };
+    let cropped = desktop_go_to_crafting_bench_relative_ocr_crop(
+        capture,
+        anchor,
+        rule.fragile_count_ocr_crop,
+    )?;
+    let text = ocr_image(&cropped, "fragile resin count")?;
+    if let Some(parsed) =
+        parse_go_to_crafting_bench_fragile_resin_count_ocr_text(&text, &rule.fragile_resin_regex)
+    {
+        fragile_resin_count = parsed;
+    }
+    Ok(fragile_resin_count)
+}
+
+fn desktop_go_to_crafting_bench_recognize_condensed_resin_count(
+    capture: &ImageRegion,
+    vision_backend: &PureRustVisionBackend,
+    rule: &GoToCraftingBenchResinRecognitionRule,
+    ocr_image: &mut impl FnMut(&BgrImage, &str) -> bgi_task::Result<String>,
+    wait_ms: &mut impl FnMut(u32) -> bgi_task::Result<()>,
+) -> bgi_task::Result<Option<i32>> {
+    let attempts = rule.condensed_count_retries.max(1);
+    let mut condensed_resin_count = rule.initial_condensed_count;
+    for _ in 0..attempts {
+        if rule.condensed_count_retry_delay_ms > 0 {
+            wait_ms(rule.condensed_count_retry_delay_ms)?;
+        }
+        if let Some(anchor) = desktop_go_to_crafting_bench_template_anchor(
+            capture,
+            vision_backend,
+            &rule.condensed_resin_count_locator,
+            "condensed resin count",
+        )? {
+            let cropped = desktop_go_to_crafting_bench_relative_ocr_crop(
+                capture,
+                anchor,
+                rule.condensed_count_ocr_crop,
+            )?;
+            let text = ocr_image(&cropped, "condensed resin count")?;
+            condensed_resin_count =
+                parse_go_to_crafting_bench_condensed_resin_count_ocr_text(&text);
+        }
+        if (rule.valid_condensed_count_min..=rule.valid_condensed_count_max)
+            .contains(&condensed_resin_count)
+        {
+            return Ok(Some(condensed_resin_count));
+        }
+    }
+    Ok(None)
+}
+
+fn desktop_go_to_crafting_bench_template_anchor(
+    capture: &ImageRegion,
+    vision_backend: &PureRustVisionBackend,
+    locator: &BvLocatorPlan,
+    label: &str,
+) -> bgi_task::Result<Option<Rect>> {
+    let region = capture
+        .find(vision_backend, &locator.recognition_object)
+        .map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GoToCraftingBench {label} template lookup failed: {error}"
+            ))
+        })?;
+    Ok(region.is_exist().then_some(region.rect))
+}
+
+fn desktop_go_to_crafting_bench_relative_ocr_crop(
+    capture: &ImageRegion,
+    anchor: Rect,
+    crop: GoToCraftingBenchRelativeCrop,
+) -> bgi_task::Result<BgrImage> {
+    let roi = desktop_go_to_crafting_bench_relative_crop_rect(anchor, crop, capture.image.size)?;
+    crop_bgr_image(&capture.image, roi).map_err(|error| TaskError::VisionPlan(error.to_string()))
+}
+
+fn desktop_go_to_crafting_bench_relative_crop_rect(
+    anchor: Rect,
+    crop: GoToCraftingBenchRelativeCrop,
+    capture_size: VisionSize,
+) -> bgi_task::Result<Rect> {
+    let rect = match crop.anchor {
+        GoToCraftingBenchCropAnchor::MatchedLocator => Rect::new(
+            anchor.x
+                + desktop_go_to_crafting_bench_relative_pixels(
+                    anchor.width,
+                    crop.x_offset_width_multiplier,
+                ),
+            anchor.y
+                + desktop_go_to_crafting_bench_relative_pixels(
+                    anchor.height,
+                    crop.y_offset_height_multiplier,
+                ),
+            desktop_go_to_crafting_bench_relative_pixels(anchor.width, crop.width_multiplier),
+            desktop_go_to_crafting_bench_relative_pixels(anchor.height, crop.height_multiplier),
+        ),
+    }
+    .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    desktop_ocr_roi_for_image(capture_size, rect)
+}
+
+fn desktop_go_to_crafting_bench_relative_pixels(value: i32, multiplier: f64) -> i32 {
+    (f64::from(value) * multiplier).floor() as i32
+}
+
 impl<F, I, C> CommonJobRuntime for DesktopGoToCraftingBenchRuntime<F, I, C>
 where
     F: CommonJobFrameSource,
@@ -15001,11 +15147,27 @@ where
 
     fn recognize_crafting_bench_resin_counts(
         &mut self,
-        _rule: &GoToCraftingBenchResinRecognitionRule,
+        rule: &GoToCraftingBenchResinRecognitionRule,
     ) -> bgi_task::Result<Option<GoToCraftingBenchResinCounts>> {
-        Err(TaskError::CommonJobExecution(
-            "GoToCraftingBench live execution requires desktop resin-count OCR adapter".to_string(),
-        ))
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let capture = ImageRegion::capture(frame);
+        let vision_backend = self.common.vision_backend().clone();
+        let mut ocr_image = |image: &BgrImage, label: &str| {
+            let regions = desktop_winrt_ocr_bgr_image(image).map_err(|error| {
+                TaskError::CommonJobExecution(format!(
+                    "GoToCraftingBench {label} WinRT OCR failed: {error}"
+                ))
+            })?;
+            Ok(OcrResult { regions }.text())
+        };
+        let mut wait = |milliseconds| self.wait_ms(milliseconds);
+        desktop_go_to_crafting_bench_recognize_resin_counts_from_frame(
+            &capture,
+            &vision_backend,
+            rule,
+            &mut ocr_image,
+            &mut wait,
+        )
     }
 
     fn craft_condensed_resin(
@@ -21810,6 +21972,10 @@ mod tests {
         "desktop-crafting-bench-test-white-confirm.bgr";
     const DESKTOP_CRAFTING_BENCH_TEST_BLACK_CONFIRM_PATH: &str =
         "desktop-crafting-bench-test-black-confirm.bgr";
+    const DESKTOP_CRAFTING_BENCH_TEST_FRAGILE_COUNT_PATH: &str =
+        "desktop-crafting-bench-test-fragile-count.bgr";
+    const DESKTOP_CRAFTING_BENCH_TEST_CONDENSED_COUNT_PATH: &str =
+        "desktop-crafting-bench-test-condensed-count.bgr";
 
     struct DesktopTalkOptionTestAssets {
         capture_size: VisionSize,
@@ -22040,6 +22206,40 @@ mod tests {
             retry_interval_ms: 100,
             retry_count: 1,
             retry_action: None,
+        }
+    }
+
+    fn desktop_go_to_crafting_bench_test_resin_rule(
+        fragile_locator: BvLocatorPlan,
+        condensed_locator: BvLocatorPlan,
+        condensed_count_retries: u8,
+        condensed_count_retry_delay_ms: u32,
+    ) -> GoToCraftingBenchResinRecognitionRule {
+        GoToCraftingBenchResinRecognitionRule {
+            craft_condensed_resin_locator: fragile_locator.clone(),
+            fragile_resin_count_locator: fragile_locator,
+            condensed_resin_count_locator: condensed_locator,
+            fragile_count_ocr_crop: GoToCraftingBenchRelativeCrop {
+                anchor: GoToCraftingBenchCropAnchor::MatchedLocator,
+                x_offset_width_multiplier: 0.0,
+                y_offset_height_multiplier: 1.0,
+                width_multiplier: 1.0,
+                height_multiplier: 1.0,
+            },
+            condensed_count_ocr_crop: GoToCraftingBenchRelativeCrop {
+                anchor: GoToCraftingBenchCropAnchor::MatchedLocator,
+                x_offset_width_multiplier: 1.0,
+                y_offset_height_multiplier: 0.0,
+                width_multiplier: 5.0 / 3.0,
+                height_multiplier: 1.0,
+            },
+            fragile_resin_regex: r"(\d+)\s*[/17]\s*(6|60)".to_string(),
+            condensed_count_retries,
+            condensed_count_retry_delay_ms,
+            initial_condensed_count: 0,
+            valid_condensed_count_min: 0,
+            valid_condensed_count_max: 5,
+            return_main_ui_on_count_failure: true,
         }
     }
 
@@ -23122,7 +23322,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_crafting_bench_preflight_still_reports_resin_ocr_when_min_resin_enabled() {
+    fn desktop_go_to_crafting_bench_preflight_accepts_resin_ocr_when_min_resin_enabled() {
         let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
             bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
             Some(&serde_json::json!({ "country": "璃月", "minResinToKeep": 120 })),
@@ -23131,15 +23331,168 @@ mod tests {
             panic!("expected GoToCraftingBench common job plan");
         };
 
-        let error = desktop_go_to_crafting_bench_live_preflight(&plan).unwrap_err();
+        desktop_go_to_crafting_bench_live_preflight(&plan).unwrap();
+    }
 
-        assert!(error
-            .contains("GoToCraftingBench live execution requires desktop resin-count OCR adapter for MinResinToKeep"));
-        assert!(!error.contains("talk-option selection adapter"));
-        assert!(!error.contains("crafting-bench interaction adapter"));
-        assert!(!error.contains("condensed-resin crafting adapter"));
-        assert!(!error.contains("consumed PathExecutor movement contract"));
-        assert!(!error.contains("requires desktop PathExecutor movement adapter"));
+    #[test]
+    fn desktop_go_to_crafting_bench_resin_count_adapter_crops_and_parses_legacy_regions() {
+        let capture_size = VisionSize::new(60, 50);
+        let fragile_template = desktop_talk_option_test_template(47);
+        let condensed_template = desktop_talk_option_test_template(107);
+        let fragile_locator = desktop_talk_option_test_locator(
+            DESKTOP_CRAFTING_BENCH_TEST_FRAGILE_COUNT_PATH,
+            capture_size,
+            BvLocatorOperation::IsExist,
+        );
+        let condensed_locator = desktop_talk_option_test_locator(
+            DESKTOP_CRAFTING_BENCH_TEST_CONDENSED_COUNT_PATH,
+            capture_size,
+            BvLocatorOperation::IsExist,
+        );
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        desktop_talk_option_test_paint_template(
+            &mut frame.pixels,
+            capture_size,
+            &fragile_template,
+            20,
+            30,
+        );
+        desktop_talk_option_test_paint_template(
+            &mut frame.pixels,
+            capture_size,
+            &condensed_template,
+            10,
+            5,
+        );
+        let capture = ImageRegion::capture(frame);
+        let backend = PureRustVisionBackend::new()
+            .with_template(
+                DESKTOP_CRAFTING_BENCH_TEST_FRAGILE_COUNT_PATH,
+                fragile_template,
+            )
+            .with_template(
+                DESKTOP_CRAFTING_BENCH_TEST_CONDENSED_COUNT_PATH,
+                condensed_template,
+            );
+        let rule = desktop_go_to_crafting_bench_test_resin_rule(
+            fragile_locator,
+            condensed_locator,
+            3,
+            200,
+        );
+        let mut ocr_calls = Vec::new();
+        let mut ocr_image = |image: &BgrImage, label: &str| {
+            ocr_calls.push((label.to_string(), image.size));
+            Ok(match label {
+                "fragile resin count" => "260160".to_string(),
+                "condensed resin count" => "2".to_string(),
+                _ => String::new(),
+            })
+        };
+        let mut waits = Vec::new();
+        let mut wait = |milliseconds| {
+            waits.push(milliseconds);
+            Ok(())
+        };
+
+        let counts = desktop_go_to_crafting_bench_recognize_resin_counts_from_frame(
+            &capture,
+            &backend,
+            &rule,
+            &mut ocr_image,
+            &mut wait,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            counts,
+            GoToCraftingBenchResinCounts {
+                fragile_resin_count: 260,
+                condensed_resin_count: 2,
+            }
+        );
+        assert_eq!(
+            ocr_calls,
+            vec![
+                ("fragile resin count".to_string(), VisionSize::new(2, 2)),
+                ("condensed resin count".to_string(), VisionSize::new(3, 2)),
+            ]
+        );
+        assert_eq!(waits, vec![200]);
+    }
+
+    #[test]
+    fn desktop_go_to_crafting_bench_resin_count_adapter_retries_invalid_condensed_count() {
+        let capture_size = VisionSize::new(60, 50);
+        let fragile_template = desktop_talk_option_test_template(51);
+        let condensed_template = desktop_talk_option_test_template(111);
+        let fragile_locator = desktop_talk_option_test_locator(
+            DESKTOP_CRAFTING_BENCH_TEST_FRAGILE_COUNT_PATH,
+            capture_size,
+            BvLocatorOperation::IsExist,
+        );
+        let condensed_locator = desktop_talk_option_test_locator(
+            DESKTOP_CRAFTING_BENCH_TEST_CONDENSED_COUNT_PATH,
+            capture_size,
+            BvLocatorOperation::IsExist,
+        );
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        desktop_talk_option_test_paint_template(
+            &mut frame.pixels,
+            capture_size,
+            &fragile_template,
+            20,
+            30,
+        );
+        desktop_talk_option_test_paint_template(
+            &mut frame.pixels,
+            capture_size,
+            &condensed_template,
+            10,
+            5,
+        );
+        let capture = ImageRegion::capture(frame);
+        let backend = PureRustVisionBackend::new()
+            .with_template(
+                DESKTOP_CRAFTING_BENCH_TEST_FRAGILE_COUNT_PATH,
+                fragile_template,
+            )
+            .with_template(
+                DESKTOP_CRAFTING_BENCH_TEST_CONDENSED_COUNT_PATH,
+                condensed_template,
+            );
+        let rule =
+            desktop_go_to_crafting_bench_test_resin_rule(fragile_locator, condensed_locator, 3, 50);
+        let mut condensed_ocr_calls = 0;
+        let mut ocr_image = |_image: &BgrImage, label: &str| {
+            Ok(match label {
+                "fragile resin count" => "160/160".to_string(),
+                "condensed resin count" => {
+                    condensed_ocr_calls += 1;
+                    "9".to_string()
+                }
+                _ => String::new(),
+            })
+        };
+        let mut waits = Vec::new();
+        let mut wait = |milliseconds| {
+            waits.push(milliseconds);
+            Ok(())
+        };
+
+        let counts = desktop_go_to_crafting_bench_recognize_resin_counts_from_frame(
+            &capture,
+            &backend,
+            &rule,
+            &mut ocr_image,
+            &mut wait,
+        )
+        .unwrap();
+
+        assert_eq!(counts, None);
+        assert_eq!(condensed_ocr_calls, 3);
+        assert_eq!(waits, vec![50, 50, 50]);
     }
 
     #[test]
