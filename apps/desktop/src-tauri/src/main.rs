@@ -8073,13 +8073,26 @@ where
 
     fn ocr_get_grid_icons_item_name(
         &mut self,
-        _item: &GetGridIconsGridItem,
-        _roi: &GetGridIconsWidthRelativeRect,
+        item: &GetGridIconsGridItem,
+        roi: &GetGridIconsWidthRelativeRect,
     ) -> bgi_task::Result<Option<String>> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop item-name OCR adapter".to_string(),
-        ))
+        let common = self.common_mut("item-name OCR")?;
+        let frame = common.frame_source_mut().capture_frame()?;
+        let roi = desktop_get_grid_icons_width_relative_roi(frame.size, roi)?;
+        let cropped = crop_bgr_image(&frame, roi).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GetGridIcons item-name OCR crop failed for page {} item {} roi {:?}: {error}",
+                item.page_index, item.item_index, roi
+            ))
+        })?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons item-name WinRT OCR failed for page {} item {}: {error}",
+                item.page_index, item.item_index
+            ))
+        })?;
+        Ok(Some(desktop_get_grid_icons_ocr_text_from_regions(&regions)))
     }
 
     fn count_get_grid_icons_star_suffix(
@@ -8152,6 +8165,31 @@ where
     fn clear_get_grid_icons_vision_overlay(&mut self) -> bgi_task::Result<()> {
         self.ensure_not_cancelled()
     }
+}
+
+fn desktop_get_grid_icons_width_relative_roi(
+    capture_size: VisionSize,
+    roi: &GetGridIconsWidthRelativeRect,
+) -> bgi_task::Result<Rect> {
+    let width = capture_size.width as f64;
+    let requested = Rect::new(
+        (width * roi.x_from_capture_width) as i32,
+        (width * roi.y_from_capture_width) as i32,
+        (width * roi.width_from_capture_width) as i32,
+        (width * roi.height_from_capture_width) as i32,
+    )
+    .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    desktop_ocr_roi_for_image(capture_size, requested)
+}
+
+fn desktop_get_grid_icons_ocr_text_from_regions(regions: &[OcrResultRegion]) -> String {
+    let mut regions = regions.to_vec();
+    regions.sort_by_key(|region| (region.rect.center().y, region.rect.center().x));
+    regions
+        .into_iter()
+        .map(|region| region.text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23902,6 +23940,54 @@ mod tests {
         assert_eq!(rule.expired_item_prompt_wait_ms, 300);
         assert_eq!(rule.tab_assets, tab_assets);
         assert_eq!(rule.after_tab_ready_wait_ms, 800);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_width_relative_roi_uses_capture_width_like_legacy() {
+        let roi = GetGridIconsWidthRelativeRect {
+            x_from_capture_width: 0.682,
+            y_from_capture_width: 0.0625,
+            width_from_capture_width: 0.256,
+            height_from_capture_width: 0.03125,
+        };
+
+        assert_eq!(
+            desktop_get_grid_icons_width_relative_roi(VisionSize::new(1920, 1080), &roi).unwrap(),
+            Rect::new(1309, 120, 491, 60).unwrap()
+        );
+        assert_eq!(
+            desktop_get_grid_icons_width_relative_roi(VisionSize::new(1280, 720), &roi).unwrap(),
+            Rect::new(872, 80, 327, 40).unwrap()
+        );
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_ocr_text_matches_legacy_region_join() {
+        let text = desktop_get_grid_icons_ocr_text_from_regions(&[
+            OcrResultRegion {
+                rect: Rect::new(35, 11, 20, 12).unwrap(),
+                text: "之刃".to_string(),
+                score: 1.0,
+            },
+            OcrResultRegion {
+                rect: Rect::new(10, 10, 20, 12).unwrap(),
+                text: "天空".to_string(),
+                score: 1.0,
+            },
+            OcrResultRegion {
+                rect: Rect::new(5, 45, 20, 12).unwrap(),
+                text: "备用".to_string(),
+                score: 1.0,
+            },
+            OcrResultRegion {
+                rect: Rect::new(60, 10, 20, 12).unwrap(),
+                text: " ".to_string(),
+                score: 1.0,
+            },
+        ]);
+
+        assert_eq!(text, "天空\n \n之刃\n备用");
+        assert_eq!(desktop_get_grid_icons_ocr_text_from_regions(&[]), "");
     }
 
     #[test]
