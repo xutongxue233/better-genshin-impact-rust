@@ -7886,6 +7886,119 @@ where
             after_tab_ready_wait_ms: 800,
         }
     }
+
+    fn execute_get_grid_icons_artifact_set_filter_ocr_retry(
+        &mut self,
+        rule: &GetGridIconsArtifactSetFilterRule,
+        name_roi: Rect,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        let common = self.common_mut("artifact-set detail retry scrolling")?;
+        let center = name_roi.center();
+        CommonJobRuntime::dispatch_capture_input(
+            common,
+            InputSequence::new()
+                .move_mouse_to(center.x, center.y)
+                .events(),
+        )?;
+        if rule.retry_initial_wait_ms > 0 {
+            CommonJobRuntime::execute_page_command(
+                common,
+                &BvPageCommand::Wait {
+                    milliseconds: desktop_inventory_wait_milliseconds(rule.retry_initial_wait_ms),
+                },
+            )?;
+        }
+        for _ in 0..rule.retry_scroll_rounds {
+            CommonJobRuntime::dispatch_input(
+                common,
+                InputSequence::new()
+                    .vertical_scroll(rule.retry_scroll_delta_per_round)
+                    .events(),
+            )?;
+            if rule.retry_scroll_interval_ms > 0 {
+                CommonJobRuntime::execute_page_command(
+                    common,
+                    &BvPageCommand::Wait {
+                        milliseconds: desktop_inventory_wait_milliseconds(
+                            rule.retry_scroll_interval_ms,
+                        ),
+                    },
+                )?;
+            }
+        }
+        if rule.retry_wait_ms > 0 {
+            CommonJobRuntime::execute_page_command(
+                common,
+                &BvPageCommand::Wait {
+                    milliseconds: desktop_inventory_wait_milliseconds(rule.retry_wait_ms),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn try_ocr_get_grid_icons_artifact_set_flower_name(
+        &mut self,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsArtifactSetFilterRule,
+    ) -> bgi_task::Result<(Option<String>, Rect)> {
+        self.ensure_not_cancelled()?;
+        let common = self.common_mut("artifact-set flower-name OCR")?;
+        let frame = common.frame_source_mut().capture_frame()?;
+        let name_roi =
+            desktop_get_grid_icons_width_relative_roi(frame.size, &rule.flower_name_roi)?;
+        let name_region = crop_bgr_image(&frame, name_roi).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GetGridIcons artifact-set name OCR crop failed for page {} item {} roi {:?}: {error}",
+                item.page_index, item.item_index, name_roi
+            ))
+        })?;
+        let regions = desktop_winrt_ocr_bgr_image(&name_region).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons artifact-set name WinRT OCR failed for page {} item {}: {error}",
+                item.page_index, item.item_index
+            ))
+        })?;
+        let name_region_ocr = OcrResult { regions };
+        let Some(ocr_plan) = plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
+            rule,
+            frame.size,
+            &name_region_ocr,
+        ) else {
+            return Ok((None, name_roi));
+        };
+        let flower_without_glyph =
+            crop_bgr_image(&name_region, ocr_plan.flower_without_glyph_roi_in_name_region)
+                .map_err(|error| {
+                    TaskError::VisionPlan(format!(
+                        "GetGridIcons artifact-set flower-without-glyph crop failed for page {} item {} roi {:?}: {error}",
+                        item.page_index,
+                        item.item_index,
+                        ocr_plan.flower_without_glyph_roi_in_name_region
+                    ))
+                })?;
+        let without_glyph_regions =
+            desktop_winrt_ocr_bgr_image(&flower_without_glyph).map_err(|error| {
+                TaskError::CommonJobExecution(format!(
+                    "GetGridIcons artifact-set flower-without-glyph WinRT OCR failed for page {} item {}: {error}",
+                    item.page_index, item.item_index
+                ))
+            })?;
+        let without_glyph_text =
+            desktop_get_grid_icons_ocr_text_from_regions(&without_glyph_regions);
+        let flower_name = resolve_get_grid_icons_artifact_set_flower_name(
+            &ocr_plan.flower_with_glyph_text,
+            &without_glyph_text,
+        )
+        .ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons artifact-set flower-name OCR length mismatch for page {} item {}",
+                item.page_index, item.item_index
+            ))
+        })?;
+        Ok((Some(flower_name), name_roi))
+    }
 }
 
 impl<F, I, C> GetGridIconsRuntime for DesktopGetGridIconsRuntime<F, I, C>
@@ -8127,65 +8240,20 @@ where
         item: &GetGridIconsGridItem,
         rule: &GetGridIconsArtifactSetFilterRule,
     ) -> bgi_task::Result<Option<String>> {
-        self.ensure_not_cancelled()?;
-        let common = self.common_mut("artifact-set flower-name OCR")?;
-        let frame = common.frame_source_mut().capture_frame()?;
-        let name_roi =
-            desktop_get_grid_icons_width_relative_roi(frame.size, &rule.flower_name_roi)?;
-        let name_region = crop_bgr_image(&frame, name_roi).map_err(|error| {
-            TaskError::VisionPlan(format!(
-                "GetGridIcons artifact-set name OCR crop failed for page {} item {} roi {:?}: {error}",
-                item.page_index, item.item_index, name_roi
-            ))
-        })?;
-        let regions = desktop_winrt_ocr_bgr_image(&name_region).map_err(|error| {
-            TaskError::CommonJobExecution(format!(
-                "GetGridIcons artifact-set name WinRT OCR failed for page {} item {}: {error}",
-                item.page_index, item.item_index
-            ))
-        })?;
-        let name_region_ocr = OcrResult { regions };
-        let ocr_plan = plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
-            rule,
-            frame.size,
-            &name_region_ocr,
-        )
-        .ok_or_else(|| {
-            TaskError::CommonJobExecution(format!(
-                "GetGridIcons artifact-set OCR could not find anchor text {} for page {} item {}",
-                rule.anchor_text, item.page_index, item.item_index
-            ))
-        })?;
-        let flower_without_glyph =
-            crop_bgr_image(&name_region, ocr_plan.flower_without_glyph_roi_in_name_region)
-                .map_err(|error| {
-                    TaskError::VisionPlan(format!(
-                        "GetGridIcons artifact-set flower-without-glyph crop failed for page {} item {} roi {:?}: {error}",
-                        item.page_index,
-                        item.item_index,
-                        ocr_plan.flower_without_glyph_roi_in_name_region
-                    ))
-                })?;
-        let without_glyph_regions =
-            desktop_winrt_ocr_bgr_image(&flower_without_glyph).map_err(|error| {
-                TaskError::CommonJobExecution(format!(
-                    "GetGridIcons artifact-set flower-without-glyph WinRT OCR failed for page {} item {}: {error}",
-                    item.page_index, item.item_index
-                ))
-            })?;
-        let without_glyph_text =
-            desktop_get_grid_icons_ocr_text_from_regions(&without_glyph_regions);
-        let flower_name = resolve_get_grid_icons_artifact_set_flower_name(
-            &ocr_plan.flower_with_glyph_text,
-            &without_glyph_text,
-        )
-        .ok_or_else(|| {
-            TaskError::CommonJobExecution(format!(
-                "GetGridIcons artifact-set flower-name OCR length mismatch for page {} item {}",
-                item.page_index, item.item_index
-            ))
-        })?;
-        Ok(Some(flower_name))
+        let (flower_name, name_roi) =
+            self.try_ocr_get_grid_icons_artifact_set_flower_name(item, rule)?;
+        if let Some(flower_name) = flower_name {
+            return Ok(Some(flower_name));
+        }
+        self.execute_get_grid_icons_artifact_set_filter_ocr_retry(rule, name_roi)?;
+        let (flower_name, _) = self.try_ocr_get_grid_icons_artifact_set_flower_name(item, rule)?;
+        if let Some(flower_name) = flower_name {
+            return Ok(Some(flower_name));
+        }
+        Err(TaskError::CommonJobExecution(format!(
+            "GetGridIcons artifact-set OCR could not find anchor text {} for page {} item {} after retry scrolling",
+            rule.anchor_text, item.page_index, item.item_index
+        )))
     }
 
     fn crop_get_grid_icons_artifact_set_icon_png(
@@ -24622,6 +24690,72 @@ mod tests {
             vec![(items[0].rect.center().x, items[0].rect.center().y)]
         );
         assert_eq!(clock.waits, vec![300]);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_artifact_set_filter_ocr_retry_scrolls_detail_region() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "ArtifactSetFilter",
+                "maxNumToGet": 1
+            }),
+        )))
+        .unwrap();
+        let artifact_rule = plan
+            .artifact_set_filter_rule
+            .as_ref()
+            .expect("expected ArtifactSetFilter rule");
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([desktop_talk_option_test_blank_frame(
+                capture_size,
+            )]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopGetGridIconsRuntime::new(
+            Path::new("."),
+            Some(common_runtime),
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+        let name_roi = Rect::new(1200, 300, 360, 220).unwrap();
+
+        runtime
+            .execute_get_grid_icons_artifact_set_filter_ocr_retry(artifact_rule, name_roi)
+            .unwrap();
+
+        let common = runtime.common.take().unwrap();
+        let (_, _, input_driver, clock, _) = common.into_parts();
+        assert_eq!(
+            clock.waits,
+            vec![
+                artifact_rule.retry_initial_wait_ms as u32,
+                artifact_rule.retry_scroll_interval_ms as u32,
+                artifact_rule.retry_scroll_interval_ms as u32,
+                artifact_rule.retry_scroll_interval_ms as u32,
+                artifact_rule.retry_scroll_interval_ms as u32,
+                artifact_rule.retry_scroll_interval_ms as u32,
+                artifact_rule.retry_wait_ms as u32,
+            ]
+        );
+        assert_eq!(input_driver.input_batches.len(), 6);
+        assert_eq!(
+            input_driver.input_batches[0].as_slice(),
+            InputSequence::new()
+                .move_mouse_to(name_roi.center().x, name_roi.center().y)
+                .events()
+        );
+        for batch in input_driver.input_batches.iter().skip(1) {
+            assert_eq!(
+                batch.as_slice(),
+                InputSequence::new()
+                    .vertical_scroll(artifact_rule.retry_scroll_delta_per_round)
+                    .events()
+            );
+        }
     }
 
     #[test]

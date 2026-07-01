@@ -14740,6 +14740,7 @@ fn get_grid_icons_plan_handles_numeric_grid_star_suffix_and_manual_special_grids
     assert_eq!(filter_rule.item_shape_ratio_target, 8.63);
     assert_eq!(filter_rule.close_kernel_width, 3);
     assert_eq!(filter_rule.anchor_text, "套装包含");
+    assert_eq!(filter_rule.retry_initial_wait_ms, 100);
     assert_eq!(filter_rule.retry_scroll_rounds, 5);
     assert_eq!(filter_rule.icon_crop_rule.normalized_width, 125);
     assert_eq!(
