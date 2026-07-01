@@ -7804,7 +7804,7 @@ struct DesktopGetGridIconsRuntime<F, I, C> {
     key_bindings_config: KeyBindingsConfig,
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
-    visible_grid_icons: Vec<BgrImage>,
+    visible_grid_item_cells: Vec<BgrImage>,
 }
 
 impl<F, I, C> DesktopGetGridIconsRuntime<F, I, C> {
@@ -7821,7 +7821,7 @@ impl<F, I, C> DesktopGetGridIconsRuntime<F, I, C> {
             key_bindings_config: config.key_bindings_config.clone(),
             capture_size,
             cancellation,
-            visible_grid_icons: Vec::new(),
+            visible_grid_item_cells: Vec::new(),
         }
     }
 
@@ -8021,25 +8021,14 @@ where
         }
         let capture_size = self.capture_size;
         let common = self.common_mut("visible inventory grid enumeration")?;
-        let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
-            common,
-            capture_size,
-            &grid_rule.grid_template,
-            &grid_rule.detection_rule,
-        )?;
-        let icon_crop_rule = GridIconCropRule {
-            normalized_width: 125,
-            normalized_height: 153,
-            icon_crop: Rect::new(0, 0, 125, 125)
-                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
-            bottom_crop: Rect::new(0, 126, 125, 27)
-                .map_err(|error| TaskError::VisionPlan(error.to_string()))?,
-        };
-        self.visible_grid_icons = desktop_crop_inventory_grid_icons_with_common_runtime(
-            common,
-            &visible_items,
-            &icon_crop_rule,
-        )?;
+        let (visible_items, visible_grid_item_cells) =
+            desktop_enumerate_visible_inventory_grid_items_and_cells_with_common_runtime(
+                common,
+                capture_size,
+                &grid_rule.grid_template,
+                &grid_rule.detection_rule,
+            )?;
+        self.visible_grid_item_cells = visible_grid_item_cells;
         Ok(GetGridIconsGridEnumeration {
             items: visible_items
                 .into_iter()
@@ -8120,17 +8109,17 @@ where
         item: &GetGridIconsGridItem,
     ) -> bgi_task::Result<GetGridIconsPngData> {
         self.ensure_not_cancelled()?;
-        if let Some(icon) = self.visible_grid_icons.get(item.item_index as usize) {
-            let bytes = encode_bgr_image_png(icon).map_err(|error| {
+        if let Some(cell) = self.visible_grid_item_cells.get(item.item_index as usize) {
+            let bytes = encode_bgr_image_png(cell).map_err(|error| {
                 TaskError::CommonJobExecution(format!(
-                    "GetGridIcons live execution could not encode cached visible-page icon {} ({}x{}) as PNG: {error}",
-                    item.item_index, icon.size.width, icon.size.height
+                    "GetGridIcons live execution could not encode cached visible-page grid cell {} ({}x{}) as PNG: {error}",
+                    item.item_index, cell.size.width, cell.size.height
                 ))
             })?;
             return Ok(GetGridIconsPngData { bytes });
         }
         Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop item icon capture adapter after visible-page crop cache miss".to_string(),
+            "GetGridIcons live execution requires desktop pre-click grid-cell crop cache for the requested item".to_string(),
         ))
     }
 
@@ -13690,6 +13679,47 @@ where
             rect: cell.rect,
         })
         .collect())
+}
+
+fn desktop_enumerate_visible_inventory_grid_items_and_cells_with_common_runtime<F, I, C>(
+    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
+    capture_size: VisionSize,
+    template: &GridTemplate,
+    detection_rule: &GridItemDetectionRule,
+) -> bgi_task::Result<(Vec<CountInventoryGridItemFrame>, Vec<BgrImage>)>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    let frame = common.frame_source_mut().capture_frame()?;
+    let spec = desktop_visible_inventory_grid_spec(capture_size, template, detection_rule)
+        .map_err(|error| {
+            TaskError::VisionPlan(format!("inventory visible grid spec failed: {error}"))
+        })?;
+    let cells = bgi_vision::enumerate_visible_grid_cells(&frame, spec).map_err(|error| {
+        TaskError::VisionPlan(format!(
+            "inventory visible grid enumeration failed: {error}"
+        ))
+    })?;
+    let mut items = Vec::with_capacity(cells.len());
+    let mut cell_images = Vec::with_capacity(cells.len());
+    for (index, cell) in cells.into_iter().enumerate() {
+        let item = CountInventoryGridItemFrame {
+            page_index: 0,
+            item_index: index as u32,
+            rect: cell.rect,
+        };
+        let cell_image = crop_bgr_image(&frame, cell.rect).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "inventory grid cell crop failed for page {} item {} rect {:?}: {error}",
+                item.page_index, item.item_index, item.rect
+            ))
+        })?;
+        items.push(item);
+        cell_images.push(cell_image);
+    }
+    Ok((items, cell_images))
 }
 
 fn desktop_visible_inventory_grid_spec(
@@ -24319,28 +24349,68 @@ mod tests {
         assert!(!enumeration.scan_complete);
         let items = enumeration.items;
         assert_eq!(items.len(), 6);
-        assert_eq!(runtime.visible_grid_icons.len(), 6);
+        assert_eq!(runtime.visible_grid_item_cells.len(), 6);
         assert!(items.iter().all(|item| item.page_index == 0));
         assert_eq!(
             items.iter().map(|item| item.item_index).collect::<Vec<_>>(),
             vec![0, 1, 2, 3, 4, 5]
         );
         assert_eq!(items[0].rect, Rect::new(219, 169, 62, 82).unwrap());
+        assert_eq!(runtime.visible_grid_item_cells.len(), 6);
+        assert_eq!(
+            runtime.visible_grid_item_cells[0].size,
+            VisionSize::new(62, 82)
+        );
 
         let png = runtime
             .capture_get_grid_icons_item_icon_png(&items[0])
             .unwrap();
         assert!(png.bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]));
-        let decoded_icon = BgrImage::decode(&png.bytes).unwrap();
-        assert_eq!(decoded_icon, runtime.visible_grid_icons[0]);
+        let decoded_cell = BgrImage::decode(&png.bytes).unwrap();
+        assert_eq!(decoded_cell, runtime.visible_grid_item_cells[0]);
 
         runtime.click_get_grid_icons_item(&items[0], 300).unwrap();
 
         let common = runtime.common.take().unwrap();
         let (_, frame_source, input_driver, clock, _) = common.into_parts();
-        assert_eq!(frame_source.captures, 2);
+        assert_eq!(frame_source.captures, 1);
         assert_eq!(input_driver.clicks, vec![(250, 210)]);
         assert_eq!(clock.waits, vec![300]);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_item_png_requires_preclick_cell_cache() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([desktop_talk_option_test_blank_frame(
+                capture_size,
+            )]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopGetGridIconsRuntime::new(
+            Path::new("."),
+            Some(common_runtime),
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+        let item = GetGridIconsGridItem {
+            page_index: 0,
+            item_index: 3,
+            rect: Rect::new(219, 169, 62, 82).unwrap(),
+        };
+
+        let error = runtime
+            .capture_get_grid_icons_item_icon_png(&item)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            TaskError::CommonJobExecution(message)
+                if message.contains("pre-click grid-cell crop cache")
+        ));
     }
 
     #[test]

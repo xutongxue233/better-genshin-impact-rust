@@ -14665,6 +14665,10 @@ fn get_grid_icons_plan_preserves_legacy_inventory_grid_capture_and_output_rules(
         .pending_native
         .iter()
         .any(|item| item.contains("Paddle OCR")));
+    assert!(plan
+        .pending_native
+        .iter()
+        .any(|item| item.contains("pre-click full-cell PNG")));
 }
 
 #[test]
