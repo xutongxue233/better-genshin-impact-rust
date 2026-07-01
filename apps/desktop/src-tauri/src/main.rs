@@ -8142,7 +8142,7 @@ where
                 &grid_rule.detection_rule,
             )?
         } else {
-            desktop_enumerate_get_grid_icons_first_inventory_page_items_and_cells_with_common_runtime(
+            desktop_enumerate_first_inventory_page_items_and_cells_without_highlight_with_common_runtime(
                 common,
                 capture_size,
                 &grid_rule.grid_template,
@@ -13471,6 +13471,7 @@ struct DesktopCountInventoryItemRuntime<F, I, C> {
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
     grid_icon_prototype_count: usize,
+    visible_grid_item_cells: Vec<BgrImage>,
     cropped_grid_icons: Vec<BgrImage>,
 }
 
@@ -13487,6 +13488,7 @@ impl<F, I, C> DesktopCountInventoryItemRuntime<F, I, C> {
             capture_size,
             cancellation,
             grid_icon_prototype_count: 0,
+            visible_grid_item_cells: Vec::new(),
             cropped_grid_icons: Vec::new(),
         }
     }
@@ -13639,12 +13641,14 @@ where
         _scroll_rule: &GridScrollRule,
     ) -> bgi_task::Result<CountInventoryGridEnumeration> {
         self.ensure_not_cancelled()?;
-        let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
+        let (visible_items, visible_grid_item_cells) =
+            desktop_enumerate_first_inventory_page_items_and_cells_without_highlight_with_common_runtime(
             &mut self.common,
             self.capture_size,
             template,
             detection_rule,
         )?;
+        self.visible_grid_item_cells = visible_grid_item_cells;
         Ok(CountInventoryGridEnumeration {
             items: visible_items,
             scan_complete: false,
@@ -13657,8 +13661,12 @@ where
         rule: &GridIconCropRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        self.cropped_grid_icons =
-            desktop_crop_inventory_grid_icons_with_common_runtime(&mut self.common, items, rule)?;
+        self.cropped_grid_icons = desktop_crop_visible_inventory_grid_icons_from_cached_cells(
+            &self.visible_grid_item_cells,
+            items,
+            rule,
+            "CountInventoryItem",
+        )?;
         Ok(CommonJobRuntimeOutcome::Matched(
             !self.cropped_grid_icons.is_empty(),
         ))
@@ -13910,7 +13918,7 @@ where
     Ok((items, cell_images))
 }
 
-fn desktop_enumerate_get_grid_icons_first_inventory_page_items_and_cells_with_common_runtime<
+fn desktop_enumerate_first_inventory_page_items_and_cells_without_highlight_with_common_runtime<
     F,
     I,
     C,
@@ -13925,11 +13933,8 @@ where
     I: CommonJobInputDriver,
     C: CommonJobClock,
 {
-    let frame = desktop_get_grid_icons_capture_first_inventory_page_without_highlight(
-        common,
-        capture_size,
-        template,
-    )?;
+    let frame =
+        desktop_capture_first_inventory_page_without_highlight(common, capture_size, template)?;
     desktop_enumerate_inventory_grid_items_and_cells_from_frame(
         &frame,
         capture_size,
@@ -13938,7 +13943,7 @@ where
     )
 }
 
-fn desktop_get_grid_icons_capture_first_inventory_page_without_highlight<F, I, C>(
+fn desktop_capture_first_inventory_page_without_highlight<F, I, C>(
     common: &mut PureTemplateCommonJobRuntime<F, I, C>,
     capture_size: VisionSize,
     template: &GridTemplate,
@@ -13948,12 +13953,12 @@ where
     I: CommonJobInputDriver,
     C: CommonJobClock,
 {
-    let geometry = desktop_get_grid_icons_first_page_dehighlight_geometry(capture_size, template)?;
-    desktop_get_grid_icons_click_capture_point_and_wait(common, geometry.third_column_click, 300)?;
-    desktop_get_grid_icons_click_capture_point_and_wait(common, geometry.third_column_click, 500)?;
+    let geometry = desktop_inventory_first_page_dehighlight_geometry(capture_size, template)?;
+    desktop_click_capture_point_and_wait(common, geometry.third_column_click, 300)?;
+    desktop_click_capture_point_and_wait(common, geometry.third_column_click, 500)?;
     let first_columns_frame = common.frame_source_mut().capture_frame()?;
-    desktop_get_grid_icons_click_capture_point_and_wait(common, geometry.first_column_click, 300)?;
-    desktop_get_grid_icons_click_capture_point_and_wait(common, geometry.first_column_click, 500)?;
+    desktop_click_capture_point_and_wait(common, geometry.first_column_click, 300)?;
+    desktop_click_capture_point_and_wait(common, geometry.first_column_click, 500)?;
     let mut stitched_frame = common.frame_source_mut().capture_frame()?;
     desktop_copy_bgr_rect(
         &first_columns_frame,
@@ -13964,24 +13969,24 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DesktopGetGridIconsFirstPageDehighlightGeometry {
+struct DesktopInventoryFirstPageDehighlightGeometry {
     first_column_click: (i32, i32),
     third_column_click: (i32, i32),
     left_columns_rect: Rect,
 }
 
-fn desktop_get_grid_icons_first_page_dehighlight_geometry(
+fn desktop_inventory_first_page_dehighlight_geometry(
     capture_size: VisionSize,
     template: &GridTemplate,
-) -> bgi_task::Result<DesktopGetGridIconsFirstPageDehighlightGeometry> {
+) -> bgi_task::Result<DesktopInventoryFirstPageDehighlightGeometry> {
     if template.columns == 0 {
         return Err(TaskError::VisionPlan(
-            "GetGridIcons first-page de-highlight requires a non-zero column count".to_string(),
+            "inventory first-page de-highlight requires a non-zero column count".to_string(),
         ));
     }
     let roi = desktop_scaled_rect_1080p(template.roi_1080p, capture_size).map_err(|error| {
         TaskError::VisionPlan(format!(
-            "GetGridIcons first-page de-highlight ROI scaling failed: {error}"
+            "inventory first-page de-highlight ROI scaling failed: {error}"
         ))
     })?;
     let columns = f64::from(template.columns);
@@ -13998,17 +14003,17 @@ fn desktop_get_grid_icons_first_page_dehighlight_geometry(
     let left_columns_rect =
         Rect::new(roi.x, roi.y, left_columns_width, roi.height).map_err(|error| {
             TaskError::VisionPlan(format!(
-                "GetGridIcons first-page de-highlight left-columns rect failed: {error}"
+                "inventory first-page de-highlight left-columns rect failed: {error}"
             ))
         })?;
-    Ok(DesktopGetGridIconsFirstPageDehighlightGeometry {
+    Ok(DesktopInventoryFirstPageDehighlightGeometry {
         first_column_click,
         third_column_click,
         left_columns_rect,
     })
 }
 
-fn desktop_get_grid_icons_click_capture_point_and_wait<F, I, C>(
+fn desktop_click_capture_point_and_wait<F, I, C>(
     common: &mut PureTemplateCommonJobRuntime<F, I, C>,
     point: (i32, i32),
     wait_ms: u64,
@@ -14072,19 +14077,19 @@ fn desktop_copy_bgr_rect(
 ) -> bgi_task::Result<()> {
     if source.size != target.size {
         return Err(TaskError::VisionPlan(format!(
-            "GetGridIcons first-page de-highlight frame size mismatch: expected {:?}, actual {:?}",
+            "inventory first-page de-highlight frame size mismatch: expected {:?}, actual {:?}",
             source.size, target.size
         )));
     }
     let rect = rect.clamp_to(source.size).map_err(|error| {
         TaskError::VisionPlan(format!(
-            "GetGridIcons first-page de-highlight copy rect {:?} failed: {error}",
+            "inventory first-page de-highlight copy rect {:?} failed: {error}",
             rect
         ))
     })?;
     if rect.width <= 0 || rect.height <= 0 {
         return Err(TaskError::VisionPlan(
-            "GetGridIcons first-page de-highlight copy rect is empty".to_string(),
+            "inventory first-page de-highlight copy rect is empty".to_string(),
         ));
     }
     for y in rect.y as u32..rect.bottom() as u32 {
@@ -14166,6 +14171,48 @@ where
             TaskError::VisionPlan(format!(
                 "inventory grid icon crop failed for page {} item {} rect {:?}: {error}",
                 item.page_index, item.item_index, item.rect
+            ))
+        })?;
+        icons.push(crops.icon);
+    }
+    Ok(icons)
+}
+
+fn desktop_crop_visible_inventory_grid_icons_from_cached_cells(
+    visible_grid_item_cells: &[BgrImage],
+    items: &[CountInventoryGridItemFrame],
+    rule: &GridIconCropRule,
+    task_name: &str,
+) -> bgi_task::Result<Vec<BgrImage>> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let spec = GridIconCropSpec {
+        normalized_size: VisionSize::new(rule.normalized_width, rule.normalized_height),
+        icon_crop: rule.icon_crop,
+        bottom_crop: rule.bottom_crop,
+    };
+    let mut icons = Vec::with_capacity(items.len());
+    for item in items {
+        if item.page_index != 0 {
+            return Err(TaskError::CommonJobExecution(format!(
+                "{task_name} live execution has only a current-visible-page grid-cell cache; full GridScroller page cache is required for page {} item {}",
+                item.page_index, item.item_index
+            )));
+        }
+        let cell = visible_grid_item_cells
+            .get(item.item_index as usize)
+            .ok_or_else(|| {
+                TaskError::CommonJobExecution(format!(
+                    "{task_name} live execution requires desktop current-visible-page grid-cell crop cache for page {} item {}",
+                    item.page_index, item.item_index
+                ))
+            })?;
+        let crops = crop_grid_icon(cell, spec).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "inventory grid icon crop failed for page {} item {} cached cell size {:?}: {error}",
+                item.page_index, item.item_index, cell.size
             ))
         })?;
         icons.push(crops.icon);
@@ -20504,6 +20551,104 @@ mod tests {
     }
 
     #[test]
+    fn desktop_count_inventory_visible_route_uses_first_page_dehighlight_cell_cache() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let template = GridTemplate {
+            roi_1080p: Rect::new(200, 150, 300, 220).unwrap(),
+            columns: 3,
+            s1_round: 3,
+            round_milliseconds: 40,
+            s2_round: 32,
+            s3_scale: 0.024,
+        };
+        let geometry =
+            desktop_inventory_first_page_dehighlight_geometry(capture_size, &template).unwrap();
+        let detection_rule = desktop_test_inventory_grid_detection_rule();
+        let grid_rects = [
+            Rect::new(220, 170, 60, 80).unwrap(),
+            Rect::new(310, 170, 60, 80).unwrap(),
+            Rect::new(400, 170, 60, 80).unwrap(),
+            Rect::new(220, 270, 60, 80).unwrap(),
+        ];
+        let left_cell_probe = Rect::new(235, 205, 20, 20).unwrap();
+        let mut first_columns_frame = desktop_talk_option_test_blank_frame(capture_size);
+        let mut rest_frame = desktop_talk_option_test_blank_frame(capture_size);
+        for rect in grid_rects {
+            draw_desktop_bgr_rect_edge(&mut first_columns_frame, rect, [245, 245, 245]);
+            draw_desktop_bgr_rect_edge(&mut rest_frame, rect, [245, 245, 245]);
+        }
+        fill_desktop_bgr_rect(&mut first_columns_frame, left_cell_probe, [10, 20, 30]);
+        fill_desktop_bgr_rect(&mut rest_frame, left_cell_probe, [90, 100, 110]);
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([first_columns_frame, rest_frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopCountInventoryItemRuntime::new(
+            common_runtime,
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+        let scroll_rule = GridScrollRule {
+            test_scroll_rounds: 3,
+            page_scroll_rounds: 32,
+            scroll_delta_per_round: -2,
+            fine_scroll_delta: -1,
+            round_wait_ms: 40,
+            settle_wait_ms: 300,
+            fine_scroll_check_interval_ms: 60,
+            fine_scroll_timeout_ms: 2000,
+            phase_correlation_lower_threshold: 0.5,
+            phase_correlation_upper_threshold: 0.95,
+        };
+
+        let enumeration = runtime
+            .enumerate_count_inventory_grid_items(&template, &detection_rule, &scroll_rule)
+            .unwrap();
+        assert!(!enumeration.scan_complete);
+        assert_eq!(enumeration.items.len(), 6);
+        assert_eq!(runtime.visible_grid_item_cells.len(), 6);
+        assert_eq!(
+            runtime.visible_grid_item_cells[0].bgr_pixel_at(20, 40),
+            Some(bgi_vision::BgrPixel {
+                b: 10,
+                g: 20,
+                r: 30
+            })
+        );
+
+        runtime
+            .crop_count_inventory_grid_icons(
+                &enumeration.items,
+                &GridIconCropRule {
+                    normalized_width: 125,
+                    normalized_height: 153,
+                    icon_crop: Rect::new(0, 0, 125, 125).unwrap(),
+                    bottom_crop: Rect::new(0, 126, 125, 27).unwrap(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(runtime.cropped_grid_icons.len(), 6);
+
+        let common = runtime.common;
+        let (_, frame_source, input_driver, clock, _) = common.into_parts();
+        assert_eq!(frame_source.captures, 2);
+        assert_eq!(
+            input_driver.clicks,
+            vec![
+                geometry.third_column_click,
+                geometry.third_column_click,
+                geometry.first_column_click,
+                geometry.first_column_click
+            ]
+        );
+        assert_eq!(clock.waits, vec![300, 500, 300, 500]);
+    }
+
+    #[test]
     fn desktop_talk_option_drain_clicks_lowest_option_icon() {
         let assets = DesktopTalkOptionTestAssets::new();
         let frame = assets.frame(&[
@@ -24740,8 +24885,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_get_grid_icons_first_inventory_page_stitches_left_columns_after_dehighlight_clicks()
-    {
+    fn desktop_inventory_first_page_stitches_left_columns_after_dehighlight_clicks() {
         let capture_size = VisionSize::new(1920, 1080);
         let template = GridTemplate {
             roi_1080p: Rect::new(200, 150, 300, 220).unwrap(),
@@ -24752,8 +24896,7 @@ mod tests {
             s3_scale: 0.024,
         };
         let geometry =
-            desktop_get_grid_icons_first_page_dehighlight_geometry(capture_size, &template)
-                .unwrap();
+            desktop_inventory_first_page_dehighlight_geometry(capture_size, &template).unwrap();
         let mut first_columns_frame = desktop_talk_option_test_blank_frame(capture_size);
         fill_desktop_bgr_rect(
             &mut first_columns_frame,
@@ -24774,7 +24917,7 @@ mod tests {
         );
         let mut common = common_runtime;
 
-        let stitched = desktop_get_grid_icons_capture_first_inventory_page_without_highlight(
+        let stitched = desktop_capture_first_inventory_page_without_highlight(
             &mut common,
             capture_size,
             &template,
