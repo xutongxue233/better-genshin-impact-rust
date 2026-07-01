@@ -153,11 +153,10 @@ use bgi_task::{
     GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
     GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
     GoToSereniteaPotBagEntryRule, GoToSereniteaPotBuyMaxRule, GoToSereniteaPotDayOfWeek,
-    GoToSereniteaPotEntryMode, GoToSereniteaPotEntryOutcome, GoToSereniteaPotExecutionPlan,
-    GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule, GoToSereniteaPotFinishRule,
-    GoToSereniteaPotMapEntryRule, GoToSereniteaPotOcrRule, GoToSereniteaPotRelativeCrop,
-    GoToSereniteaPotRewardRule, GoToSereniteaPotRuntime, GoToSereniteaPotShopItemLocator,
-    GoToSereniteaPotShopRule, GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition,
+    GoToSereniteaPotEntryOutcome, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
+    GoToSereniteaPotFindAYuanRule, GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule,
+    GoToSereniteaPotOcrRule, GoToSereniteaPotRelativeCrop, GoToSereniteaPotRewardRule,
+    GoToSereniteaPotRuntime, GoToSereniteaPotShopItemLocator, GoToSereniteaPotShopRule,
     GoToSereniteaPotTimedAction, GoToSereniteaPotTimedActionKind, GridIconClassifierRule,
     GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
     GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
@@ -206,7 +205,7 @@ use bgi_task::{
 #[cfg(test)]
 use bgi_task::{
     AutoEatFoodStepAction, AutoEatFoodStepCondition, CountInventoryItemStepAction,
-    CountInventoryItemStepCondition,
+    CountInventoryItemStepCondition, GoToSereniteaPotEntryMode, GoToSereniteaPotStepCondition,
 };
 use bgi_vision::{
     convert_bgr_image, crop_bgr_image, crop_grid_icon, in_range_mask, recognition_type_infos,
@@ -15063,6 +15062,7 @@ const GO_TO_SERENITEA_POT_INTERACTION_PRESS_RETRY_MS: u32 = 300;
 const GO_TO_SERENITEA_POT_OPTION_NOT_FOUND_RETRY_MS: u32 = 300;
 const GO_TO_SERENITEA_POT_NO_COMPANION_DIALOG_WAIT_MS: u32 = 200;
 const GO_TO_SERENITEA_POT_FINISH_PAGE_CLOSE_WAIT_MS: u32 = 1_000;
+const GO_TO_SERENITEA_POT_MAP_AFTER_RETURN_MAIN_UI_WAIT_MS: u32 = 200;
 
 fn execute_desktop_go_to_serenitea_pot_live(
     config: &AppConfig,
@@ -15183,9 +15183,62 @@ where
         )
     }
 
+    fn go_to_serenitea_pot_capture_image_region(&mut self) -> bgi_task::Result<ImageRegion> {
+        let image = self.common.frame_source_mut().capture_frame()?;
+        Ok(ImageRegion::capture(image))
+    }
+
     fn go_to_serenitea_pot_main_ui_visible(&mut self) -> bgi_task::Result<bool> {
         let locator = self.main_ui_locator.clone();
         self.go_to_serenitea_pot_locator_matched(&locator, "main UI probe")
+    }
+
+    fn go_to_serenitea_pot_wait_for_main_ui(
+        &mut self,
+        max_attempts: u8,
+        interval_ms: u32,
+    ) -> bgi_task::Result<bool> {
+        for attempt in 0..max_attempts.max(1) {
+            if self.go_to_serenitea_pot_main_ui_visible()? {
+                return Ok(true);
+            }
+            if attempt + 1 < max_attempts.max(1) && interval_ms > 0 {
+                self.go_to_serenitea_pot_wait(interval_ms)?;
+            }
+        }
+        Ok(false)
+    }
+
+    fn go_to_serenitea_pot_click_capture_point(&mut self, x: i32, y: i32) -> bgi_task::Result<()> {
+        self.common.input_driver_mut().click_capture_point(x, y)
+    }
+
+    fn go_to_serenitea_pot_return_main_ui(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<bool> {
+        if rule.return_main_ui_task_key != RETURN_MAIN_UI_TASK_KEY {
+            return Err(TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot map entry expected nested ReturnMainUi task, got {}",
+                rule.return_main_ui_task_key
+            )));
+        }
+        let Some(CommonJobExecutionPlan::ReturnMainUi(return_plan)) =
+            bgi_task::plan_common_job(&rule.return_main_ui_task_key, None)?
+        else {
+            return Err(TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot map entry nested task {} did not produce a ReturnMainUi plan",
+                rule.return_main_ui_task_key
+            )));
+        };
+        let report = execute_desktop_return_main_ui_live(
+            self.config,
+            self.window,
+            &return_plan,
+            Arc::clone(&self.cancellation),
+        )
+        .map_err(TaskError::CommonJobExecution)?;
+        Ok(report.completed)
     }
 
     fn go_to_serenitea_pot_recognize_ocr_text(
@@ -15211,6 +15264,186 @@ where
             }
         }
         Ok(None)
+    }
+
+    fn go_to_serenitea_pot_recognize_area_menu_candidates(
+        &mut self,
+    ) -> bgi_task::Result<Vec<DesktopTeleportAreaMenuCandidate>> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_teleport_area_menu_ocr_roi(frame.size)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot area-menu WinRT OCR failed: {error}"
+            ))
+        })?;
+        desktop_teleport_area_menu_candidates_from_ocr_regions(&regions, roi)
+    }
+
+    fn go_to_serenitea_pot_switch_area(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<bool> {
+        let (click_x, click_y) = desktop_teleport_area_menu_button_point(self.capture_size);
+        self.go_to_serenitea_pot_click_capture_point(click_x, click_y)?;
+        self.go_to_serenitea_pot_wait(GO_TO_SERENITEA_POT_OPTION_NOT_FOUND_RETRY_MS)?;
+        let candidates = self.go_to_serenitea_pot_recognize_area_menu_candidates()?;
+        let matched = candidates
+            .into_iter()
+            .filter(|candidate| {
+                desktop_teleport_area_text_matches(&candidate.text, &rule.area_name)
+            })
+            .max_by_key(|candidate| candidate.rect.y);
+        let Some(matched) = matched else {
+            return Ok(false);
+        };
+        let center = matched.rect.center();
+        self.go_to_serenitea_pot_click_capture_point(center.x, center.y)?;
+        self.go_to_serenitea_pot_wait(rule.wait_after_teleport_click_ms)?;
+        Ok(true)
+    }
+
+    fn go_to_serenitea_pot_read_big_map_zoom_level(&mut self) -> bgi_task::Result<Option<f64>> {
+        let quick_plan = plan_quick_teleport(QuickTeleportExecutionConfig {
+            capture_size: self.capture_size,
+            ..QuickTeleportExecutionConfig::default()
+        });
+        let backend = PureRustVisionBackend::new().with_template_root(bgi_task::task_asset_root());
+        let capture = self.go_to_serenitea_pot_capture_image_region()?;
+        let object = desktop_quick_teleport_template_object(
+            &quick_plan.locators.map_scale_button,
+            self.capture_size,
+        )
+        .map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GoToSereniteaPot big-map zoom scale-button object failed: {error}"
+            ))
+        })?;
+        let region = capture.find(&backend, &object).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GoToSereniteaPot big-map zoom scale-button lookup failed: {error}"
+            ))
+        })?;
+        if !region.is_exist() {
+            return Ok(None);
+        }
+        Ok(Some(desktop_teleport_zoom_level_from_scale_button_region(
+            region.rect,
+            capture.image.size,
+        )))
+    }
+
+    fn go_to_serenitea_pot_adjust_big_map_zoom_level(
+        &mut self,
+        target_zoom: f64,
+    ) -> bgi_task::Result<bool> {
+        let Some(current_zoom) = self.go_to_serenitea_pot_read_big_map_zoom_level()? else {
+            return Ok(false);
+        };
+        let events =
+            desktop_teleport_zoom_drag_events(current_zoom, target_zoom, self.capture_size);
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, &events)?;
+        Ok(true)
+    }
+
+    fn go_to_serenitea_pot_click_home_icon(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<bool> {
+        for attempt in 0..rule.home_zoom_attempts.max(1) {
+            if self.go_to_serenitea_pot_locator_matched(&rule.home_locator, "map home icon")? {
+                let mut click_locator = rule.home_locator.clone();
+                click_locator.operation = BvLocatorOperation::Click;
+                if !self
+                    .go_to_serenitea_pot_locator_matched(&click_locator, "map home icon click")?
+                {
+                    return Ok(false);
+                }
+                if rule.wait_after_home_click_ms > 0 {
+                    self.go_to_serenitea_pot_wait(rule.wait_after_home_click_ms)?;
+                }
+                return Ok(true);
+            }
+            if rule.wait_before_zoom_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.wait_before_zoom_ms)?;
+            }
+            let target_zoom = desktop_go_to_serenitea_pot_map_entry_zoom_target(rule, attempt);
+            if !self.go_to_serenitea_pot_adjust_big_map_zoom_level(target_zoom)? {
+                return Ok(false);
+            }
+            if rule.wait_after_zoom_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.wait_after_zoom_ms)?;
+            }
+        }
+        Ok(false)
+    }
+
+    fn go_to_serenitea_pot_teleport_button_visible(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<bool> {
+        let mut locator = rule.teleport_button_locator.clone();
+        locator.operation = BvLocatorOperation::IsExist;
+        self.go_to_serenitea_pot_locator_matched(&locator, "teleport button detect")
+    }
+
+    fn go_to_serenitea_pot_click_teleport_button_until_disappear(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<bool> {
+        if rule.wait_before_teleport_click_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.wait_before_teleport_click_ms)?;
+        }
+        if !self.go_to_serenitea_pot_locator_matched(
+            &rule.teleport_button_locator,
+            "teleport button click",
+        )? {
+            return Ok(false);
+        }
+        if rule.wait_after_teleport_click_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.wait_after_teleport_click_ms)?;
+        }
+        for attempt in 0..rule.teleport_button_disappear_checks.max(1) {
+            if !self.go_to_serenitea_pot_teleport_button_visible(rule)? {
+                return Ok(true);
+            }
+            if attempt + 1 < rule.teleport_button_disappear_checks.max(1)
+                && rule.teleport_button_disappear_wait_ms > 0
+            {
+                self.go_to_serenitea_pot_wait(rule.teleport_button_disappear_wait_ms)?;
+            }
+        }
+        Ok(false)
+    }
+
+    fn go_to_serenitea_pot_click_map_teleport(
+        &mut self,
+        rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<bool> {
+        for attempt in 0..rule.teleport_attempts.max(1) {
+            if self.go_to_serenitea_pot_teleport_button_visible(rule)? {
+                if self.go_to_serenitea_pot_click_teleport_button_until_disappear(rule)? {
+                    return Ok(true);
+                }
+                continue;
+            }
+
+            if self.go_to_serenitea_pot_locator_matched(
+                &rule.teleport_home_locator,
+                "teleport Serenitea Pot home button",
+            )? {
+                if rule.wait_after_home_click_ms > 0 {
+                    self.go_to_serenitea_pot_wait(rule.wait_after_home_click_ms)?;
+                }
+                continue;
+            }
+
+            if attempt + 1 < rule.teleport_attempts.max(1) && rule.wait_retry_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.wait_retry_ms)?;
+            }
+        }
+        Ok(false)
     }
 
     fn go_to_serenitea_pot_close_map_best_effort(
@@ -15696,12 +15929,45 @@ where
 {
     fn enter_serenitea_pot_by_map(
         &mut self,
-        _rule: &GoToSereniteaPotMapEntryRule,
+        rule: &GoToSereniteaPotMapEntryRule,
     ) -> bgi_task::Result<GoToSereniteaPotEntryOutcome> {
-        Err(TaskError::CommonJobExecution(
-            "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
-                .to_string(),
-        ))
+        if !self.go_to_serenitea_pot_return_main_ui(rule)? {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+        self.go_to_serenitea_pot_wait(GO_TO_SERENITEA_POT_MAP_AFTER_RETURN_MAIN_UI_WAIT_MS)?;
+
+        self.go_to_serenitea_pot_dispatch_action(GenshinAction::OpenMap)?;
+        if rule.open_map_wait_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.open_map_wait_ms)?;
+        }
+
+        if !self.go_to_serenitea_pot_switch_area(rule)? {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+        let realm_name =
+            self.go_to_serenitea_pot_recognize_ocr_text(&rule.dong_tian_name_ocr, "realm-name")?;
+
+        if !self.go_to_serenitea_pot_click_home_icon(rule)? {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+        if !self.go_to_serenitea_pot_click_map_teleport(rule)? {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+        if rule.wait_main_ui_after_teleport
+            && !self.go_to_serenitea_pot_wait_for_main_ui(
+                desktop_go_to_serenitea_pot_map_entry_main_ui_attempts(rule),
+                rule.teleport_button_disappear_wait_ms,
+            )?
+        {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+
+        Ok(GoToSereniteaPotEntryOutcome {
+            entered: true,
+            realm_name: realm_name
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty()),
+        })
     }
 
     fn enter_serenitea_pot_by_bag(
@@ -15990,6 +16256,21 @@ fn desktop_go_to_serenitea_pot_ocr_match_rect(
         })
 }
 
+fn desktop_go_to_serenitea_pot_map_entry_zoom_target(
+    rule: &GoToSereniteaPotMapEntryRule,
+    attempt: u8,
+) -> f64 {
+    rule.zoom_start_level + f64::from(attempt) * rule.zoom_level_step
+}
+
+fn desktop_go_to_serenitea_pot_map_entry_main_ui_attempts(
+    rule: &GoToSereniteaPotMapEntryRule,
+) -> u8 {
+    rule.teleport_attempts
+        .max(1)
+        .saturating_mul(rule.teleport_button_disappear_checks.max(1))
+}
+
 fn desktop_go_to_serenitea_pot_current_shop_day(
     server_day_start_hour: u8,
     server_time_zone_offset_minutes: i32,
@@ -16149,22 +16430,12 @@ fn desktop_go_to_serenitea_pot_ayuan_alignment(
 }
 
 fn desktop_go_to_serenitea_pot_live_preflight(
-    plan: &GoToSereniteaPotExecutionPlan,
+    _plan: &GoToSereniteaPotExecutionPlan,
 ) -> Result<(), String> {
-    for step in &plan.steps {
-        if !desktop_go_to_serenitea_pot_preflight_condition_applies(plan, step.condition) {
-            continue;
-        }
-        if let GoToSereniteaPotStepAction::MapEntry { .. } = &step.action {
-            return Err(
-                "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
-                    .to_string(),
-            );
-        }
-    }
     Ok(())
 }
 
+#[cfg(test)]
 fn desktop_go_to_serenitea_pot_preflight_condition_applies(
     plan: &GoToSereniteaPotExecutionPlan,
     condition: GoToSereniteaPotStepCondition,
@@ -22684,18 +22955,32 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_serenitea_pot_live_preflight_rejects_before_side_effects() {
+    fn desktop_go_to_serenitea_pot_live_preflight_accepts_map_teleport_entry() {
         let Some(CommonJobExecutionPlan::GoToSereniteaPot(plan)) =
             bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, None).unwrap()
         else {
             panic!("expected GoToSereniteaPot common job plan");
         };
 
-        let error = desktop_go_to_serenitea_pot_live_preflight(&plan).unwrap_err();
+        desktop_go_to_serenitea_pot_live_preflight(&plan).unwrap();
+    }
 
-        assert!(error.contains(
-            "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
-        ));
+    #[test]
+    fn desktop_go_to_serenitea_pot_map_entry_zoom_targets_match_legacy_attempts() {
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, None).unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+        let rule = &plan.map_entry_rule;
+
+        assert!((desktop_go_to_serenitea_pot_map_entry_zoom_target(rule, 0) - 2.5).abs() < 1e-9);
+        assert!((desktop_go_to_serenitea_pot_map_entry_zoom_target(rule, 1) - 2.3).abs() < 1e-9);
+        assert!((desktop_go_to_serenitea_pot_map_entry_zoom_target(rule, 2) - 2.1).abs() < 1e-9);
+        assert_eq!(
+            desktop_go_to_serenitea_pot_map_entry_main_ui_attempts(rule),
+            100
+        );
     }
 
     #[test]
@@ -23912,6 +24197,7 @@ mod tests {
             }
         );
         assert!(desktop_teleport_area_text_matches("渊下宮", "渊下宫"));
+        assert!(desktop_teleport_area_text_matches("尘歌壶", "尘歌壶"));
         assert!(desktop_teleport_area_text_matches(
             "  层岩巨渊 ",
             "层岩巨渊"

@@ -27867,6 +27867,26 @@ fn go_to_serenitea_pot_executor_runs_map_entry_reward_shop_and_finish() {
 }
 
 #[test]
+fn go_to_serenitea_pot_executor_continues_map_entry_without_realm_name() {
+    let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig::default()).unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime =
+        FakeGoToSereniteaPotRuntime::new().with_map_entries([GoToSereniteaPotEntryOutcome {
+            entered: true,
+            realm_name: None,
+        }]);
+
+    let report = execute_go_to_serenitea_pot_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.entry_succeeded, Some(true));
+    assert_eq!(report.state.entry_realm_name, None);
+    assert_eq!(runtime.map_entry_calls.len(), 1);
+    assert_eq!(runtime.ayuan_calls.len(), 1);
+    assert_eq!(runtime.ayuan_calls[0].1, None);
+}
+
+#[test]
 fn go_to_serenitea_pot_executor_finishes_when_bag_entry_fails() {
     let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig {
         serenitea_pot_tp_type: GO_TO_SERENITEA_POT_BAG_TP_TYPE.to_string(),

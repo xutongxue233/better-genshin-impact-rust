@@ -784,7 +784,7 @@ pub fn plan_go_to_serenitea_pot(
         shop_rule,
         finish_rule,
         steps,
-        notes: "Serenitea Pot entry, A Yuan search, reward claim, realm-depot purchase, and final teleport are represented and executable as a Rust state machine through injectable hooks; direct map entry and real-game OCR/click regression remain pending."
+        notes: "Serenitea Pot entry, direct map entry, A Yuan search, reward claim, realm-depot purchase, and final teleport are represented and executable as a Rust state machine through injectable hooks; real-game OCR/click regression remains pending."
             .to_string(),
     })
 }
