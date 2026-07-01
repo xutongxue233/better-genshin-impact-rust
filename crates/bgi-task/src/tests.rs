@@ -20903,8 +20903,66 @@ fn auto_pathing_movement_contract_report_preserves_pre_teleport_delay_between_se
     assert!(!report.segment_reports[0].starts_with_teleport);
     assert_eq!(report.segment_reports[1].pre_teleport_delay_ms, 1_000);
     assert!(report.segment_reports[1].starts_with_teleport);
+    assert_eq!(report.executed_pre_teleport_delays, 1);
+    assert_eq!(report.skipped_pre_teleport_delays, 0);
+    assert_eq!(report.unsupported_pre_teleport_delays, 0);
+    assert_eq!(
+        report.segment_reports[1].pre_teleport_delay_status,
+        Some(AutoPathingPhaseExecutionStatus::Executed)
+    );
+    assert!(report.segment_reports[1]
+        .pre_teleport_delay_message
+        .as_deref()
+        .unwrap_or_default()
+        .contains("1000ms"));
+    assert_eq!(runtime.pre_teleport_delays, vec![(1, 1_000)]);
     assert!(report.movement_completed);
     assert!(report.native_pathing_completed);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_movement_contract_stops_when_pre_teleport_delay_is_not_supported() {
+    let root = unique_test_root("auto-pathing-movement-pre-teleport-delay-pending");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("delay_route.json"),
+        r#"{
+                "info": { "name": "delay route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" },
+                    { "x": 3.0, "y": 4.0, "type": "target" },
+                    { "x": 5.0, "y": 6.0, "type": "teleport" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/delay_route.json").unwrap();
+    let mut runtime = PhaseOnlyAutoPathingMovementRuntime::default();
+
+    let report = execute_auto_pathing_movement_contract_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(!report.movement_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::NativePending
+    );
+    assert_eq!(report.executed_pre_teleport_delays, 0);
+    assert_eq!(report.unsupported_pre_teleport_delays, 1);
+    assert!(!runtime.phases.is_empty());
+    assert!(report.failed_phase.is_none());
+    let failed = report.failed_segment_delay.as_ref().unwrap();
+    assert_eq!(failed.segment_index, 1);
+    assert_eq!(failed.pre_teleport_delay_ms, 1_000);
+    assert!(failed.message.contains("pre-teleport delay"));
+    assert_eq!(report.segment_reports.len(), 2);
+    assert_eq!(
+        report.segment_reports[1].pre_teleport_delay_status,
+        Some(AutoPathingPhaseExecutionStatus::Unsupported)
+    );
+    assert!(report.segment_reports[1].waypoint_reports.is_empty());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -21032,9 +21090,24 @@ fn auto_pathing_converted_track_points_preserve_teleport_route_coordinates() {
 #[derive(Default)]
 struct CompletingAutoPathingMovementRuntime {
     phases: Vec<bgi_core::PathingWaypointPhase>,
+    pre_teleport_delays: Vec<(usize, u32)>,
 }
 
 impl AutoPathingMovementRuntime for CompletingAutoPathingMovementRuntime {
+    fn execute_segment_pre_teleport_delay(
+        &mut self,
+        context: AutoPathingSegmentDelayExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.pre_teleport_delays.push((
+            context.segment.segment_index,
+            context.segment.pre_teleport_delay_ms,
+        ));
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed legacy pre-teleport delay {}ms before segment {}",
+            context.segment.pre_teleport_delay_ms, context.segment.segment_index
+        )))
+    }
+
     fn execute_movement_phase(
         &mut self,
         context: AutoPathingMovementPhaseExecutionContext<'_>,
@@ -21042,6 +21115,24 @@ impl AutoPathingMovementRuntime for CompletingAutoPathingMovementRuntime {
         self.phases.push(context.phase.phase);
         Ok(AutoPathingPhaseExecution::executed(format!(
             "executed {:?}",
+            context.phase.phase
+        )))
+    }
+}
+
+#[derive(Default)]
+struct PhaseOnlyAutoPathingMovementRuntime {
+    phases: Vec<bgi_core::PathingWaypointPhase>,
+}
+
+impl AutoPathingMovementRuntime for PhaseOnlyAutoPathingMovementRuntime {
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.phases.push(context.phase.phase);
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "executed phase {:?} without delay adapter",
             context.phase.phase
         )))
     }

@@ -113,7 +113,8 @@ use bgi_task::{
     AutoOpenChestExecutionConfig, AutoOpenChestExecutionPlan, AutoOpenChestExecutionReport,
     AutoOpenChestObservation, AutoOpenChestRuntime, AutoPathingActionBoundaryReport,
     AutoPathingExecutionConfig, AutoPathingExecutionPlan, AutoPathingMovementPhaseExecutionContext,
-    AutoPathingMovementRuntime, AutoPathingPhaseExecution, AutoPathingResolutionPreflightStatus,
+    AutoPathingMovementRuntime, AutoPathingPhaseExecution, AutoPathingPhaseExecutionStatus,
+    AutoPathingResolutionPreflightStatus, AutoPathingSegmentDelayExecutionContext,
     AutoPickExecutionConfig, AutoPickExecutionPlan, AutoPickRelativeTemplateLocator,
     AutoPickRuntime, AutoPickRuntimeLists, AutoPickTemplateLocator, AutoPickTickExecutionReport,
     AutoPickTickObservation, AutoTrackActionPress, AutoTrackExecutionConfig,
@@ -8691,12 +8692,59 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
         }
         Ok(())
     }
+
+    fn wait_for_pre_teleport_delay(&self, duration_ms: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(u64::from(duration_ms));
+        while Instant::now() < deadline {
+            if self.cancellation.is_cancelled() {
+                return false;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(25)));
+        }
+        true
+    }
 }
 
 impl<C> AutoPathingMovementRuntime for DesktopAutoPathingMovementRuntime<C>
 where
     C: FnMut() -> bgi_task::Result<BgrImage>,
 {
+    fn execute_segment_pre_teleport_delay(
+        &mut self,
+        context: AutoPathingSegmentDelayExecutionContext<'_>,
+    ) -> bgi_task::Result<AutoPathingPhaseExecution> {
+        let delay_ms = context.segment.pre_teleport_delay_ms;
+        if delay_ms == 0 {
+            return Ok(AutoPathingPhaseExecution::skipped(format!(
+                "AutoPathing segment {} has no legacy pre-teleport delay",
+                context.segment.segment_index
+            )));
+        }
+        if self.cancellation.is_cancelled() {
+            return Ok(AutoPathingPhaseExecution {
+                status: AutoPathingPhaseExecutionStatus::Cancelled,
+                message: format!(
+                    "AutoPathing pre-teleport delay before segment {} was cancelled before waiting",
+                    context.segment.segment_index
+                ),
+            });
+        }
+        if !self.wait_for_pre_teleport_delay(delay_ms) {
+            return Ok(AutoPathingPhaseExecution {
+                status: AutoPathingPhaseExecutionStatus::Cancelled,
+                message: format!(
+                    "AutoPathing pre-teleport delay before segment {} was cancelled while waiting {}ms",
+                    context.segment.segment_index, delay_ms
+                ),
+            });
+        }
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "AutoPathing waited legacy pre-teleport delay of {}ms before segment {}",
+            delay_ms, context.segment.segment_index
+        )))
+    }
+
     fn execute_movement_phase(
         &mut self,
         context: AutoPathingMovementPhaseExecutionContext<'_>,
@@ -14753,12 +14801,21 @@ fn desktop_common_job_pathing_pending_message(
                 " at {:?} waypoint {}: {}",
                 failed_phase.phase, failed_phase.global_index, failed_phase.message
             ));
+        } else if let Some(failed_delay) = movement_report.failed_segment_delay.as_ref() {
+            message.push_str(&format!(
+                " before segment {} pre-teleport delay {}ms: {}",
+                failed_delay.segment_index,
+                failed_delay.pre_teleport_delay_ms,
+                failed_delay.message
+            ));
         } else {
             message.push_str(&format!(
-                ", executed_phases={}, skipped_phases={}, unsupported_phases={}",
+                ", executed_phases={}, skipped_phases={}, unsupported_phases={}, executed_pre_teleport_delays={}, unsupported_pre_teleport_delays={}",
                 movement_report.executed_phases,
                 movement_report.skipped_phases,
-                movement_report.unsupported_phases
+                movement_report.unsupported_phases,
+                movement_report.executed_pre_teleport_delays,
+                movement_report.unsupported_pre_teleport_delays
             ));
         }
     }

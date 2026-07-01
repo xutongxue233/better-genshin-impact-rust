@@ -126,7 +126,13 @@ pub struct AutoPathingMovementBoundaryReport {
     pub unsupported_phases: usize,
     pub failed_phases: usize,
     pub cancelled_phases: usize,
+    pub executed_pre_teleport_delays: usize,
+    pub skipped_pre_teleport_delays: usize,
+    pub unsupported_pre_teleport_delays: usize,
+    pub failed_pre_teleport_delays: usize,
+    pub cancelled_pre_teleport_delays: usize,
     pub failed_phase: Option<AutoPathingMovementFailedPhase>,
+    pub failed_segment_delay: Option<AutoPathingMovementFailedSegmentDelay>,
     pub segment_reports: Vec<PathingMovementSegmentBoundaryReport>,
     pub notes: String,
 }
@@ -141,10 +147,19 @@ pub struct AutoPathingMovementFailedPhase {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AutoPathingMovementFailedSegmentDelay {
+    pub segment_index: usize,
+    pub pre_teleport_delay_ms: u32,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PathingMovementSegmentBoundaryReport {
     pub segment_index: usize,
     pub starts_with_teleport: bool,
     pub pre_teleport_delay_ms: u32,
+    pub pre_teleport_delay_status: Option<AutoPathingPhaseExecutionStatus>,
+    pub pre_teleport_delay_message: Option<String>,
     pub waypoint_reports: Vec<PathingMovementWaypointBoundaryReport>,
 }
 
@@ -294,6 +309,11 @@ pub struct AutoPathingMovementPhaseExecutionContext<'a> {
     pub phase: &'a PathingMovementPhaseContract,
 }
 
+pub struct AutoPathingSegmentDelayExecutionContext<'a> {
+    pub plan: &'a AutoPathingExecutionPlan,
+    pub segment: &'a PathingMovementSegmentContract,
+}
+
 pub trait AutoPathingRuntime {
     fn execute_preflight(
         &mut self,
@@ -312,6 +332,25 @@ pub trait AutoPathingRuntime {
 }
 
 pub trait AutoPathingMovementRuntime {
+    fn execute_segment_pre_teleport_delay(
+        &mut self,
+        context: AutoPathingSegmentDelayExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        if context.segment.pre_teleport_delay_ms == 0 {
+            return Ok(AutoPathingPhaseExecution::skipped(format!(
+                "AutoPathing segment {} has no legacy pre-teleport delay",
+                context.segment.segment_index
+            )));
+        }
+
+        Ok(AutoPathingPhaseExecution::unsupported(format!(
+            "AutoPathing segment {} has a legacy pre-teleport delay of {}ms for route {}, but the injected movement runtime has no delay adapter yet",
+            context.segment.segment_index,
+            context.segment.pre_teleport_delay_ms,
+            context.plan.route
+        )))
+    }
+
     fn execute_movement_phase(
         &mut self,
         context: AutoPathingMovementPhaseExecutionContext<'_>,
@@ -475,7 +514,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, execute HandleTeleport through the Teleport common-job live bridge, and honor the only-in-teleport recovery gate; native movement dispatch and recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; native movement dispatch and recovery side effects remain pending."
                 .to_string(),
     })
 }
@@ -528,10 +567,16 @@ where
         unsupported_phases: 0,
         failed_phases: 0,
         cancelled_phases: 0,
+        executed_pre_teleport_delays: 0,
+        skipped_pre_teleport_delays: 0,
+        unsupported_pre_teleport_delays: 0,
+        failed_pre_teleport_delays: 0,
+        cancelled_pre_teleport_delays: 0,
         failed_phase: None,
+        failed_segment_delay: None,
         segment_reports: Vec::new(),
         notes:
-            "AutoPathing movement contract consumer reports native PathExecutor phase readiness without claiming completion unless every injected movement phase succeeds."
+            "AutoPathing movement contract consumer reports native PathExecutor phase readiness, executes injected legacy pre-teleport segment delays, and does not claim completion unless every injected movement boundary succeeds."
                 .to_string(),
     };
 
@@ -544,8 +589,60 @@ where
             segment_index: segment.segment_index,
             starts_with_teleport: segment.starts_with_teleport,
             pre_teleport_delay_ms: segment.pre_teleport_delay_ms,
+            pre_teleport_delay_status: None,
+            pre_teleport_delay_message: None,
             waypoint_reports: Vec::new(),
         };
+
+        if segment.pre_teleport_delay_ms > 0 {
+            let delay_execution = if should_cancel() {
+                AutoPathingPhaseExecution {
+                    status: AutoPathingPhaseExecutionStatus::Cancelled,
+                    message: "AutoPathing movement execution cancelled before pre-teleport delay"
+                        .to_string(),
+                }
+            } else {
+                runtime.execute_segment_pre_teleport_delay(
+                    AutoPathingSegmentDelayExecutionContext { plan, segment },
+                )?
+            };
+
+            match delay_execution.status {
+                AutoPathingPhaseExecutionStatus::Executed => {
+                    report.executed_pre_teleport_delays += 1
+                }
+                AutoPathingPhaseExecutionStatus::Skipped => report.skipped_pre_teleport_delays += 1,
+                AutoPathingPhaseExecutionStatus::Unsupported => {
+                    report.unsupported_pre_teleport_delays += 1
+                }
+                AutoPathingPhaseExecutionStatus::Failed => report.failed_pre_teleport_delays += 1,
+                AutoPathingPhaseExecutionStatus::Cancelled => {
+                    report.cancelled_pre_teleport_delays += 1
+                }
+            }
+
+            let should_stop = matches!(
+                delay_execution.status,
+                AutoPathingPhaseExecutionStatus::Unsupported
+                    | AutoPathingPhaseExecutionStatus::Failed
+                    | AutoPathingPhaseExecutionStatus::Cancelled
+            );
+            let delay_message = delay_execution.message.clone();
+            segment_report.pre_teleport_delay_status = Some(delay_execution.status);
+            segment_report.pre_teleport_delay_message = Some(delay_execution.message);
+
+            if should_stop {
+                report.failed_segment_delay = Some(AutoPathingMovementFailedSegmentDelay {
+                    segment_index: segment.segment_index,
+                    pre_teleport_delay_ms: segment.pre_teleport_delay_ms,
+                    message: delay_message,
+                });
+                report.segment_reports.push(segment_report);
+                report.movement_completion_status =
+                    AutoPathingMovementCompletionStatus::NativePending;
+                return Ok(report);
+            }
+        }
 
         for waypoint in &segment.waypoints {
             let mut waypoint_report = PathingMovementWaypointBoundaryReport {
