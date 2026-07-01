@@ -75,12 +75,13 @@ use bgi_task::{
     execute_claim_encounter_points_rewards_plan, execute_claim_mail_rewards_live,
     execute_count_inventory_item_plan, execute_get_grid_icons_plan,
     execute_go_to_adventurers_guild_plan, execute_go_to_crafting_bench_plan,
-    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
-    execute_lower_head_then_walk_to_plan, execute_macro_hotkey_plan,
-    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
-    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
-    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
-    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
+    execute_go_to_serenitea_pot_plan, execute_independent_task_live_if_available,
+    execute_independent_task_with_cancel, execute_lower_head_then_walk_to_plan,
+    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
+    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
+    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
+    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
+    execute_team_context_combat_script_inputs,
     execute_team_context_combat_script_inputs_with_frame, execute_teleport_plan,
     execute_use_redeem_code_plan, execute_walk_to_f_live, execute_wonderland_cycle_live,
     execute_wonderland_cycle_plan, extract_redeem_codes_from_text, independent_tasks,
@@ -150,20 +151,23 @@ use bgi_task::{
     GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
     GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
     GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
-    GoToSereniteaPotEntryMode, GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport,
-    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GridIconClassifierRule,
-    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
-    GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
-    IndependentTaskLiveExecutionReport, InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan,
-    LowerHeadThenWalkToExecutionReport, LowerHeadThenWalkToFKeyRule,
-    LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime, LowerHeadThenWalkToStepResult,
-    LowerHeadThenWalkToTrackingObservation, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
-    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
-    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
-    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
-    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
-    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
-    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
+    GoToSereniteaPotBagEntryRule, GoToSereniteaPotEntryMode, GoToSereniteaPotEntryOutcome,
+    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule,
+    GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule, GoToSereniteaPotRewardRule,
+    GoToSereniteaPotRuntime, GoToSereniteaPotShopRule, GoToSereniteaPotStepAction,
+    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
+    GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate, IndependentTaskExecution,
+    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport, InventoryTabAssetPair,
+    LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
+    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
+    LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
+    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
+    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
+    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
+    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
+    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
+    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
+    QuickSereniteaPotExecutionReport, QuickSereniteaPotExecutionResult,
     QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
     QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
     QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
@@ -15060,7 +15064,7 @@ fn execute_desktop_go_to_serenitea_pot_live(
     if cancellation.is_cancelled() {
         return Err("GoToSereniteaPot live execution cancelled".to_string());
     }
-    let (_global_input, capture_size) =
+    let (global_input, capture_size) =
         desktop_common_job_global_input(config, window, "GoToSereniteaPot")?;
     if plan.capture_size != capture_size {
         return Err(format!(
@@ -15071,11 +15075,185 @@ fn execute_desktop_go_to_serenitea_pot_live(
             capture_size.height
         ));
     }
+    let frame_source = global_input
+        .common_job_frame_source()
+        .ok_or_else(|| "GoToSereniteaPot live execution has no capture frame source".to_string())?;
     desktop_go_to_serenitea_pot_live_preflight(plan)?;
-    Err(
-        "GoToSereniteaPot live execution requires desktop runtime adapter wiring after preflight"
-            .to_string(),
-    )
+    let input_driver = global_input
+        .common_job_input_driver(GlobalInputDispatchMode::SendInput, Some(window.handle.0));
+    let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
+        frame_source,
+        input_driver,
+        CancellableCommonJobClock::new(Arc::clone(&cancellation)),
+    );
+    let mut runtime = DesktopGoToSereniteaPotRuntime {
+        common: common_runtime,
+        config,
+        window,
+        cancellation,
+        capture_size: plan.capture_size,
+    };
+    execute_go_to_serenitea_pot_plan(plan, &config.key_bindings_config, &mut runtime)
+        .map_err(|error| error.to_string())
+}
+
+struct DesktopGoToSereniteaPotRuntime<'a, F, I, C> {
+    common: PureTemplateCommonJobRuntime<F, I, C>,
+    config: &'a AppConfig,
+    window: &'a GameWindowMatch,
+    cancellation: Arc<InputCancellationToken>,
+    capture_size: VisionSize,
+}
+
+impl<F, I, C> CommonJobRuntime for DesktopGoToSereniteaPotRuntime<'_, F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn log(&mut self, message: &str) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::log(&mut self.common, message)
+    }
+
+    fn dispatch_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)
+    }
+
+    fn dispatch_capture_input(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_capture_input(&mut self.common, events)
+    }
+
+    fn execute_page_command(
+        &mut self,
+        command: &BvPageCommand,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(&mut self.common, command)
+    }
+
+    fn execute_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_locator(&mut self.common, locator)
+    }
+}
+
+impl<F, I, C> GoToSereniteaPotRuntime for DesktopGoToSereniteaPotRuntime<'_, F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn enter_serenitea_pot_by_map(
+        &mut self,
+        _rule: &GoToSereniteaPotMapEntryRule,
+    ) -> bgi_task::Result<GoToSereniteaPotEntryOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
+                .to_string(),
+        ))
+    }
+
+    fn enter_serenitea_pot_by_bag(
+        &mut self,
+        rule: &GoToSereniteaPotBagEntryRule,
+    ) -> bgi_task::Result<GoToSereniteaPotEntryOutcome> {
+        let quick_plan = plan_quick_serenitea_pot(QuickSereniteaPotExecutionConfig {
+            capture_size: self.capture_size,
+        })?;
+        let quick_report = execute_desktop_quick_serenitea_pot_live(
+            self.config,
+            self.window,
+            &quick_plan,
+            Arc::clone(&self.cancellation),
+        )
+        .map_err(TaskError::CommonJobExecution)?;
+        if rule.wait_after_quick_task_ms > 0 {
+            CommonJobRuntime::execute_page_command(
+                &mut self.common,
+                &BvPageCommand::Wait {
+                    milliseconds: rule.wait_after_quick_task_ms,
+                },
+            )?;
+        }
+        Ok(desktop_go_to_serenitea_pot_bag_entry_outcome(&quick_report))
+    }
+
+    fn find_and_approach_serenitea_pot_ayuan(
+        &mut self,
+        _rule: &GoToSereniteaPotFindAYuanRule,
+        _realm_name: Option<&str>,
+    ) -> bgi_task::Result<bool> {
+        Err(TaskError::CommonJobExecution(
+            "GoToSereniteaPot live execution requires desktop A Yuan interaction adapter"
+                .to_string(),
+        ))
+    }
+
+    fn claim_serenitea_pot_rewards(
+        &mut self,
+        _rule: &GoToSereniteaPotRewardRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToSereniteaPot live execution requires desktop Serenitea Pot reward adapter"
+                .to_string(),
+        ))
+    }
+
+    fn purchase_serenitea_pot_shop(
+        &mut self,
+        _rule: &GoToSereniteaPotShopRule,
+        _configured_objects: &[String],
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToSereniteaPot live execution requires desktop realm-depot shop adapter".to_string(),
+        ))
+    }
+
+    fn finish_serenitea_pot(
+        &mut self,
+        _rule: &GoToSereniteaPotFinishRule,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Err(TaskError::CommonJobExecution(
+            "GoToSereniteaPot live execution requires desktop Serenitea Pot finish adapter"
+                .to_string(),
+        ))
+    }
+
+    fn release_serenitea_pot_keys(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::dispatch_input(
+            &mut self.common,
+            bgi_input::release_all_keys_sequence().events(),
+        )
+    }
+
+    fn clear_serenitea_pot_vision_drawings(&mut self) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        Ok(CommonJobRuntimeOutcome::Matched(true))
+    }
+}
+
+fn desktop_go_to_serenitea_pot_bag_entry_outcome(
+    report: &QuickSereniteaPotExecutionReport,
+) -> GoToSereniteaPotEntryOutcome {
+    let entered = report.completed
+        && report.state.result == Some(QuickSereniteaPotExecutionResult::Completed)
+        && report.state.interaction_outcome == Some(QuickSereniteaPotInteractionOutcome::Enter)
+        && report.state.interaction_action_dispatched
+        && report.state.confirmation_clicked;
+    if entered {
+        GoToSereniteaPotEntryOutcome {
+            entered: true,
+            realm_name: None,
+        }
+    } else {
+        GoToSereniteaPotEntryOutcome::failed()
+    }
 }
 
 fn desktop_go_to_serenitea_pot_live_preflight(
@@ -15085,44 +15263,11 @@ fn desktop_go_to_serenitea_pot_live_preflight(
         if !desktop_go_to_serenitea_pot_preflight_condition_applies(plan, step.condition) {
             continue;
         }
-        match &step.action {
-            GoToSereniteaPotStepAction::MapEntry { .. } => {
-                return Err(
-                    "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
-                        .to_string(),
-                );
-            }
-            GoToSereniteaPotStepAction::BagEntry { .. } => {
-                return Err(
-                    "GoToSereniteaPot live execution requires desktop Serenitea Pot bag-entry adapter"
-                        .to_string(),
-                );
-            }
-            GoToSereniteaPotStepAction::FindAYuan { .. } => {
-                return Err(
-                    "GoToSereniteaPot live execution requires desktop A Yuan interaction adapter"
-                        .to_string(),
-                );
-            }
-            GoToSereniteaPotStepAction::Reward { .. } => {
-                return Err(
-                    "GoToSereniteaPot live execution requires desktop Serenitea Pot reward adapter"
-                        .to_string(),
-                );
-            }
-            GoToSereniteaPotStepAction::ShopPurchase { .. } => {
-                return Err(
-                    "GoToSereniteaPot live execution requires desktop realm-depot shop adapter"
-                        .to_string(),
-                );
-            }
-            GoToSereniteaPotStepAction::Finish { .. } => {
-                return Err(
-                    "GoToSereniteaPot live execution requires desktop Serenitea Pot finish adapter"
-                        .to_string(),
-                );
-            }
-            _ => {}
+        if let GoToSereniteaPotStepAction::MapEntry { .. } = &step.action {
+            return Err(
+                "GoToSereniteaPot live execution requires desktop Serenitea Pot map-entry adapter"
+                    .to_string(),
+            );
         }
     }
     Ok(())
@@ -21673,12 +21818,74 @@ mod tests {
             panic!("expected GoToSereniteaPot common job plan");
         };
 
-        let error = desktop_go_to_serenitea_pot_live_preflight(&plan).unwrap_err();
+        desktop_go_to_serenitea_pot_live_preflight(&plan).unwrap();
+    }
 
-        assert!(error.contains(
-            "GoToSereniteaPot live execution requires desktop Serenitea Pot bag-entry adapter"
-        ));
-        assert!(!error.contains("map-entry adapter"));
+    #[test]
+    fn desktop_go_to_serenitea_pot_bag_entry_maps_only_enter_to_success() {
+        let enter_report = quick_serenitea_pot_report(
+            true,
+            Some(QuickSereniteaPotExecutionResult::Completed),
+            Some(QuickSereniteaPotInteractionOutcome::Enter),
+            true,
+            true,
+        );
+        let leave_report = quick_serenitea_pot_report(
+            true,
+            Some(QuickSereniteaPotExecutionResult::Completed),
+            Some(QuickSereniteaPotInteractionOutcome::Leave),
+            true,
+            true,
+        );
+        let missing_report = quick_serenitea_pot_report(
+            true,
+            Some(QuickSereniteaPotExecutionResult::InteractionMissing),
+            Some(QuickSereniteaPotInteractionOutcome::Missing),
+            false,
+            false,
+        );
+        let big_map_report = quick_serenitea_pot_report(
+            true,
+            Some(QuickSereniteaPotExecutionResult::ReturnedFromBigMap),
+            None,
+            false,
+            false,
+        );
+        let preflight_report = quick_serenitea_pot_report(
+            false,
+            Some(QuickSereniteaPotExecutionResult::PreflightSkipped),
+            None,
+            false,
+            false,
+        );
+
+        assert!(desktop_go_to_serenitea_pot_bag_entry_outcome(&enter_report).entered);
+        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&leave_report).entered);
+        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&missing_report).entered);
+        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&big_map_report).entered);
+        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&preflight_report).entered);
+    }
+
+    fn quick_serenitea_pot_report(
+        completed: bool,
+        result: Option<QuickSereniteaPotExecutionResult>,
+        interaction_outcome: Option<QuickSereniteaPotInteractionOutcome>,
+        interaction_action_dispatched: bool,
+        confirmation_clicked: bool,
+    ) -> QuickSereniteaPotExecutionReport {
+        QuickSereniteaPotExecutionReport {
+            task_key: bgi_task::QUICK_SERENITEA_POT_TASK_KEY.to_string(),
+            completed,
+            state: bgi_task::QuickSereniteaPotExecutorState {
+                result,
+                interaction_outcome,
+                interaction_action_dispatched,
+                confirmation_clicked,
+                ..bgi_task::QuickSereniteaPotExecutorState::default()
+            },
+            executed_steps: Vec::new(),
+            skipped_steps: Vec::new(),
+        }
     }
 
     #[test]
