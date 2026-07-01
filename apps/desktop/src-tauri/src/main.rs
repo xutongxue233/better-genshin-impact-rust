@@ -61,7 +61,8 @@ use bgi_task::{
     check_rewards_text_candidates_from_ocr_regions, choose_talk_option_candidates_from_ocr_regions,
     choose_talk_option_ocr_rect_from_lowest_icon,
     claim_encounter_points_text_candidates_from_ocr_regions, count_auto_cook_target_color,
-    decide_quick_teleport_tick, decide_teleport_move_map_center_after_drag,
+    count_get_grid_icons_star_components, decide_quick_teleport_tick,
+    decide_teleport_move_map_center_after_drag,
     detect_active_combat_avatar_index_from_default_rects_with_arrow,
     evaluate_auto_pathing_resolution_preflight, execute_auto_cook_plan, execute_auto_eat_food_plan,
     execute_auto_eat_tick_plan, execute_auto_fight_finish_detection_live_probe,
@@ -8097,13 +8098,20 @@ where
 
     fn count_get_grid_icons_star_suffix(
         &mut self,
-        _item: &GetGridIconsGridItem,
-        _rule: &GetGridIconsStarSuffixRule,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsStarSuffixRule,
     ) -> bgi_task::Result<u8> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop star contour adapter".to_string(),
-        ))
+        let common = self.common_mut("star suffix detection")?;
+        let frame = common.frame_source_mut().capture_frame()?;
+        let roi = desktop_get_grid_icons_width_relative_roi(frame.size, &rule.star_ocr_roi)?;
+        let cropped = crop_bgr_image(&frame, roi).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GetGridIcons star suffix crop failed for page {} item {} roi {:?}: {error}",
+                item.page_index, item.item_index, roi
+            ))
+        })?;
+        Ok(count_get_grid_icons_star_components(&cropped, rule))
     }
 
     fn capture_get_grid_icons_item_icon_png(
@@ -23988,6 +23996,73 @@ mod tests {
 
         assert_eq!(text, "天空\n \n之刃\n备用");
         assert_eq!(desktop_get_grid_icons_ocr_text_from_regions(&[]), "");
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_star_suffix_counts_cropped_yellow_components() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let star_rule = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "starAsSuffix": true,
+                "maxNumToGet": 1
+            }),
+        )))
+        .unwrap()
+        .capture_rule
+        .star_suffix_rule
+        .unwrap();
+        let roi = desktop_get_grid_icons_width_relative_roi(capture_size, &star_rule.star_ocr_roi)
+            .unwrap();
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        fill_desktop_bgr_rect(
+            &mut frame,
+            Rect::new(roi.x + 4, roi.y + 5, 4, 4).unwrap(),
+            [50, 204, 255],
+        );
+        fill_desktop_bgr_rect(
+            &mut frame,
+            Rect::new(roi.x + 40, roi.y + 6, 3, 5).unwrap(),
+            [50, 204, 255],
+        );
+        fill_desktop_bgr_rect(
+            &mut frame,
+            Rect::new(roi.x + 70, roi.y + 6, 3, 5).unwrap(),
+            [50, 204, 249],
+        );
+        fill_desktop_bgr_rect(
+            &mut frame,
+            Rect::new(roi.x - 12, roi.y + 6, 3, 5).unwrap(),
+            [50, 204, 255],
+        );
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopGetGridIconsRuntime::new(
+            Path::new("."),
+            Some(common_runtime),
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+        let item = GetGridIconsGridItem {
+            page_index: 0,
+            item_index: 0,
+            rect: Rect::new(100, 100, 125, 153).unwrap(),
+        };
+
+        assert_eq!(
+            runtime
+                .count_get_grid_icons_star_suffix(&item, &star_rule)
+                .unwrap(),
+            2
+        );
+        let common = runtime.common.take().unwrap();
+        let (_, frame_source, _, _, _) = common.into_parts();
+        assert_eq!(frame_source.captures, 1);
     }
 
     #[test]

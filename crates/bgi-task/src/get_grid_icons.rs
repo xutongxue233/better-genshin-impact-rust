@@ -1,5 +1,5 @@
 use bgi_core::config::GetGridIconsConfig;
-use bgi_vision::{OcrResult, Rect, Size};
+use bgi_vision::{BgrImage, OcrResult, Rect, Size};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -924,7 +924,7 @@ pub fn plan_get_grid_icons(
             "desktop live adapters are not wired yet for TaskRunner/ISoloTask cancellation lifecycle".to_string(),
             "desktop live adapters are partially wired for ordinary inventory ReturnMainUi/OpenInventory/tab handling and visible-page cell clicks; manual-open prompts and special-grid input dispatch remain pending".to_string(),
             "desktop live adapters are partially wired for ordinary inventory current-visible-page enumeration/crop with scan_complete=false contract protection; full GridScroller page scrolling, OpenCV ArtifactSetFilterScreen contour enumeration, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
-            "desktop live adapters are partially wired for ordinary item-name WinRT OCR; Paddle OCR parity, artifact-set flower-name OCR, optional star contour suffix detection, item-icon capture after visible-page crop cache misses, and overlay cleanup remain pending".to_string(),
+            "desktop live adapters are partially wired for ordinary item-name WinRT OCR and optional star color-component suffix detection; Paddle OCR parity, artifact-set flower-name OCR, item-icon capture after visible-page crop cache misses, and overlay cleanup remain pending".to_string(),
             "optional GridIconsAccuracyTestTask ONNX/prototype inference live adapter remains pending".to_string(),
         ],
     })
@@ -1238,6 +1238,69 @@ pub fn decide_get_grid_icons_artifact_set_flower_name(
     })
 }
 
+pub fn count_get_grid_icons_star_components(
+    image: &BgrImage,
+    rule: &GetGridIconsStarSuffixRule,
+) -> u8 {
+    let width = image.size.width as usize;
+    let height = image.size.height as usize;
+    if width == 0 || height == 0 {
+        return 0;
+    }
+
+    let mut mask = vec![false; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let index = (y * width + x) * 3;
+            let b = image.pixels[index];
+            let g = image.pixels[index + 1];
+            let r = image.pixels[index + 2];
+            mask[y * width + x] = (rule.yellow_bgr_lower.b..=rule.yellow_bgr_upper.b).contains(&b)
+                && (rule.yellow_bgr_lower.g..=rule.yellow_bgr_upper.g).contains(&g)
+                && (rule.yellow_bgr_lower.r..=rule.yellow_bgr_upper.r).contains(&r);
+        }
+    }
+
+    let count = count_binary_components_8_connected(&mask, width, height);
+    count.min(u8::MAX as usize) as u8
+}
+
+fn count_binary_components_8_connected(mask: &[bool], width: usize, height: usize) -> usize {
+    if width == 0 || height == 0 {
+        return 0;
+    }
+    let mut visited = vec![false; mask.len()];
+    let mut components = 0usize;
+    let mut stack = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            let index = y * width + x;
+            if !mask[index] || visited[index] {
+                continue;
+            }
+            components += 1;
+            visited[index] = true;
+            stack.push((x, y));
+            while let Some((cx, cy)) = stack.pop() {
+                let min_x = cx.saturating_sub(1);
+                let max_x = (cx + 1).min(width - 1);
+                let min_y = cy.saturating_sub(1);
+                let max_y = (cy + 1).min(height - 1);
+                for ny in min_y..=max_y {
+                    for nx in min_x..=max_x {
+                        let neighbor = ny * width + nx;
+                        if mask[neighbor] && !visited[neighbor] {
+                            visited[neighbor] = true;
+                            stack.push((nx, ny));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    components
+}
+
 pub fn plan_get_grid_icons_artifact_set_icon_crop(
     rule: &ArtifactSetFilterIconCropRule,
     item_region_size: Size,
@@ -1395,6 +1458,25 @@ fn u64_member<const N: usize>(value: &Value, names: [&str; N]) -> Option<u64> {
 #[cfg(test)]
 mod get_grid_icons_runtime_tests {
     use super::*;
+
+    #[test]
+    fn get_grid_icons_star_components_count_legacy_yellow_blobs() {
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "Weapons",
+                "starAsSuffix": true
+            }),
+        )))
+        .unwrap();
+        let rule = plan.capture_rule.star_suffix_rule.as_ref().unwrap();
+        let mut image = BgrImage::new(Size::new(12, 6), vec![0; 12 * 6 * 3]).unwrap();
+        for (x, y) in [(1, 1), (2, 1), (1, 2), (2, 2), (3, 3), (7, 1), (7, 2)] {
+            set_bgr_pixel(&mut image, x, y, [50, 204, 255]);
+        }
+        set_bgr_pixel(&mut image, 10, 1, [50, 204, 249]);
+
+        assert_eq!(count_get_grid_icons_star_components(&image, rule), 2);
+    }
 
     #[test]
     fn get_grid_icons_executor_skips_scan_when_max_is_zero() {
@@ -1841,5 +1923,10 @@ mod get_grid_icons_runtime_tests {
                 height: 40,
             },
         }
+    }
+
+    fn set_bgr_pixel(image: &mut BgrImage, x: u32, y: u32, bgr: [u8; 3]) {
+        let index = ((y * image.size.width + x) as usize) * 3;
+        image.pixels[index..index + 3].copy_from_slice(&bgr);
     }
 }
