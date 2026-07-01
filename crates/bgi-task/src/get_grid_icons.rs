@@ -924,7 +924,7 @@ pub fn plan_get_grid_icons(
             "desktop live adapters are not wired yet for TaskRunner/ISoloTask cancellation lifecycle".to_string(),
             "desktop live adapters are partially wired for ordinary inventory ReturnMainUi/OpenInventory/tab handling and visible-page cell clicks; manual-open prompts and special-grid input dispatch remain pending".to_string(),
             "desktop live adapters are partially wired for ordinary inventory current-visible-page enumeration/crop with scan_complete=false contract protection; full GridScroller page scrolling, OpenCV ArtifactSetFilterScreen contour enumeration, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
-            "desktop live adapters are not wired yet for Paddle OCR item names, artifact-set flower names, optional star contour suffix detection, live cropped-icon PNG encoding, and overlay cleanup".to_string(),
+            "desktop live adapters are not wired yet for Paddle OCR item names, artifact-set flower names, optional star contour suffix detection, item-icon capture after visible-page crop cache misses, and overlay cleanup".to_string(),
             "optional GridIconsAccuracyTestTask ONNX/prototype inference live adapter remains pending".to_string(),
         ],
     })

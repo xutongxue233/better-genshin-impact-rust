@@ -8099,10 +8099,13 @@ where
     ) -> bgi_task::Result<GetGridIconsPngData> {
         self.ensure_not_cancelled()?;
         if let Some(icon) = self.visible_grid_icons.get(item.item_index as usize) {
-            return Err(TaskError::CommonJobExecution(format!(
-                "GetGridIcons live execution requires desktop PNG encoding adapter after visible-page crop cached item {} ({}x{})",
-                item.item_index, icon.size.width, icon.size.height
-            )));
+            let bytes = encode_bgr_image_png(icon).map_err(|error| {
+                TaskError::CommonJobExecution(format!(
+                    "GetGridIcons live execution could not encode cached visible-page icon {} ({}x{}) as PNG: {error}",
+                    item.item_index, icon.size.width, icon.size.height
+                ))
+            })?;
+            return Ok(GetGridIconsPngData { bytes });
         }
         Err(TaskError::CommonJobExecution(
             "GetGridIcons live execution requires desktop item icon capture adapter after visible-page crop cache miss".to_string(),
@@ -23953,6 +23956,13 @@ mod tests {
             vec![0, 1, 2, 3, 4, 5]
         );
         assert_eq!(items[0].rect, Rect::new(219, 169, 62, 82).unwrap());
+
+        let png = runtime
+            .capture_get_grid_icons_item_icon_png(&items[0])
+            .unwrap();
+        assert!(png.bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]));
+        let decoded_icon = BgrImage::decode(&png.bytes).unwrap();
+        assert_eq!(decoded_icon, runtime.visible_grid_icons[0]);
 
         runtime.click_get_grid_icons_item(&items[0], 300).unwrap();
 
