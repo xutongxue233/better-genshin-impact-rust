@@ -152,10 +152,11 @@ use bgi_task::{
     GoToCraftingBenchExecutionReport, GoToCraftingBenchInteractionRule,
     GoToCraftingBenchPathingRule, GoToCraftingBenchResinCounts, GoToCraftingBenchResinCraftRule,
     GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
-    GoToSereniteaPotBagEntryRule, GoToSereniteaPotEntryMode, GoToSereniteaPotEntryOutcome,
-    GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule,
-    GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule, GoToSereniteaPotOcrRule,
-    GoToSereniteaPotRelativeCrop, GoToSereniteaPotRewardRule, GoToSereniteaPotRuntime,
+    GoToSereniteaPotBagEntryRule, GoToSereniteaPotBuyMaxRule, GoToSereniteaPotDayOfWeek,
+    GoToSereniteaPotEntryMode, GoToSereniteaPotEntryOutcome, GoToSereniteaPotExecutionPlan,
+    GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule, GoToSereniteaPotFinishRule,
+    GoToSereniteaPotMapEntryRule, GoToSereniteaPotOcrRule, GoToSereniteaPotRelativeCrop,
+    GoToSereniteaPotRewardRule, GoToSereniteaPotRuntime, GoToSereniteaPotShopItemLocator,
     GoToSereniteaPotShopRule, GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition,
     GoToSereniteaPotTimedAction, GoToSereniteaPotTimedActionKind, GridIconClassifierRule,
     GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
@@ -214,7 +215,7 @@ use bgi_vision::{
     OcrResult, OcrResultRegion, OnnxModelLoadPlan, OnnxProviderSelection, PureRustVisionBackend,
     RecognitionType, Rect, Region, Size as VisionSize, VisibleGridEnumerationSpec, VisionBackend,
 };
-use chrono::{FixedOffset, Local, NaiveDate, Offset};
+use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDate, Offset, Timelike, Weekday};
 use image::ImageEncoder;
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
@@ -15466,6 +15467,24 @@ where
         Ok(true)
     }
 
+    fn go_to_serenitea_pot_ocr_text_present(
+        &mut self,
+        rule: &GoToSereniteaPotOcrRule,
+        expected: &str,
+        label: &str,
+    ) -> bgi_task::Result<bool> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, rule.roi)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot {label} WinRT OCR failed: {error}"
+            ))
+        })?;
+        Ok(desktop_go_to_serenitea_pot_ocr_match_rect(&regions, roi, expected).is_some())
+    }
+
     fn go_to_serenitea_pot_click_capture_center(&mut self) -> bgi_task::Result<()> {
         self.common.input_driver_mut().click_capture_point(
             (self.capture_size.width / 2) as i32,
@@ -15511,6 +15530,86 @@ where
             }
         }
         self.go_to_serenitea_pot_main_ui_visible()
+    }
+
+    fn go_to_serenitea_pot_buy_max(
+        &mut self,
+        rule: &GoToSereniteaPotBuyMaxRule,
+        sold_out_text: &str,
+    ) -> bgi_task::Result<bool> {
+        if self.go_to_serenitea_pot_ocr_text_present(
+            &rule.sold_out_ocr,
+            sold_out_text,
+            "shop sold-out",
+        )? {
+            return Ok(true);
+        }
+        if !self
+            .go_to_serenitea_pot_locator_matched(&rule.white_confirm_locator, "buy-max confirm")?
+        {
+            return Ok(false);
+        }
+        if rule.after_confirm_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.after_confirm_ms)?;
+        }
+        if rule.escape_after_confirm {
+            self.go_to_serenitea_pot_dispatch_action(GenshinAction::OpenPaimonMenu)?;
+        }
+        Ok(true)
+    }
+
+    fn go_to_serenitea_pot_purchase_shop_items(
+        &mut self,
+        rule: &GoToSereniteaPotShopRule,
+        targets: &[&GoToSereniteaPotShopItemLocator],
+    ) -> bgi_task::Result<bool> {
+        if targets.is_empty() {
+            return Ok(false);
+        }
+
+        let mut handled_targets = vec![false; targets.len()];
+        for attempt in 0..rule.purchase_retries.max(1) {
+            for (target_index, target) in targets.iter().enumerate() {
+                if handled_targets[target_index] {
+                    continue;
+                }
+                if self.go_to_serenitea_pot_locator_matched(
+                    &target.locator,
+                    target.item.legacy_name(),
+                )? {
+                    if rule.after_item_click_ms > 0 {
+                        self.go_to_serenitea_pot_wait(rule.after_item_click_ms)?;
+                    }
+                    let handled =
+                        self.go_to_serenitea_pot_buy_max(&rule.buy_max_rule, &rule.sold_out_text)?;
+                    if handled {
+                        handled_targets[target_index] = true;
+                    }
+                    if handled && rule.after_buy_animation_ms > 0 {
+                        self.go_to_serenitea_pot_wait(rule.after_buy_animation_ms)?;
+                    }
+                } else if rule.item_missing_delay_ms > 0 {
+                    self.go_to_serenitea_pot_wait(rule.item_missing_delay_ms)?;
+                }
+                if rule.between_items_delay_ms > 0 {
+                    self.go_to_serenitea_pot_wait(rule.between_items_delay_ms)?;
+                }
+            }
+            if handled_targets.iter().all(|handled| *handled) {
+                break;
+            }
+            if attempt + 1 < rule.purchase_retries.max(1) && rule.item_missing_delay_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.item_missing_delay_ms)?;
+            }
+        }
+        if handled_targets.iter().all(|handled| !*handled) {
+            return Ok(false);
+        }
+        self.go_to_serenitea_pot_locator_matched(
+            &rule.close_after_purchase_locator,
+            "shop close after purchase",
+        )?;
+        Ok(handled_targets.iter().all(|handled| *handled))
     }
 
     fn go_to_serenitea_pot_final_teleport(
@@ -15724,11 +15823,32 @@ where
 
     fn purchase_serenitea_pot_shop(
         &mut self,
-        _rule: &GoToSereniteaPotShopRule,
-        _configured_objects: &[String],
+        rule: &GoToSereniteaPotShopRule,
+        configured_objects: &[String],
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
-        Err(TaskError::CommonJobExecution(
-            "GoToSereniteaPot live execution requires desktop realm-depot shop adapter".to_string(),
+        let server_time_zone_offset_minutes =
+            desktop_server_time_zone_offset_minutes(self.config, "GoToSereniteaPot")
+                .map_err(TaskError::CommonJobExecution)?;
+        let current_day = desktop_go_to_serenitea_pot_current_shop_day(
+            rule.server_day_start_hour,
+            server_time_zone_offset_minutes,
+        )?;
+        let targets =
+            desktop_go_to_serenitea_pot_shop_targets(rule, configured_objects, current_day);
+        if targets.is_empty() {
+            return Ok(CommonJobRuntimeOutcome::Matched(false));
+        }
+
+        let shop_report = self.go_to_serenitea_pot_choose_talk_option(&rule.shop_option_text, 0)?;
+        if !desktop_go_to_serenitea_pot_talk_option_clicked(&shop_report) {
+            return Ok(CommonJobRuntimeOutcome::Matched(false));
+        }
+        if rule.after_shop_option_click_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.after_shop_option_click_ms)?;
+        }
+
+        Ok(CommonJobRuntimeOutcome::Matched(
+            self.go_to_serenitea_pot_purchase_shop_items(rule, &targets)?,
         ))
     }
 
@@ -15868,6 +15988,100 @@ fn desktop_go_to_serenitea_pot_ocr_match_rect(
             )
             .ok()
         })
+}
+
+fn desktop_go_to_serenitea_pot_current_shop_day(
+    server_day_start_hour: u8,
+    server_time_zone_offset_minutes: i32,
+) -> bgi_task::Result<GoToSereniteaPotDayOfWeek> {
+    let server_offset_seconds = server_time_zone_offset_minutes
+        .checked_mul(60)
+        .ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot shop server timezone minutes overflow: {server_time_zone_offset_minutes}"
+            ))
+        })?;
+    let server_offset = FixedOffset::east_opt(server_offset_seconds).ok_or_else(|| {
+        TaskError::CommonJobExecution(format!(
+            "GoToSereniteaPot shop server timezone seconds are invalid: {server_offset_seconds}"
+        ))
+    })?;
+    Ok(desktop_go_to_serenitea_pot_shop_day_for_server_time(
+        Local::now().with_timezone(&server_offset),
+        server_day_start_hour,
+    ))
+}
+
+fn desktop_go_to_serenitea_pot_shop_day_for_server_time(
+    server_now: DateTime<FixedOffset>,
+    server_day_start_hour: u8,
+) -> GoToSereniteaPotDayOfWeek {
+    let weekday = if server_now.hour() < u32::from(server_day_start_hour) {
+        desktop_go_to_serenitea_pot_previous_weekday(server_now.weekday())
+    } else {
+        server_now.weekday()
+    };
+    desktop_go_to_serenitea_pot_day_from_weekday(weekday)
+}
+
+fn desktop_go_to_serenitea_pot_previous_weekday(weekday: Weekday) -> Weekday {
+    match weekday {
+        Weekday::Mon => Weekday::Sun,
+        Weekday::Tue => Weekday::Mon,
+        Weekday::Wed => Weekday::Tue,
+        Weekday::Thu => Weekday::Wed,
+        Weekday::Fri => Weekday::Thu,
+        Weekday::Sat => Weekday::Fri,
+        Weekday::Sun => Weekday::Sat,
+    }
+}
+
+fn desktop_go_to_serenitea_pot_day_from_weekday(weekday: Weekday) -> GoToSereniteaPotDayOfWeek {
+    match weekday {
+        Weekday::Mon => GoToSereniteaPotDayOfWeek::Monday,
+        Weekday::Tue => GoToSereniteaPotDayOfWeek::Tuesday,
+        Weekday::Wed => GoToSereniteaPotDayOfWeek::Wednesday,
+        Weekday::Thu => GoToSereniteaPotDayOfWeek::Thursday,
+        Weekday::Fri => GoToSereniteaPotDayOfWeek::Friday,
+        Weekday::Sat => GoToSereniteaPotDayOfWeek::Saturday,
+        Weekday::Sun => GoToSereniteaPotDayOfWeek::Sunday,
+    }
+}
+
+fn desktop_go_to_serenitea_pot_shop_targets<'a>(
+    rule: &'a GoToSereniteaPotShopRule,
+    configured_objects: &[String],
+    current_day: GoToSereniteaPotDayOfWeek,
+) -> Vec<&'a GoToSereniteaPotShopItemLocator> {
+    let Some(selector) = configured_objects
+        .get(rule.day_selector_index)
+        .map(|value| value.trim())
+    else {
+        return Vec::new();
+    };
+    let daily_repeat = selector == rule.daily_repeat_label;
+    let due_day = rule
+        .valid_day_labels
+        .iter()
+        .find(|day| day.label == selector)
+        .map(|day| day.day_of_week == current_day)
+        .unwrap_or(false);
+    if !daily_repeat && !due_day {
+        return Vec::new();
+    }
+
+    configured_objects
+        .iter()
+        .skip(rule.day_selector_index + 1)
+        .filter_map(|configured| {
+            let configured = configured.trim();
+            let item = rule
+                .items
+                .iter()
+                .find(|item| item.item.legacy_name() == configured)?;
+            Some(item)
+        })
+        .collect()
 }
 
 fn desktop_go_to_serenitea_pot_ayuan_candidate_from_regions(
@@ -22654,6 +22868,86 @@ mod tests {
         .unwrap();
 
         assert_eq!(rect, Rect::new(310, 220, 80, 16).unwrap());
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_shop_targets_apply_day_gate_and_skip_selector() {
+        let shop_config = serde_json::json!({
+            "secretTreasureObjects": ["星期三", "摩拉", "布匹", "未知商品"]
+        });
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, Some(&shop_config))
+                .unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+
+        let targets = desktop_go_to_serenitea_pot_shop_targets(
+            &plan.shop_rule,
+            &plan.secret_treasure_objects,
+            GoToSereniteaPotDayOfWeek::Wednesday,
+        );
+
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].item.legacy_name(), "摩拉");
+        assert_eq!(targets[1].item.legacy_name(), "布匹");
+        assert!(desktop_go_to_serenitea_pot_shop_targets(
+            &plan.shop_rule,
+            &plan.secret_treasure_objects,
+            GoToSereniteaPotDayOfWeek::Thursday,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_shop_targets_support_daily_repeat() {
+        let shop_config = serde_json::json!({
+            "secretTreasureObjects": ["每天重复", "须臾树脂"]
+        });
+        let Some(CommonJobExecutionPlan::GoToSereniteaPot(plan)) =
+            bgi_task::plan_common_job(bgi_task::GO_TO_SERENITEA_POT_TASK_KEY, Some(&shop_config))
+                .unwrap()
+        else {
+            panic!("expected GoToSereniteaPot common job plan");
+        };
+
+        let targets = desktop_go_to_serenitea_pot_shop_targets(
+            &plan.shop_rule,
+            &plan.secret_treasure_objects,
+            GoToSereniteaPotDayOfWeek::Sunday,
+        );
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].item.legacy_name(), "须臾树脂");
+
+        let daily_only = vec!["每天重复".to_string()];
+        assert!(desktop_go_to_serenitea_pot_shop_targets(
+            &plan.shop_rule,
+            &daily_only,
+            GoToSereniteaPotDayOfWeek::Sunday,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_shop_day_uses_four_oclock_boundary() {
+        let before_reset = DateTime::parse_from_rfc3339("2026-07-01T03:59:00+08:00").unwrap();
+        let after_reset = DateTime::parse_from_rfc3339("2026-07-01T04:00:00+08:00").unwrap();
+
+        assert_eq!(
+            desktop_go_to_serenitea_pot_shop_day_for_server_time(before_reset, 4),
+            GoToSereniteaPotDayOfWeek::Tuesday
+        );
+        assert_eq!(
+            desktop_go_to_serenitea_pot_shop_day_for_server_time(after_reset, 4),
+            GoToSereniteaPotDayOfWeek::Wednesday
+        );
+        assert_eq!(
+            desktop_go_to_serenitea_pot_day_from_weekday(
+                desktop_go_to_serenitea_pot_previous_weekday(Weekday::Mon)
+            ),
+            GoToSereniteaPotDayOfWeek::Sunday
+        );
     }
 
     #[test]
