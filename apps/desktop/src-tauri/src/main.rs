@@ -3777,6 +3777,7 @@ fn task_execute_auto_pathing_action_boundary(
 
         let game_window = find_desktop_game_window(&config);
         let boundary = execute_desktop_auto_pathing_action_boundary_live_plan(
+            &app_root,
             &config,
             game_window.as_ref(),
             Arc::clone(&script_cancellation),
@@ -7501,6 +7502,7 @@ fn execute_desktop_independent_task_live_plan(
             let auto_pathing_config = AutoPathingExecutionConfig::from_value(plan.config.as_ref());
             let auto_pathing_plan = plan_auto_pathing(app_root, &auto_pathing_config.route)?;
             let report = execute_desktop_auto_pathing_action_boundary_live_plan(
+                app_root,
                 config,
                 game_window,
                 cancellation,
@@ -8518,6 +8520,7 @@ where
 }
 
 fn execute_desktop_auto_pathing_action_boundary_live_plan(
+    app_root: &Path,
     config: &AppConfig,
     game_window: Option<&GameWindowMatch>,
     cancellation: Arc<InputCancellationToken>,
@@ -8562,6 +8565,7 @@ fn execute_desktop_auto_pathing_action_boundary_live_plan(
     };
 
     execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+        app_root,
         config,
         capture_size,
         Arc::clone(&cancellation),
@@ -8579,6 +8583,7 @@ fn execute_desktop_auto_pathing_action_boundary_live_plan(
 }
 
 fn execute_desktop_auto_pathing_action_boundary_live_plan_with_capture<C, F>(
+    app_root: &Path,
     config: &AppConfig,
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
@@ -8595,6 +8600,7 @@ where
         auto_eat_config: config.auto_eat_config.clone(),
     });
     let mut movement_runtime = DesktopAutoPathingMovementRuntime::new(
+        app_root,
         capture,
         auto_eat_plan,
         config.pathing_condition_config.only_in_teleport_recover,
@@ -8611,6 +8617,7 @@ where
 }
 
 struct DesktopAutoPathingMovementRuntime<C> {
+    app_root: PathBuf,
     capture: C,
     auto_eat_plan: AutoEatExecutionPlan,
     only_in_teleport_recover: bool,
@@ -8619,12 +8626,14 @@ struct DesktopAutoPathingMovementRuntime<C> {
 
 impl<C> DesktopAutoPathingMovementRuntime<C> {
     fn new(
+        app_root: &Path,
         capture: C,
         auto_eat_plan: AutoEatExecutionPlan,
         only_in_teleport_recover: bool,
         cancellation: Arc<InputCancellationToken>,
     ) -> Self {
         Self {
+            app_root: app_root.to_path_buf(),
             capture,
             auto_eat_plan,
             only_in_teleport_recover,
@@ -8674,6 +8683,25 @@ where
             return Ok(AutoPathingPhaseExecution::executed(format!(
                 "AutoPathing RecoverWhenLowHp probed current avatar HP at waypoint {} and no recovery was needed",
                 context.waypoint.global_index
+            )));
+        }
+
+        if context.phase.phase == bgi_core::PathingWaypointPhase::BeforeMoveToTarget
+            && context
+                .waypoint
+                .action
+                .as_deref()
+                .is_some_and(|action| action.eq_ignore_ascii_case("log_output"))
+        {
+            let message = context
+                .waypoint
+                .action_params
+                .as_deref()
+                .unwrap_or_default();
+            append_desktop_log(&self.app_root, "INFO", message);
+            return Ok(AutoPathingPhaseExecution::executed(format!(
+                "AutoPathing log_output wrote desktop log at waypoint {}: {}",
+                context.waypoint.global_index, message
             )));
         }
 
@@ -24287,6 +24315,7 @@ mod tests {
             )]);
 
         let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+            &root,
             &AppConfig::default(),
             capture_size,
             Arc::new(InputCancellationToken::new()),
@@ -24313,8 +24342,8 @@ mod tests {
             .as_ref()
             .expect("expected movement contract report");
         assert!(movement_report.movement_contract_consumed);
-        assert_eq!(movement_report.executed_phases, 1);
-        assert_eq!(movement_report.skipped_phases, 1);
+        assert_eq!(movement_report.executed_phases, 2);
+        assert_eq!(movement_report.skipped_phases, 0);
         assert_eq!(movement_report.unsupported_phases, 1);
         assert_eq!(
             movement_report.failed_phase.as_ref().unwrap().phase,
@@ -24330,6 +24359,17 @@ mod tests {
             movement_phase_reports[0].status,
             bgi_task::AutoPathingPhaseExecutionStatus::Executed
         );
+        assert_eq!(
+            movement_phase_reports[1].phase,
+            bgi_core::PathingWaypointPhase::BeforeMoveToTarget
+        );
+        assert_eq!(
+            movement_phase_reports[1].status,
+            bgi_task::AutoPathingPhaseExecutionStatus::Executed
+        );
+        assert!(movement_phase_reports[1]
+            .message
+            .contains("desktop live route reached"));
         assert!(!movement_report
             .movement_pending_dependencies
             .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
@@ -24354,6 +24394,9 @@ mod tests {
                 phase.phase == bgi_core::PathingWaypointPhase::MoveTo
                     && phase.status == bgi_task::PathingBoundaryStatus::Unsupported
             }));
+        let desktop_log = fs::read_to_string(desktop_log_path(&root)).unwrap();
+        assert!(desktop_log.contains("[INF] RustDesktop"));
+        assert!(desktop_log.contains("desktop live route reached"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -24378,6 +24421,7 @@ mod tests {
         let mut frame_source = DesktopTalkOptionTestFrameSource::new([frame]);
 
         let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+            &root,
             &AppConfig::default(),
             capture_size,
             Arc::new(InputCancellationToken::new()),
@@ -24430,6 +24474,7 @@ mod tests {
         let capture_called = std::cell::Cell::new(false);
 
         let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+            &root,
             &config,
             capture_size,
             Arc::new(InputCancellationToken::new()),
@@ -24452,14 +24497,14 @@ mod tests {
 
         assert!(!capture_called.get());
         assert!(report.boundary_completed);
-        assert!(!report.movement_attempted);
+        assert!(report.movement_attempted);
         assert!(!report.native_pathing_completed);
         let movement_report = report
             .movement_report
             .as_ref()
             .expect("expected movement contract report");
-        assert_eq!(movement_report.executed_phases, 0);
-        assert_eq!(movement_report.skipped_phases, 2);
+        assert_eq!(movement_report.executed_phases, 1);
+        assert_eq!(movement_report.skipped_phases, 1);
         assert_eq!(movement_report.unsupported_phases, 1);
         assert_eq!(
             movement_report.failed_phase.as_ref().unwrap().phase,
@@ -24478,6 +24523,19 @@ mod tests {
         assert!(movement_phase_reports[0]
             .message
             .contains("only_in_teleport_recover"));
+        assert_eq!(
+            movement_phase_reports[1].phase,
+            bgi_core::PathingWaypointPhase::BeforeMoveToTarget
+        );
+        assert_eq!(
+            movement_phase_reports[1].status,
+            bgi_task::AutoPathingPhaseExecutionStatus::Executed
+        );
+        assert!(movement_phase_reports[1]
+            .message
+            .contains("desktop live route reached"));
+        let desktop_log = fs::read_to_string(desktop_log_path(&root)).unwrap();
+        assert!(desktop_log.contains("desktop live route reached"));
         let _ = fs::remove_dir_all(root);
     }
 
