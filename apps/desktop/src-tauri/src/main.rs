@@ -86,16 +86,17 @@ use bgi_task::{
     execute_wonderland_cycle_plan, extract_redeem_codes_from_text, independent_tasks,
     parse_auto_pick_text_list, plan_auto_cook, plan_auto_eat, plan_auto_fight, plan_auto_fish,
     plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
-    plan_get_grid_icons, plan_quick_buy, plan_quick_enhance_artifact_macro,
+    plan_get_grid_icons, plan_get_grid_icons_artifact_set_flower_without_glyph_ocr,
+    plan_get_grid_icons_artifact_set_icon_crop, plan_quick_buy, plan_quick_enhance_artifact_macro,
     plan_quick_serenitea_pot, plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro,
     plan_wonderland_cycle, redeem_code_entries_from_strings,
-    reduce_lower_head_then_walk_to_tracking_frame, runtime_triggers, select_triggers_for_tick,
-    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
-    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
-    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
-    AutoEatExecutionConfig, AutoEatExecutionPlan, AutoEatFoodExecutionPlan,
-    AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime, AutoEatRuntime,
-    AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    reduce_lower_head_then_walk_to_tracking_frame, resolve_get_grid_icons_artifact_set_flower_name,
+    runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
+    switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
+    AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
+    AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
+    AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
+    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
@@ -189,7 +190,8 @@ use bgi_task::{
     AUTO_STYGIAN_ONSLAUGHT_TASK_KEY, AUTO_TRACK_DEFAULT_CAPTURE_WIDTH, AUTO_TRACK_PATH_TASK_KEY,
     AUTO_TRACK_TASK_KEY, AUTO_WOOD_DEFAULT_CAPTURE_WIDTH, AUTO_WOOD_TASK_KEY,
     CHOOSE_TALK_OPTION_ICON, CHOOSE_TALK_OPTION_VK_SPACE, COMMON_BTN_WHITE_CONFIRM,
-    QUICK_BUY_TASK_KEY, QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
+    GET_GRID_ICONS_DEFAULT_CAPTURE_WIDTH, QUICK_BUY_TASK_KEY,
+    QUICK_ENHANCE_ARTIFACT_MACRO_TASK_KEY, QUICK_SERENITEA_POT_TASK_KEY,
     QUICK_TELEPORT_MAP_SCALE_BUTTON, QUICK_TELEPORT_MAP_SETTINGS_BUTTON,
     RETURN_MAIN_UI_DEFAULT_ESCAPE_ATTEMPTS, RETURN_MAIN_UI_PAIMON_MENU, RETURN_MAIN_UI_TASK_KEY,
     TURN_AROUND_MACRO_TASK_KEY, USE_REDEEM_CODE_TASK_KEY,
@@ -8002,6 +8004,9 @@ where
         message: &str,
     ) -> bgi_task::Result<()> {
         self.ensure_not_cancelled()?;
+        if *grid_screen_name == GridScreenName::ArtifactSetFilter {
+            return Ok(());
+        }
         Err(TaskError::CommonJobExecution(format!(
             "GetGridIcons live execution requires desktop manual-open confirmation adapter for {grid_screen_name:?}: {message}"
         )))
@@ -8010,15 +8015,9 @@ where
     fn enumerate_get_grid_icons_grid_items(
         &mut self,
         grid_rule: &GetGridIconsGridRule,
-        artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
+        _artifact_set_filter_rule: Option<&GetGridIconsArtifactSetFilterRule>,
     ) -> bgi_task::Result<GetGridIconsGridEnumeration> {
         self.ensure_not_cancelled()?;
-        if artifact_set_filter_rule.is_some() || grid_rule.uses_artifact_set_filter_screen {
-            return Err(TaskError::CommonJobExecution(
-                "GetGridIcons live execution requires desktop ArtifactSetFilter grid enumeration adapter"
-                    .to_string(),
-            ));
-        }
         let capture_size = self.capture_size;
         let common = self.common_mut("visible inventory grid enumeration")?;
         let (visible_items, visible_grid_item_cells) =
@@ -8125,25 +8124,114 @@ where
 
     fn ocr_get_grid_icons_artifact_set_flower_name(
         &mut self,
-        _item: &GetGridIconsGridItem,
-        _rule: &GetGridIconsArtifactSetFilterRule,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsArtifactSetFilterRule,
     ) -> bgi_task::Result<Option<String>> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop artifact-set OCR adapter".to_string(),
-        ))
+        let common = self.common_mut("artifact-set flower-name OCR")?;
+        let frame = common.frame_source_mut().capture_frame()?;
+        let name_roi =
+            desktop_get_grid_icons_width_relative_roi(frame.size, &rule.flower_name_roi)?;
+        let name_region = crop_bgr_image(&frame, name_roi).map_err(|error| {
+            TaskError::VisionPlan(format!(
+                "GetGridIcons artifact-set name OCR crop failed for page {} item {} roi {:?}: {error}",
+                item.page_index, item.item_index, name_roi
+            ))
+        })?;
+        let regions = desktop_winrt_ocr_bgr_image(&name_region).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons artifact-set name WinRT OCR failed for page {} item {}: {error}",
+                item.page_index, item.item_index
+            ))
+        })?;
+        let name_region_ocr = OcrResult { regions };
+        let ocr_plan = plan_get_grid_icons_artifact_set_flower_without_glyph_ocr(
+            rule,
+            frame.size,
+            &name_region_ocr,
+        )
+        .ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons artifact-set OCR could not find anchor text {} for page {} item {}",
+                rule.anchor_text, item.page_index, item.item_index
+            ))
+        })?;
+        let flower_without_glyph =
+            crop_bgr_image(&name_region, ocr_plan.flower_without_glyph_roi_in_name_region)
+                .map_err(|error| {
+                    TaskError::VisionPlan(format!(
+                        "GetGridIcons artifact-set flower-without-glyph crop failed for page {} item {} roi {:?}: {error}",
+                        item.page_index,
+                        item.item_index,
+                        ocr_plan.flower_without_glyph_roi_in_name_region
+                    ))
+                })?;
+        let without_glyph_regions =
+            desktop_winrt_ocr_bgr_image(&flower_without_glyph).map_err(|error| {
+                TaskError::CommonJobExecution(format!(
+                    "GetGridIcons artifact-set flower-without-glyph WinRT OCR failed for page {} item {}: {error}",
+                    item.page_index, item.item_index
+                ))
+            })?;
+        let without_glyph_text =
+            desktop_get_grid_icons_ocr_text_from_regions(&without_glyph_regions);
+        let flower_name = resolve_get_grid_icons_artifact_set_flower_name(
+            &ocr_plan.flower_with_glyph_text,
+            &without_glyph_text,
+        )
+        .ok_or_else(|| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons artifact-set flower-name OCR length mismatch for page {} item {}",
+                item.page_index, item.item_index
+            ))
+        })?;
+        Ok(Some(flower_name))
     }
 
     fn crop_get_grid_icons_artifact_set_icon_png(
         &mut self,
-        _item: &GetGridIconsGridItem,
-        _rule: &GetGridIconsArtifactSetFilterRule,
+        item: &GetGridIconsGridItem,
+        rule: &GetGridIconsArtifactSetFilterRule,
     ) -> bgi_task::Result<GetGridIconsPngData> {
         self.ensure_not_cancelled()?;
-        Err(TaskError::CommonJobExecution(
-            "GetGridIcons live execution requires desktop artifact-set icon crop adapter"
-                .to_string(),
-        ))
+        let cell = self
+            .visible_grid_item_cells
+            .get(item.item_index as usize)
+            .ok_or_else(|| {
+                TaskError::CommonJobExecution(
+                    "GetGridIcons live execution requires desktop ArtifactSetFilter pre-click grid-cell crop cache for the requested item".to_string(),
+                )
+            })?;
+        let asset_scale = desktop_get_grid_icons_asset_scale(self.capture_size);
+        let crop_plan =
+            plan_get_grid_icons_artifact_set_icon_crop(&rule.icon_crop_rule, cell.size, asset_scale)
+                .ok_or_else(|| {
+                    TaskError::VisionPlan(format!(
+                        "GetGridIcons artifact-set icon crop plan failed for page {} item {} cell size {:?}",
+                        item.page_index, item.item_index, cell.size
+                    ))
+                })?;
+        let cropped =
+            crop_bgr_image(cell, crop_plan.source_rect_in_item_region).map_err(|error| {
+                TaskError::VisionPlan(format!(
+                "GetGridIcons artifact-set icon crop failed for page {} item {} rect {:?}: {error}",
+                item.page_index, item.item_index, crop_plan.source_rect_in_item_region
+            ))
+            })?;
+        let normalized =
+            resize_bgr_nearest(&cropped, crop_plan.normalized_size).map_err(|error| {
+                TaskError::VisionPlan(format!(
+                "GetGridIcons artifact-set icon resize failed for page {} item {} to {:?}: {error}",
+                item.page_index, item.item_index, crop_plan.normalized_size
+            ))
+            })?;
+        let bytes = encode_bgr_image_png(&normalized).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GetGridIcons live execution could not encode ArtifactSetFilter icon for page {} item {} as PNG: {error}",
+                item.page_index, item.item_index
+            ))
+        })?;
+        Ok(GetGridIconsPngData { bytes })
     }
 
     fn save_get_grid_icons_png(
@@ -8188,6 +8276,10 @@ fn desktop_get_grid_icons_ocr_text_from_regions(regions: &[OcrResultRegion]) -> 
         .map(|region| region.text)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn desktop_get_grid_icons_asset_scale(capture_size: VisionSize) -> f64 {
+    capture_size.width as f64 / GET_GRID_ICONS_DEFAULT_CAPTURE_WIDTH as f64
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24456,6 +24548,79 @@ mod tests {
         let (_, frame_source, input_driver, clock, _) = common.into_parts();
         assert_eq!(frame_source.captures, 1);
         assert_eq!(input_driver.clicks, vec![(250, 210)]);
+        assert_eq!(clock.waits, vec![300]);
+    }
+
+    #[test]
+    fn desktop_get_grid_icons_artifact_set_filter_visible_route_maps_items_and_icon_crop() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let plan = plan_get_grid_icons(GetGridIconsExecutionConfig::from_value(Some(
+            &serde_json::json!({
+                "gridName": "ArtifactSetFilter",
+                "maxNumToGet": 2
+            }),
+        )))
+        .unwrap();
+        let artifact_rule = plan
+            .artifact_set_filter_rule
+            .as_ref()
+            .expect("expected ArtifactSetFilter rule");
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        for rect in [
+            Rect::new(80, 360, 600, 70).unwrap(),
+            Rect::new(720, 360, 600, 70).unwrap(),
+            Rect::new(80, 470, 600, 70).unwrap(),
+            Rect::new(720, 470, 600, 70).unwrap(),
+        ] {
+            draw_desktop_bgr_rect_edge(&mut frame, rect, [245, 245, 245]);
+        }
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopGetGridIconsRuntime::new(
+            Path::new("."),
+            Some(common_runtime),
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+
+        runtime
+            .require_get_grid_icons_manual_open(
+                &GridScreenName::ArtifactSetFilter,
+                &plan.open_rule.manual_open_message,
+            )
+            .unwrap();
+        let enumeration = runtime
+            .enumerate_get_grid_icons_grid_items(&plan.grid_rule, Some(artifact_rule))
+            .unwrap();
+
+        assert!(!enumeration.scan_complete);
+        let items = enumeration.items;
+        assert_eq!(items.len(), 4);
+        assert_eq!(
+            items.iter().map(|item| item.item_index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(runtime.visible_grid_item_cells.len(), 4);
+
+        runtime.click_get_grid_icons_item(&items[0], 300).unwrap();
+        let png = runtime
+            .crop_get_grid_icons_artifact_set_icon_png(&items[0], artifact_rule)
+            .unwrap();
+        let decoded = BgrImage::decode(&png.bytes).unwrap();
+        assert_eq!(decoded.size, VisionSize::new(125, 125));
+
+        let common = runtime.common.take().unwrap();
+        let (_, frame_source, input_driver, clock, _) = common.into_parts();
+        assert_eq!(frame_source.captures, 1);
+        assert_eq!(
+            input_driver.clicks,
+            vec![(items[0].rect.center().x, items[0].rect.center().y)]
+        );
         assert_eq!(clock.waits, vec![300]);
     }
 

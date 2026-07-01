@@ -923,8 +923,8 @@ pub fn plan_get_grid_icons(
         pending_native: vec![
             "desktop live adapters are not wired yet for TaskRunner/ISoloTask cancellation lifecycle".to_string(),
             "desktop live adapters are partially wired for ordinary inventory ReturnMainUi/OpenInventory/tab handling and visible-page cell clicks; manual-open prompts and special-grid input dispatch remain pending".to_string(),
-            "desktop live adapters are partially wired for ordinary inventory current-visible-page enumeration plus pre-click full-cell PNG crop caching with scan_complete=false contract protection; full GridScroller page scrolling, OpenCV ArtifactSetFilterScreen contour enumeration, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
-            "desktop live adapters are partially wired for ordinary item-name WinRT OCR and optional star color-component suffix detection; Paddle OCR parity, artifact-set flower-name OCR/crop execution, and overlay cleanup remain pending".to_string(),
+            "desktop live adapters are partially wired for ordinary inventory and ArtifactSetFilter current-visible-page enumeration plus pre-click full-cell PNG/artifact icon crop caching with scan_complete=false contract protection; full GridScroller page scrolling, first-page de-highlight, anti-recycling clicks, and phase-correlation parity remain pending".to_string(),
+            "desktop live adapters are partially wired for ordinary item-name WinRT OCR, ArtifactSetFilter flower-name WinRT double-OCR selection, ArtifactSetFilter 60x60-to-125x125 icon crop execution, and optional star color-component suffix detection; Paddle OCR parity, ArtifactSetFilter detail-page retry scrolling, and overlay cleanup remain pending".to_string(),
             "optional GridIconsAccuracyTestTask ONNX/prototype inference live adapter remains pending".to_string(),
         ],
     })
