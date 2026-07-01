@@ -615,7 +615,7 @@ pub fn plan_go_to_crafting_bench(
         resin_recognition_rule,
         resin_craft_rule,
         steps,
-        notes: "Legacy crafting-bench pathing, dialogue interaction, condensed-resin recognition, and crafting flow are represented and executable through injectable pathing/OCR/craft hooks; bundled PathExecutor JSON can be validated through the shared movement-contract preflight, and the desktop live route now has capture/OCR/send-input adapters for the crafting-bench F interaction retry, legacy-style talk-option draining with crafting-page and main-UI stop checks, and condensed-resin reduce/increase/confirm clicks. Desktop live movement, one-dragon config loading, and MinResinToKeep resin-count OCR remain pending.".to_string(),
+        notes: "Legacy crafting-bench pathing, dialogue interaction, condensed-resin recognition, and crafting flow are represented and executable through injectable pathing/OCR/craft hooks; bundled PathExecutor JSON can be converted through the shared AutoPathing action boundary with legacy TrackMap conversion, and the desktop live route now consumes the shared movement contract before handing teleport, interaction, OCR, and click work to live adapters. Capture/OCR/send-input adapters for the crafting-bench F interaction retry, legacy-style talk-option draining with crafting-page and main-UI stop checks, and condensed-resin reduce/increase/confirm clicks are wired; full desktop movement dispatch, one-dragon config loading, and MinResinToKeep resin-count OCR remain pending.".to_string(),
     })
 }
 

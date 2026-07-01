@@ -14494,7 +14494,7 @@ fn execute_desktop_go_to_crafting_bench_live(
     let common_runtime = PureTemplateCommonJobRuntime::with_task_assets(
         frame_source,
         input_driver,
-        CancellableCommonJobClock::new(cancellation),
+        CancellableCommonJobClock::new(Arc::clone(&cancellation)),
     );
     let pick_key_locator = desktop_auto_pick_key_locator(plan.capture_size)
         .map_err(|error| format!("GoToCraftingBench F-key locator setup failed: {error}"))?;
@@ -14514,8 +14514,14 @@ fn execute_desktop_go_to_crafting_bench_live(
         white_confirm_locator: plan.locators.white_confirm.clone(),
         black_confirm_locator: plan.locators.black_confirm.clone(),
     };
-    let mut runtime =
-        DesktopGoToCraftingBenchRuntime::new(common_runtime, plan.capture_size, locators);
+    let mut runtime = DesktopGoToCraftingBenchRuntime::new(
+        common_runtime,
+        config.clone(),
+        window.clone(),
+        cancellation,
+        plan.capture_size,
+        locators,
+    );
     execute_go_to_crafting_bench_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
 }
@@ -14638,8 +14644,22 @@ fn desktop_common_job_pathing_pending_message(
     message
 }
 
+fn desktop_common_job_pathing_movement_completed(report: &AutoPathingActionBoundaryReport) -> bool {
+    report
+        .movement_report
+        .as_ref()
+        .is_some_and(|movement_report| {
+            movement_report.native_pathing_completed
+                && movement_report.movement_completion_status
+                    == bgi_task::AutoPathingMovementCompletionStatus::Completed
+        })
+}
+
 struct DesktopGoToCraftingBenchRuntime<F, I, C> {
     common: PureTemplateCommonJobRuntime<F, I, C>,
+    config: AppConfig,
+    window: GameWindowMatch,
+    cancellation: Arc<InputCancellationToken>,
     capture_size: VisionSize,
     locators: DesktopGoToCraftingBenchLocators,
 }
@@ -14659,11 +14679,17 @@ struct DesktopGoToCraftingBenchLocators {
 impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
     fn new(
         common: PureTemplateCommonJobRuntime<F, I, C>,
+        config: AppConfig,
+        window: GameWindowMatch,
+        cancellation: Arc<InputCancellationToken>,
         capture_size: VisionSize,
         locators: DesktopGoToCraftingBenchLocators,
     ) -> Self {
         Self {
             common,
+            config,
+            window,
+            cancellation,
             capture_size,
             locators,
         }
@@ -14771,11 +14797,37 @@ where
         &mut self,
         rule: &GoToCraftingBenchPathingRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
-        let report = bgi_task::preflight_common_job_pathing_rule(&rule.pathing_json)?;
-        Err(TaskError::CommonJobExecution(format!(
-            "GoToCraftingBench live execution requires desktop PathExecutor movement adapter for {} after validating {} waypoints",
-            rule.pathing_json, report.waypoint_count
-        )))
+        let config = self.config.clone();
+        let live_config = config.clone();
+        let window = self.window.clone();
+        let cancellation = Arc::clone(&self.cancellation);
+        let cancellation_for_live = Arc::clone(&self.cancellation);
+        let report = execute_desktop_common_job_pathing_action_boundary(
+            "GoToCraftingBench",
+            &config,
+            self.capture_size,
+            cancellation,
+            &rule.pathing_json,
+            move |common_job_plan| {
+                execute_desktop_common_job_live_plan(
+                    &live_config,
+                    Some(&window),
+                    Arc::clone(&cancellation_for_live),
+                    common_job_plan,
+                )
+            },
+        )?;
+        if desktop_common_job_pathing_movement_completed(&report) {
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        } else {
+            Err(TaskError::CommonJobExecution(
+                desktop_common_job_pathing_pending_message(
+                    "GoToCraftingBench",
+                    &rule.pathing_json,
+                    &report,
+                ),
+            ))
+        }
     }
 
     fn retry_crafting_bench_interaction(
@@ -15079,15 +15131,7 @@ where
                 )
             },
         )?;
-        let movement_completed = report
-            .movement_report
-            .as_ref()
-            .is_some_and(|movement_report| {
-                movement_report.native_pathing_completed
-                    && movement_report.movement_completion_status
-                        == bgi_task::AutoPathingMovementCompletionStatus::Completed
-            });
-        if movement_completed {
+        if desktop_common_job_pathing_movement_completed(&report) {
             Ok(CommonJobRuntimeOutcome::Matched(true))
         } else {
             Err(TaskError::CommonJobExecution(
@@ -21828,7 +21872,14 @@ mod tests {
                 white_confirm_locator: self.white_confirm_locator.clone(),
                 black_confirm_locator: self.black_confirm_locator.clone(),
             };
-            DesktopGoToCraftingBenchRuntime::new(common, self.capture_size, locators)
+            DesktopGoToCraftingBenchRuntime::new(
+                common,
+                AppConfig::default(),
+                desktop_test_game_window(48, 40),
+                Arc::new(InputCancellationToken::new()),
+                self.capture_size,
+                locators,
+            )
         }
     }
 
@@ -22961,7 +23012,36 @@ mod tests {
         assert!(!error.contains("talk-option selection adapter"));
         assert!(!error.contains("crafting-bench interaction adapter"));
         assert!(!error.contains("condensed-resin crafting adapter"));
-        assert!(!error.contains("native PathExecutor adapter"));
+        assert!(!error.contains("consumed PathExecutor movement contract"));
+        assert!(!error.contains("requires desktop PathExecutor movement adapter"));
+    }
+
+    #[test]
+    fn desktop_go_to_crafting_bench_runtime_reports_pathing_movement_boundary() {
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月" })),
+        )
+        .unwrap() else {
+            panic!("expected GoToCraftingBench common job plan");
+        };
+
+        let error = execute_desktop_go_to_crafting_bench_live(
+            &AppConfig::default(),
+            &desktop_test_game_window(1920, 1080),
+            &plan,
+            Arc::new(InputCancellationToken::new()),
+        )
+        .unwrap_err();
+
+        assert!(error
+            .contains("GoToCraftingBench live execution consumed PathExecutor movement contract"));
+        assert!(error.contains("native pathing remains pending"));
+        assert!(error.contains("HandleTeleport"));
+        assert!(!error.contains("requires desktop PathExecutor movement adapter"));
+        assert!(!error.contains("crafting-bench interaction adapter"));
+        assert!(!error.contains("talk-option selection adapter"));
+        assert!(!error.contains("condensed-resin crafting adapter"));
     }
 
     #[test]

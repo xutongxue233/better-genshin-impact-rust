@@ -16303,6 +16303,10 @@ fn task_invocation_evaluation_reports_runtime_and_native_boundaries() {
     assert!(bridge
         .supported_actions
         .contains(&CommonJobRuntimeActionKind::OneKeyExpedition));
+    assert!(bridge.notes.contains("shared AutoPathing action boundary"));
+    assert!(bridge
+        .notes
+        .contains("consume the shared movement contract"));
     assert!(!adventurers_guild.executed);
 
     let crafting_bench = evaluate_task_invocation_plan(
@@ -16343,6 +16347,10 @@ fn task_invocation_evaluation_reports_runtime_and_native_boundaries() {
     assert!(bridge
         .supported_actions
         .contains(&CommonJobRuntimeActionKind::CraftCondensedResin));
+    assert!(bridge.notes.contains("shared AutoPathing action boundary"));
+    assert!(bridge
+        .notes
+        .contains("consume the shared movement contract"));
     assert!(!crafting_bench.executed);
 
     let serenitea_pot = evaluate_task_invocation_plan(
@@ -18757,6 +18765,12 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     assert!(adventurers_guild
         .asset_roots
         .contains(&"GameTask/AutoPick/Assets"));
+    assert!(adventurers_guild
+        .notes
+        .contains("shared AutoPathing action boundary"));
+    assert!(adventurers_guild
+        .notes
+        .contains("consumes the shared movement contract"));
 
     let crafting_bench = find_task_catalog_entry("GoToCraftingBench").unwrap();
     assert_eq!(
@@ -18772,6 +18786,12 @@ fn independent_task_descriptors_distinguish_rust_plans_from_native_pending_tasks
     assert!(crafting_bench
         .asset_roots
         .contains(&"GameTask/AutoPick/Assets"));
+    assert!(crafting_bench
+        .notes
+        .contains("shared AutoPathing action boundary"));
+    assert!(crafting_bench
+        .notes
+        .contains("consumes the shared movement contract"));
 
     let serenitea_pot = find_task_catalog_entry("GoToSereniteaPot").unwrap();
     assert_eq!(serenitea_pot.launch_policy, TaskLaunchPolicy::CommonJob);
@@ -25911,6 +25931,8 @@ fn go_to_adventurers_guild_plan_preserves_legacy_pathing_dialogue_rewards_and_ex
     assert_eq!(plan.localized_texts.daily, "每日");
     assert_eq!(plan.localized_texts.catherine, "凯瑟琳");
     assert_eq!(plan.localized_texts.expedition, "探索");
+    assert!(plan.notes.contains("shared AutoPathing action boundary"));
+    assert!(plan.notes.contains("consumes the shared movement contract"));
     assert_eq!(
         plan.pathing_rule.pathing_json,
         "GameTask/Common/Element/Assets/Json/冒险家协会_枫丹.json"
@@ -26991,6 +27013,8 @@ fn go_to_crafting_bench_plan_preserves_legacy_pathing_interaction_and_condensed_
     );
     assert!(plan.resin_craft_rule.escape_after_craft);
     assert!(plan.resin_craft_rule.formula.contains("fragileResinCount"));
+    assert!(plan.notes.contains("shared AutoPathing action boundary"));
+    assert!(plan.notes.contains("consumes the shared movement contract"));
     assert_eq!(plan.steps.len(), 23);
 
     assert!(matches!(

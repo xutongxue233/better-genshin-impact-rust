@@ -475,7 +475,7 @@ pub fn common_job_executor_bridge_plan(
                 CommonJobRuntimeActionKind::CommonJob,
                 CommonJobRuntimeActionKind::ReturnResult,
             ],
-            notes: "GoToCraftingBench has a Rust state machine with injectable pathing, interaction retry, crafting-page, resin OCR, and craft-confirm hooks; invocation live execution can validate bundled PathExecutor JSON through the shared movement-contract preflight before handing later interaction/OCR/click work to caller-provided adapters.".to_string(),
+            notes: "GoToCraftingBench has a Rust state machine with injectable pathing, interaction retry, crafting-page, resin OCR, and craft-confirm hooks; invocation live execution can convert bundled PathExecutor JSON through the shared AutoPathing action boundary, consume the shared movement contract, and hand teleport, interaction, OCR, and click work to caller-provided adapters while full movement dispatch remains native-pending.".to_string(),
         }),
         CommonJobExecutionPlan::Teleport(plan) => Some(CommonJobExecutorBridgePlan {
             task_key: plan.task_key.clone(),
@@ -506,7 +506,7 @@ pub fn common_job_executor_bridge_plan(
                 CommonJobRuntimeActionKind::OneKeyExpedition,
                 CommonJobRuntimeActionKind::ReturnResult,
             ],
-            notes: "GoToAdventurersGuild has a Rust state machine with injectable party switching, encounter reward, pathing, Catherine interaction, talk-option, and one-key expedition hooks; invocation live execution can validate bundled PathExecutor JSON through the shared movement-contract preflight before handing later interaction/OCR/click work to caller-provided adapters.".to_string(),
+            notes: "GoToAdventurersGuild has a Rust state machine with injectable party switching, encounter reward, pathing, Catherine interaction, talk-option, and one-key expedition hooks; invocation live execution can convert bundled PathExecutor JSON through the shared AutoPathing action boundary, consume the shared movement contract, and hand teleport, nested common-job, interaction, OCR, and click work to caller-provided adapters while full movement dispatch remains native-pending.".to_string(),
         }),
         CommonJobExecutionPlan::GoToSereniteaPot(plan) => Some(CommonJobExecutorBridgePlan {
             task_key: plan.task_key.clone(),
