@@ -475,7 +475,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes while honoring the only-in-teleport recovery gate; native movement dispatch and recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, execute HandleTeleport through the Teleport common-job live bridge, and honor the only-in-teleport recovery gate; native movement dispatch and recovery side effects remain pending."
                 .to_string(),
     })
 }
@@ -926,11 +926,18 @@ where
     C: FnMut() -> bool,
 {
     let movement_contract = &plan.execution_plan.movement_contract;
+    let mut teleporting_movement_runtime = TeleportingAutoPathingMovementRuntime::new(
+        movement_runtime,
+        capture_size,
+        &mut live_executor,
+    );
     let movement_report = execute_auto_pathing_movement_contract_with_runtime_and_cancellation(
         plan,
-        movement_runtime,
+        &mut teleporting_movement_runtime,
         should_cancel,
     )?;
+    let mut movement_teleport_phase_reports =
+        teleporting_movement_runtime.into_teleport_phase_reports();
     let movement_attempted = movement_report.executed_phases > 0
         || movement_report.failed_phases > 0
         || movement_report.cancelled_phases > 0;
@@ -995,12 +1002,20 @@ where
                         navigation_seed: None,
                     }
                 } else if *phase == PathingWaypointPhase::HandleTeleport {
-                    execute_teleport_phase_boundary(
+                    if let Some(phase_report) = take_movement_teleport_phase_report(
+                        &mut movement_teleport_phase_reports,
                         waypoint,
-                        plan,
-                        capture_size,
-                        &mut live_executor,
-                    )?
+                        *phase,
+                    ) {
+                        phase_report
+                    } else {
+                        execute_teleport_phase_boundary(
+                            waypoint,
+                            plan,
+                            capture_size,
+                            &mut live_executor,
+                        )?
+                    }
                 } else {
                     pathing_phase_boundary_report(*phase, waypoint, plan, capture_size)?
                 };
@@ -1027,6 +1042,123 @@ where
     report.boundary_completed = true;
     report.native_pathing_completed = false;
     Ok(report)
+}
+
+struct TeleportingAutoPathingMovementRuntime<'a, R, F> {
+    inner: &'a mut R,
+    capture_size: Size,
+    live_executor: &'a mut F,
+    teleport_phase_reports: Vec<MovementTeleportPhaseReport>,
+}
+
+impl<'a, R, F> TeleportingAutoPathingMovementRuntime<'a, R, F> {
+    fn new(inner: &'a mut R, capture_size: Size, live_executor: &'a mut F) -> Self {
+        Self {
+            inner,
+            capture_size,
+            live_executor,
+            teleport_phase_reports: Vec::new(),
+        }
+    }
+
+    fn into_teleport_phase_reports(self) -> Vec<MovementTeleportPhaseReport> {
+        self.teleport_phase_reports
+    }
+}
+
+impl<R, F> AutoPathingMovementRuntime for TeleportingAutoPathingMovementRuntime<'_, R, F>
+where
+    R: AutoPathingMovementRuntime,
+    F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
+{
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        if context.phase.phase != PathingWaypointPhase::HandleTeleport {
+            return self.inner.execute_movement_phase(context);
+        }
+
+        let force_teleport = context
+            .waypoint
+            .action
+            .as_deref()
+            .is_some_and(|action| action.eq_ignore_ascii_case("force_tp"));
+        let phase_report = execute_teleport_phase_boundary_for_target(
+            context.waypoint.route_point,
+            force_teleport,
+            &context.plan.execution_plan.map_name,
+            self.capture_size,
+            self.live_executor,
+        )?;
+        let phase_execution = auto_pathing_phase_execution_from_pathing_boundary(&phase_report);
+        self.teleport_phase_reports
+            .push(MovementTeleportPhaseReport {
+                key: MovementPhaseReportKey::from_movement_context(&context),
+                report: phase_report,
+            });
+        Ok(phase_execution)
+    }
+}
+
+struct MovementTeleportPhaseReport {
+    key: MovementPhaseReportKey,
+    report: PathingPhaseBoundaryReport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MovementPhaseReportKey {
+    global_index: usize,
+    segment_index: usize,
+    segment_waypoint_index: usize,
+    phase: PathingWaypointPhase,
+}
+
+impl MovementPhaseReportKey {
+    fn from_movement_context(context: &AutoPathingMovementPhaseExecutionContext<'_>) -> Self {
+        Self {
+            global_index: context.waypoint.global_index,
+            segment_index: context.waypoint.segment_index,
+            segment_waypoint_index: context.waypoint.segment_waypoint_index,
+            phase: context.phase.phase,
+        }
+    }
+
+    fn from_waypoint_phase(waypoint: &PathingWaypointPlan, phase: PathingWaypointPhase) -> Self {
+        Self {
+            global_index: waypoint.global_index,
+            segment_index: waypoint.segment_index,
+            segment_waypoint_index: waypoint.segment_waypoint_index,
+            phase,
+        }
+    }
+}
+
+fn take_movement_teleport_phase_report(
+    reports: &mut Vec<MovementTeleportPhaseReport>,
+    waypoint: &PathingWaypointPlan,
+    phase: PathingWaypointPhase,
+) -> Option<PathingPhaseBoundaryReport> {
+    let key = MovementPhaseReportKey::from_waypoint_phase(waypoint, phase);
+    if let Some(index) = reports.iter().position(|report| report.key == key) {
+        return Some(reports.remove(index).report);
+    }
+    None
+}
+
+fn auto_pathing_phase_execution_from_pathing_boundary(
+    report: &PathingPhaseBoundaryReport,
+) -> AutoPathingPhaseExecution {
+    match report.status {
+        PathingBoundaryStatus::Executed | PathingBoundaryStatus::Reported => {
+            AutoPathingPhaseExecution::executed(report.reason.clone())
+        }
+        PathingBoundaryStatus::Skipped => AutoPathingPhaseExecution::skipped(report.reason.clone()),
+        PathingBoundaryStatus::Unsupported => {
+            AutoPathingPhaseExecution::unsupported(report.reason.clone())
+        }
+        PathingBoundaryStatus::Invalid => AutoPathingPhaseExecution::failed(report.reason.clone()),
+    }
 }
 
 fn pathing_phase_boundary_report(
@@ -1100,8 +1232,27 @@ where
         Some(PathingActionPlan::ForceTeleport(force_teleport)) => force_teleport.force_teleport,
         _ => false,
     };
+    execute_teleport_phase_boundary_for_target(
+        waypoint.route_point,
+        force_teleport,
+        &plan.execution_plan.map_name,
+        capture_size,
+        live_executor,
+    )
+}
+
+fn execute_teleport_phase_boundary_for_target<F>(
+    route_point: PathingPoint,
+    force_teleport: bool,
+    map_name: &str,
+    capture_size: Size,
+    live_executor: &mut F,
+) -> Result<PathingPhaseBoundaryReport>
+where
+    F: FnMut(&CommonJobExecutionPlan) -> Result<Option<CommonJobLiveExecutionReport>>,
+{
     let common_job_plan =
-        plan_teleport_phase_common_job(waypoint, force_teleport, plan, capture_size)?;
+        plan_teleport_phase_common_job(route_point, force_teleport, map_name, capture_size)?;
     let common_job_task_key = Some(common_job_plan.task_key().to_string());
 
     let live_execution = match live_executor(&common_job_plan) {
@@ -1112,7 +1263,7 @@ where
                 status: PathingBoundaryStatus::Unsupported,
                 reason: format!(
                     "teleport waypoint to ({:.3}, {:.3}) reached the Teleport common-job live boundary, but live execution is still unavailable: {error}",
-                    waypoint.route_point.x, waypoint.route_point.y
+                    route_point.x, route_point.y
                 ),
                 common_job_task_key,
                 common_job_plan: Some(common_job_plan),
@@ -1130,8 +1281,8 @@ where
                     PathingBoundaryStatus::Executed,
                     format!(
                         "teleport waypoint to ({:.3}, {:.3}) executed through the Teleport common-job live boundary and produced a previous-position seed ({:.3}, {:.3}) for AutoPathing track conversion",
-                        waypoint.route_point.x,
-                        waypoint.route_point.y,
+                        route_point.x,
+                        route_point.y,
                         seed.previous_position.x,
                         seed.previous_position.y
                     ),
@@ -1140,7 +1291,7 @@ where
                     PathingBoundaryStatus::Unsupported,
                     format!(
                         "teleport waypoint to ({:.3}, {:.3}) reached the Teleport common-job live boundary, but the report did not contain a navigation previous-position seed",
-                        waypoint.route_point.x, waypoint.route_point.y
+                        route_point.x, route_point.y
                     ),
                 ),
             };
@@ -1173,12 +1324,12 @@ where
             let reason = if force_teleport {
                 format!(
                     "force_tp teleport intent to ({:.3}, {:.3}) is planned through the Teleport common-job contract with force_teleport=true, but the live executor returned no report; AutoPathing native TpTask dispatch remains pending",
-                    waypoint.route_point.x, waypoint.route_point.y
+                    route_point.x, route_point.y
                 )
             } else {
                 format!(
                     "teleport waypoint to ({:.3}, {:.3}) is planned through the Teleport common-job contract, but the live executor returned no report; AutoPathing native TpTask dispatch remains pending",
-                    waypoint.route_point.x, waypoint.route_point.y
+                    route_point.x, route_point.y
                 )
             };
             Ok(PathingPhaseBoundaryReport {
@@ -1214,15 +1365,15 @@ fn teleport_navigation_seed_report(
 }
 
 fn plan_teleport_phase_common_job(
-    waypoint: &PathingWaypointPlan,
+    route_point: PathingPoint,
     force_teleport: bool,
-    plan: &AutoPathingExecutionPlan,
+    map_name: &str,
     capture_size: Size,
 ) -> Result<CommonJobExecutionPlan> {
     let config = json!({
-        "x": waypoint.route_point.x,
-        "y": waypoint.route_point.y,
-        "mapName": plan.execution_plan.map_name.clone(),
+        "x": route_point.x,
+        "y": route_point.y,
+        "mapName": map_name,
         "force": force_teleport,
         "captureSize": capture_size,
     });

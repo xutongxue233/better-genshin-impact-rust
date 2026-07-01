@@ -21114,6 +21114,189 @@ fn auto_pathing_movement_contract_can_advance_past_recovery_probe_without_comple
 }
 
 #[test]
+fn auto_pathing_action_boundary_executes_teleport_inside_movement_contract_once() {
+    let root = unique_test_root("auto-pathing-movement-teleport-only");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("teleport_only.json"),
+        r#"{
+                "info": { "name": "teleport only route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 10.0, "y": 20.0, "type": "teleport", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/teleport_only.json").unwrap();
+    let mut runtime = RecoveryOnlyAutoPathingMovementRuntime::default();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
+        &plan,
+        Size::new(1920, 1080),
+        &mut runtime,
+        || false,
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            let CommonJobExecutionPlan::Teleport(teleport_plan) = common_job_plan else {
+                panic!("expected Teleport common-job plan");
+            };
+            let teleport_target = teleport_plan.target.as_ref().unwrap();
+            assert_eq!((teleport_target.x, teleport_target.y), (10.0, 20.0));
+            Ok(Some(CommonJobLiveExecutionReport::Teleport(
+                TeleportExecutionReport {
+                    task_key: teleport_plan.task_key.clone(),
+                    completed: true,
+                    state: TeleportExecutorState {
+                        navigation_previous_position_seeded: true,
+                        navigation_previous_position_seed: Some(TeleportTargetPlan {
+                            x: 111.0,
+                            y: 222.0,
+                            map_name: Some("Teyvat".to_string()),
+                        }),
+                        result: Some(TeleportStepResult::Planned),
+                        ..TeleportExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                },
+            )))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 1);
+    assert_eq!(
+        runtime.phases,
+        vec![bgi_core::PathingWaypointPhase::RecoverWhenLowHp]
+    );
+    assert!(report.boundary_completed);
+    assert!(report.movement_attempted);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::Completed
+    );
+    let movement_report = report.movement_report.as_ref().unwrap();
+    assert!(movement_report.movement_completed);
+    assert!(movement_report.native_pathing_completed);
+    assert_eq!(movement_report.executed_phases, 2);
+    assert_eq!(movement_report.unsupported_phases, 0);
+    assert!(movement_report.failed_phase.is_none());
+    let movement_phases = &movement_report.segment_reports[0].waypoint_reports[0].phase_reports;
+    assert_eq!(
+        movement_phases[1].phase,
+        bgi_core::PathingWaypointPhase::HandleTeleport
+    );
+    assert_eq!(
+        movement_phases[1].status,
+        AutoPathingPhaseExecutionStatus::Executed
+    );
+    assert!(movement_phases[1]
+        .message
+        .contains("executed through the Teleport common-job live boundary"));
+
+    let teleport_phase = report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .find(|phase| phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport)
+        .expect("expected HandleTeleport phase report");
+    assert_eq!(teleport_phase.status, PathingBoundaryStatus::Executed);
+    assert!(matches!(
+        teleport_phase.common_job_live_execution,
+        Some(CommonJobLiveExecutionReport::Teleport(_))
+    ));
+    let navigation_seed = teleport_phase.navigation_seed.as_ref().unwrap();
+    assert_eq!(
+        navigation_seed.previous_position,
+        bgi_core::PathingPoint { x: 111.0, y: 222.0 }
+    );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_advances_after_teleport_to_next_pending_movement_phase() {
+    let root = unique_test_root("auto-pathing-movement-teleport-then-path");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("teleport_then_path.json"),
+        r#"{
+                "info": { "name": "teleport then path route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 10.0, "y": 20.0, "type": "teleport", "move_mode": "dash" },
+                    { "x": 30.0, "y": 40.0, "type": "path", "move_mode": "walk" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/teleport_then_path.json").unwrap();
+    let mut runtime = RecoveryOnlyAutoPathingMovementRuntime::default();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
+        &plan,
+        Size::new(1920, 1080),
+        &mut runtime,
+        || false,
+        &mut |common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            let CommonJobExecutionPlan::Teleport(teleport_plan) = common_job_plan else {
+                panic!("expected Teleport common-job plan");
+            };
+            Ok(Some(CommonJobLiveExecutionReport::Teleport(
+                TeleportExecutionReport {
+                    task_key: teleport_plan.task_key.clone(),
+                    completed: true,
+                    state: TeleportExecutorState {
+                        navigation_previous_position_seeded: true,
+                        navigation_previous_position_seed: Some(TeleportTargetPlan {
+                            x: 111.0,
+                            y: 222.0,
+                            map_name: Some("Teyvat".to_string()),
+                        }),
+                        result: Some(TeleportStepResult::Planned),
+                        ..TeleportExecutorState::default()
+                    },
+                    executed_steps: Vec::new(),
+                },
+            )))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 1);
+    assert!(report.boundary_completed);
+    assert_eq!(
+        report.movement_completion_status,
+        AutoPathingMovementCompletionStatus::NativePending
+    );
+    let movement_report = report.movement_report.as_ref().unwrap();
+    assert_eq!(movement_report.executed_phases, 3);
+    assert_eq!(movement_report.skipped_phases, 1);
+    assert_eq!(movement_report.unsupported_phases, 1);
+    let failed = movement_report.failed_phase.as_ref().unwrap();
+    assert_eq!(failed.phase, bgi_core::PathingWaypointPhase::MoveTo);
+    assert_ne!(
+        failed.phase,
+        bgi_core::PathingWaypointPhase::HandleTeleport,
+        "movement should advance past the migrated teleport phase"
+    );
+    assert!(report
+        .waypoint_reports
+        .iter()
+        .flat_map(|waypoint| waypoint.phase_reports.iter())
+        .any(|phase| {
+            phase.phase == bgi_core::PathingWaypointPhase::HandleTeleport
+                && phase.status == PathingBoundaryStatus::Executed
+        }));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phases() {
     let root = unique_test_root("auto-pathing-action-boundary");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");
