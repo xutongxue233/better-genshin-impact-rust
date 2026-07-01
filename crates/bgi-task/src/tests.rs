@@ -27896,6 +27896,28 @@ fn go_to_serenitea_pot_executor_finishes_when_bag_entry_fails() {
 }
 
 #[test]
+fn go_to_serenitea_pot_executor_passes_bag_realm_name_to_ayuan_search() {
+    let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig {
+        serenitea_pot_tp_type: GO_TO_SERENITEA_POT_BAG_TP_TYPE.to_string(),
+        ..GoToSereniteaPotExecutionConfig::default()
+    })
+    .unwrap();
+    let key_bindings = KeyBindingsConfig::default();
+    let mut runtime = FakeGoToSereniteaPotRuntime::new()
+        .with_bag_entries([GoToSereniteaPotEntryOutcome::entered("清琼岛")]);
+
+    let report = execute_go_to_serenitea_pot_plan(&plan, &key_bindings, &mut runtime).unwrap();
+
+    assert!(report.completed);
+    assert_eq!(report.state.entry_succeeded, Some(true));
+    assert_eq!(report.state.entry_realm_name.as_deref(), Some("清琼岛"));
+    assert!(runtime.map_entry_calls.is_empty());
+    assert_eq!(runtime.bag_entry_calls.len(), 1);
+    assert_eq!(runtime.ayuan_calls.len(), 1);
+    assert_eq!(runtime.ayuan_calls[0].1.as_deref(), Some("清琼岛"));
+}
+
+#[test]
 fn go_to_serenitea_pot_executor_finishes_when_ayuan_is_missing() {
     let plan = plan_go_to_serenitea_pot(GoToSereniteaPotExecutionConfig {
         secret_treasure_objects: vec!["摩拉".to_string()],

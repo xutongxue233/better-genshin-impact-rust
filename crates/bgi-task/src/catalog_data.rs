@@ -795,7 +795,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the Serenitea Pot entry, A Yuan search, reward, realm-depot purchase, finish, and cleanup state machine through injectable hooks and invocation live bridge; desktop common-job live routing now constructs a GoToSereniteaPot runtime, keeps map-teleport mode blocked at the missing map-entry adapter, and lets bag-gadget mode consume the existing QuickSereniteaPot live bridge with strict Enter-only success mapping. The bag path still does not yet read the realm name, and A Yuan search, reward, shop, and finish adapters continue to return explicit runtime gaps instead of reporting false completion.",
+        notes: "Rust now preserves and executes the Serenitea Pot entry, A Yuan search, reward, realm-depot purchase, finish, and cleanup state machine through injectable hooks and invocation live bridge; desktop common-job live routing now constructs a GoToSereniteaPot runtime, keeps map-teleport mode blocked at the missing map-entry adapter, and lets bag-gadget mode consume the existing QuickSereniteaPot live bridge with strict Enter-only success mapping. The bag path now waits for main UI, verifies the Serenitea Pot finger locator, opens the map, reads the realm name through the planned WinRT OCR ROI, and best-effort toggles the map closed before marking entry success. A Yuan search, reward, shop, and finish adapters continue to return explicit runtime gaps instead of reporting false completion.",
     },
     TaskCatalogEntry {
         key: "Relogin",

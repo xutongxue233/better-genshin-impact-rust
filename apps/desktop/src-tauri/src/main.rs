@@ -153,30 +153,30 @@ use bgi_task::{
     GoToCraftingBenchResinRecognitionRule, GoToCraftingBenchRuntime, GoToCraftingBenchStepAction,
     GoToSereniteaPotBagEntryRule, GoToSereniteaPotEntryMode, GoToSereniteaPotEntryOutcome,
     GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule,
-    GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule, GoToSereniteaPotRewardRule,
-    GoToSereniteaPotRuntime, GoToSereniteaPotShopRule, GoToSereniteaPotStepAction,
-    GoToSereniteaPotStepCondition, GridIconClassifierRule, GridIconCropRule, GridItemCountOcrRule,
-    GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate, IndependentTaskExecution,
-    IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport, InventoryTabAssetPair,
-    LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
-    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
-    LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
-    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
-    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
-    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
-    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
-    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
-    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
-    QuickSereniteaPotExecutionReport, QuickSereniteaPotExecutionResult,
-    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
-    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
-    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
-    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
-    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
-    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
-    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
-    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
-    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule, GoToSereniteaPotOcrRule,
+    GoToSereniteaPotRewardRule, GoToSereniteaPotRuntime, GoToSereniteaPotShopRule,
+    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GridIconClassifierRule,
+    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
+    GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
+    IndependentTaskLiveExecutionReport, InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan,
+    LowerHeadThenWalkToExecutionReport, LowerHeadThenWalkToFKeyRule,
+    LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime, LowerHeadThenWalkToStepResult,
+    LowerHeadThenWalkToTrackingObservation, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
+    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
+    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
+    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
+    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
+    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
+    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
+    QuickSereniteaPotExecutionResult, QuickSereniteaPotInteractionOutcome,
+    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
+    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
+    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
+    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
+    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
+    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
+    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
+    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScanPickDropsExecutionPlan, ScanPickDropsExecutionReport, ScriptDispatcherExecutionPlan,
     ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan, SetTimeExecutionReport, ShellConfig,
     ShellExecutionResult, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
@@ -15092,6 +15092,8 @@ fn execute_desktop_go_to_serenitea_pot_live(
         window,
         cancellation,
         capture_size: plan.capture_size,
+        main_ui_locator: desktop_main_ui_locator(plan.capture_size)
+            .map_err(|error| format!("GoToSereniteaPot main-UI locator setup failed: {error}"))?,
     };
     execute_go_to_serenitea_pot_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
@@ -15103,6 +15105,100 @@ struct DesktopGoToSereniteaPotRuntime<'a, F, I, C> {
     window: &'a GameWindowMatch,
     cancellation: Arc<InputCancellationToken>,
     capture_size: VisionSize,
+    main_ui_locator: BvLocatorPlan,
+}
+
+impl<F, I, C> DesktopGoToSereniteaPotRuntime<'_, F, I, C>
+where
+    F: CommonJobFrameSource,
+    I: CommonJobInputDriver,
+    C: CommonJobClock,
+{
+    fn go_to_serenitea_pot_locator_matched(
+        &mut self,
+        locator: &BvLocatorPlan,
+        label: &str,
+    ) -> bgi_task::Result<bool> {
+        match CommonJobRuntime::execute_locator(&mut self.common, locator)? {
+            CommonJobRuntimeOutcome::Matched(value) => Ok(value),
+            CommonJobRuntimeOutcome::None => Err(TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot {label} did not return a match result"
+            ))),
+        }
+    }
+
+    fn go_to_serenitea_pot_dispatch_action(
+        &mut self,
+        action: GenshinAction,
+    ) -> bgi_task::Result<()> {
+        let events = input_events_for_action(
+            &self.config.key_bindings_config,
+            action,
+            KeyActionType::KeyPress,
+        )
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        CommonJobRuntime::dispatch_input(&mut self.common, &events)?;
+        Ok(())
+    }
+
+    fn go_to_serenitea_pot_wait(
+        &mut self,
+        milliseconds: u32,
+    ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
+        CommonJobRuntime::execute_page_command(
+            &mut self.common,
+            &BvPageCommand::Wait { milliseconds },
+        )
+    }
+
+    fn go_to_serenitea_pot_main_ui_visible(&mut self) -> bgi_task::Result<bool> {
+        let locator = self.main_ui_locator.clone();
+        self.go_to_serenitea_pot_locator_matched(&locator, "main UI probe")
+    }
+
+    fn go_to_serenitea_pot_recognize_ocr_text(
+        &mut self,
+        rule: &GoToSereniteaPotOcrRule,
+        label: &str,
+    ) -> bgi_task::Result<Option<String>> {
+        for attempt in 0..rule.attempts.max(1) {
+            let frame = self.common.frame_source_mut().capture_frame()?;
+            let roi = desktop_ocr_roi_for_image(frame.size, rule.roi)?;
+            let cropped = crop_bgr_image(&frame, roi)
+                .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+            let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+                TaskError::CommonJobExecution(format!(
+                    "GoToSereniteaPot {label} WinRT OCR failed: {error}"
+                ))
+            })?;
+            if let Some(text) = desktop_go_to_serenitea_pot_first_ocr_text(&regions) {
+                return Ok(Some(text));
+            }
+            if attempt + 1 < rule.attempts.max(1) && rule.retry_delay_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.retry_delay_ms)?;
+            }
+        }
+        Ok(None)
+    }
+
+    fn go_to_serenitea_pot_close_map_best_effort(
+        &mut self,
+        rule: &GoToSereniteaPotBagEntryRule,
+    ) -> bgi_task::Result<()> {
+        for attempt in 0..rule.close_map_toggle_attempts.max(1) {
+            self.go_to_serenitea_pot_dispatch_action(GenshinAction::OpenMap)?;
+            if rule.close_map_toggle_wait_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.close_map_toggle_wait_ms)?;
+            }
+            if self.go_to_serenitea_pot_main_ui_visible()? {
+                break;
+            }
+            if attempt + 1 == rule.close_map_toggle_attempts.max(1) {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<F, I, C> CommonJobRuntime for DesktopGoToSereniteaPotRuntime<'_, F, I, C>
@@ -15175,14 +15271,31 @@ where
         )
         .map_err(TaskError::CommonJobExecution)?;
         if rule.wait_after_quick_task_ms > 0 {
-            CommonJobRuntime::execute_page_command(
-                &mut self.common,
-                &BvPageCommand::Wait {
-                    milliseconds: rule.wait_after_quick_task_ms,
-                },
-            )?;
+            self.go_to_serenitea_pot_wait(rule.wait_after_quick_task_ms)?;
         }
-        Ok(desktop_go_to_serenitea_pot_bag_entry_outcome(&quick_report))
+        if !desktop_go_to_serenitea_pot_quick_report_entered(&quick_report) {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+        if rule.wait_main_ui && !self.go_to_serenitea_pot_main_ui_visible()? {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+        if !self.go_to_serenitea_pot_locator_matched(&rule.finger_locator, "finger locator")? {
+            return Ok(GoToSereniteaPotEntryOutcome::failed());
+        }
+
+        self.go_to_serenitea_pot_dispatch_action(GenshinAction::OpenMap)?;
+        if rule.open_map_wait_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.open_map_wait_ms)?;
+        }
+        let realm_name =
+            self.go_to_serenitea_pot_recognize_ocr_text(&rule.dong_tian_name_ocr, "realm-name")?;
+        if realm_name.is_some() {
+            self.go_to_serenitea_pot_close_map_best_effort(rule)?;
+        }
+        Ok(desktop_go_to_serenitea_pot_bag_entry_outcome(
+            &quick_report,
+            realm_name,
+        ))
     }
 
     fn find_and_approach_serenitea_pot_ayuan(
@@ -15240,20 +15353,34 @@ where
 
 fn desktop_go_to_serenitea_pot_bag_entry_outcome(
     report: &QuickSereniteaPotExecutionReport,
+    realm_name: Option<String>,
 ) -> GoToSereniteaPotEntryOutcome {
-    let entered = report.completed
-        && report.state.result == Some(QuickSereniteaPotExecutionResult::Completed)
-        && report.state.interaction_outcome == Some(QuickSereniteaPotInteractionOutcome::Enter)
-        && report.state.interaction_action_dispatched
-        && report.state.confirmation_clicked;
-    if entered {
-        GoToSereniteaPotEntryOutcome {
-            entered: true,
-            realm_name: None,
-        }
+    if desktop_go_to_serenitea_pot_quick_report_entered(report) {
+        realm_name
+            .map(GoToSereniteaPotEntryOutcome::entered)
+            .unwrap_or_else(GoToSereniteaPotEntryOutcome::failed)
     } else {
         GoToSereniteaPotEntryOutcome::failed()
     }
+}
+
+fn desktop_go_to_serenitea_pot_quick_report_entered(
+    report: &QuickSereniteaPotExecutionReport,
+) -> bool {
+    report.completed
+        && report.state.result == Some(QuickSereniteaPotExecutionResult::Completed)
+        && report.state.interaction_outcome == Some(QuickSereniteaPotInteractionOutcome::Enter)
+        && report.state.interaction_action_dispatched
+        && report.state.confirmation_clicked
+}
+
+fn desktop_go_to_serenitea_pot_first_ocr_text(regions: &[OcrResultRegion]) -> Option<String> {
+    let mut regions = regions
+        .iter()
+        .filter(|region| !region.text.trim().is_empty())
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.rect.y, region.rect.x));
+    regions.first().map(|region| region.text.trim().to_string())
 }
 
 fn desktop_go_to_serenitea_pot_live_preflight(
@@ -21859,11 +21986,68 @@ mod tests {
             false,
         );
 
-        assert!(desktop_go_to_serenitea_pot_bag_entry_outcome(&enter_report).entered);
-        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&leave_report).entered);
-        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&missing_report).entered);
-        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&big_map_report).entered);
-        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&preflight_report).entered);
+        let enter_outcome = desktop_go_to_serenitea_pot_bag_entry_outcome(
+            &enter_report,
+            Some("妙香林".to_string()),
+        );
+        assert!(enter_outcome.entered);
+        assert_eq!(enter_outcome.realm_name.as_deref(), Some("妙香林"));
+        assert!(!desktop_go_to_serenitea_pot_bag_entry_outcome(&enter_report, None).entered);
+        assert!(
+            !desktop_go_to_serenitea_pot_bag_entry_outcome(
+                &leave_report,
+                Some("妙香林".to_string())
+            )
+            .entered
+        );
+        assert!(
+            !desktop_go_to_serenitea_pot_bag_entry_outcome(
+                &missing_report,
+                Some("妙香林".to_string())
+            )
+            .entered
+        );
+        assert!(
+            !desktop_go_to_serenitea_pot_bag_entry_outcome(
+                &big_map_report,
+                Some("妙香林".to_string())
+            )
+            .entered
+        );
+        assert!(
+            !desktop_go_to_serenitea_pot_bag_entry_outcome(
+                &preflight_report,
+                Some("妙香林".to_string())
+            )
+            .entered
+        );
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_ocr_text_uses_first_non_empty_region() {
+        let regions = vec![
+            OcrResultRegion {
+                rect: Rect::new(20, 20, 10, 10).unwrap(),
+                text: " ".to_string(),
+                score: 0.4,
+            },
+            OcrResultRegion {
+                rect: Rect::new(30, 20, 10, 10).unwrap(),
+                text: "清琼岛".to_string(),
+                score: 0.8,
+            },
+            OcrResultRegion {
+                rect: Rect::new(10, 10, 10, 10).unwrap(),
+                text: "  妙香林  ".to_string(),
+                score: 0.9,
+            },
+        ];
+
+        assert_eq!(
+            desktop_go_to_serenitea_pot_first_ocr_text(&regions).as_deref(),
+            Some("妙香林")
+        );
+        assert_eq!(desktop_go_to_serenitea_pot_first_ocr_text(&[]), None);
     }
 
     fn quick_serenitea_pot_report(
