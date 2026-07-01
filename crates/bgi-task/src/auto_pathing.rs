@@ -475,7 +475,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes while native movement dispatch and recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes while honoring the only-in-teleport recovery gate; native movement dispatch and recovery side effects remain pending."
                 .to_string(),
     })
 }

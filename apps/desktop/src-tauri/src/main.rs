@@ -8419,8 +8419,12 @@ where
         capture_size,
         auto_eat_config: config.auto_eat_config.clone(),
     });
-    let mut movement_runtime =
-        DesktopAutoPathingMovementRuntime::new(capture, auto_eat_plan, Arc::clone(&cancellation));
+    let mut movement_runtime = DesktopAutoPathingMovementRuntime::new(
+        capture,
+        auto_eat_plan,
+        config.pathing_condition_config.only_in_teleport_recover,
+        Arc::clone(&cancellation),
+    );
     execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
         plan,
         capture_size,
@@ -8434,6 +8438,7 @@ where
 struct DesktopAutoPathingMovementRuntime<C> {
     capture: C,
     auto_eat_plan: AutoEatExecutionPlan,
+    only_in_teleport_recover: bool,
     cancellation: Arc<InputCancellationToken>,
 }
 
@@ -8441,11 +8446,13 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
     fn new(
         capture: C,
         auto_eat_plan: AutoEatExecutionPlan,
+        only_in_teleport_recover: bool,
         cancellation: Arc<InputCancellationToken>,
     ) -> Self {
         Self {
             capture,
             auto_eat_plan,
+            only_in_teleport_recover,
             cancellation,
         }
     }
@@ -8470,6 +8477,18 @@ where
     ) -> bgi_task::Result<AutoPathingPhaseExecution> {
         self.ensure_not_cancelled()?;
         if context.phase.phase == bgi_core::PathingWaypointPhase::RecoverWhenLowHp {
+            if self.only_in_teleport_recover
+                && !context
+                    .waypoint
+                    .waypoint_type
+                    .eq_ignore_ascii_case("teleport")
+            {
+                return Ok(AutoPathingPhaseExecution::skipped(format!(
+                    "AutoPathing RecoverWhenLowHp skipped at waypoint {} because pathing_condition_config.only_in_teleport_recover is enabled and waypoint type is {}",
+                    context.waypoint.global_index,
+                    context.waypoint.waypoint_type
+                )));
+            }
             let image = (self.capture)()?;
             if desktop_auto_eat_current_avatar_low_hp(&image, &self.auto_eat_plan) {
                 return Ok(AutoPathingPhaseExecution::unsupported(format!(
@@ -23880,6 +23899,68 @@ mod tests {
             movement_phase_reports[0].status,
             bgi_task::AutoPathingPhaseExecutionStatus::Unsupported
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_auto_pathing_recovery_probe_respects_only_in_teleport_recover() {
+        let root = desktop_test_temp_root("auto-pathing-only-teleport-recovery");
+        write_desktop_auto_pathing_log_route(&root);
+        let auto_pathing_plan = plan_auto_pathing(&root, "liyue/live_log_route.json").unwrap();
+        let capture_size = VisionSize::new(1920, 1080);
+        let mut config = AppConfig::default();
+        config.pathing_condition_config.only_in_teleport_recover = true;
+        let capture_called = std::cell::Cell::new(false);
+
+        let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+            &config,
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+            &auto_pathing_plan,
+            || {
+                capture_called.set(true);
+                Err(TaskError::VisionPlan(
+                    "only-in-teleport recovery should not capture non-teleport waypoint"
+                        .to_string(),
+                ))
+            },
+            |common_job_plan| {
+                panic!(
+                    "only-in-teleport recovery route should not call common-job live executor: {}",
+                    common_job_plan.task_key()
+                )
+            },
+        )
+        .unwrap();
+
+        assert!(!capture_called.get());
+        assert!(report.boundary_completed);
+        assert!(!report.movement_attempted);
+        assert!(!report.native_pathing_completed);
+        let movement_report = report
+            .movement_report
+            .as_ref()
+            .expect("expected movement contract report");
+        assert_eq!(movement_report.executed_phases, 0);
+        assert_eq!(movement_report.skipped_phases, 2);
+        assert_eq!(movement_report.unsupported_phases, 1);
+        assert_eq!(
+            movement_report.failed_phase.as_ref().unwrap().phase,
+            bgi_core::PathingWaypointPhase::MoveTo
+        );
+        let movement_phase_reports =
+            &movement_report.segment_reports[0].waypoint_reports[0].phase_reports;
+        assert_eq!(
+            movement_phase_reports[0].phase,
+            bgi_core::PathingWaypointPhase::RecoverWhenLowHp
+        );
+        assert_eq!(
+            movement_phase_reports[0].status,
+            bgi_task::AutoPathingPhaseExecutionStatus::Skipped
+        );
+        assert!(movement_phase_reports[0]
+            .message
+            .contains("only_in_teleport_recover"));
         let _ = fs::remove_dir_all(root);
     }
 
