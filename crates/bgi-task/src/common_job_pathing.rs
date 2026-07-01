@@ -1,10 +1,11 @@
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use bgi_core::{
     read_pathing_task, PathingMovementContractPlan, PathingMovementDependency, PathingSummary,
 };
 use serde::Serialize;
 
+use crate::auto_pathing::AutoPathingExecutionPlan;
 use crate::{task_asset_root, Result, TaskError};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -27,6 +28,32 @@ pub struct CommonJobPathingPreflightReport {
 pub fn preflight_common_job_pathing_rule(
     pathing_json: &str,
 ) -> Result<CommonJobPathingPreflightReport> {
+    let execution_plan = plan_common_job_pathing_action_boundary(pathing_json)?;
+    let movement_contract = execution_plan.execution_plan.movement_contract.clone();
+
+    Ok(CommonJobPathingPreflightReport {
+        pathing_json: pathing_json.to_string(),
+        resolved_path: task_asset_root()
+            .join(&execution_plan.normalized_path)
+            .to_string_lossy()
+            .to_string(),
+        summary: execution_plan.summary,
+        map_name: execution_plan.execution_plan.map_name,
+        map_match_method: execution_plan.execution_plan.map_match_method,
+        has_positions: execution_plan.execution_plan.has_positions,
+        segment_count: execution_plan.execution_plan.segment_count,
+        waypoint_count: execution_plan.execution_plan.waypoint_count,
+        movement_executor_ready: movement_contract.movement_executor_ready,
+        native_pathing_completed: movement_contract.native_pathing_completed,
+        pending_dependencies: movement_contract.pending_dependencies.clone(),
+        movement_contract,
+        notes: "Common-job pathing asset is readable and converted into the shared PathExecutor movement contract; desktop movement execution remains native-pending until a movement runtime consumes the contract.".to_string(),
+    })
+}
+
+pub fn plan_common_job_pathing_action_boundary(
+    pathing_json: &str,
+) -> Result<AutoPathingExecutionPlan> {
     validate_common_job_pathing_json(pathing_json)?;
     let root = task_asset_root();
     let path = root.join(pathing_json);
@@ -36,22 +63,16 @@ pub fn preflight_common_job_pathing_rule(
         ))
     })?;
     let execution_plan = task.execution_plan_with_legacy_track_converter();
-    let movement_contract = execution_plan.movement_contract.clone();
 
-    Ok(CommonJobPathingPreflightReport {
-        pathing_json: pathing_json.to_string(),
-        resolved_path: path.to_string_lossy().to_string(),
-        summary: execution_plan.summary,
-        map_name: execution_plan.map_name,
-        map_match_method: execution_plan.map_match_method,
-        has_positions: execution_plan.has_positions,
-        segment_count: execution_plan.segment_count,
-        waypoint_count: execution_plan.waypoint_count,
-        movement_executor_ready: movement_contract.movement_executor_ready,
-        native_pathing_completed: movement_contract.native_pathing_completed,
-        pending_dependencies: movement_contract.pending_dependencies.clone(),
-        movement_contract,
-        notes: "Common-job pathing asset is readable and converted into the shared PathExecutor movement contract; desktop movement execution remains native-pending until a movement runtime consumes the contract.".to_string(),
+    Ok(AutoPathingExecutionPlan {
+        source: "CommonJobPathingAsset",
+        route: pathing_json.to_string(),
+        normalized_path: PathBuf::from(pathing_json),
+        summary: task.summary(),
+        execution_plan,
+        dispatched: false,
+        completed: false,
+        notes: "Common-job PathExecutor JSON is parsed into the shared AutoPathing action boundary plan with legacy TrackMap coordinate conversion; native desktop movement remains pending until a movement runtime completes every phase.".to_string(),
     })
 }
 

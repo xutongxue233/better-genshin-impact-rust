@@ -8611,6 +8611,7 @@ where
         auto_eat_plan,
         config.pathing_condition_config.only_in_teleport_recover,
         Arc::clone(&cancellation),
+        DesktopAutoPathingRecoveryProbeMode::ProbeCurrentAvatarLowHp,
     );
     execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
         plan,
@@ -8628,6 +8629,13 @@ struct DesktopAutoPathingMovementRuntime<C> {
     auto_eat_plan: AutoEatExecutionPlan,
     only_in_teleport_recover: bool,
     cancellation: Arc<InputCancellationToken>,
+    recovery_probe_mode: DesktopAutoPathingRecoveryProbeMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopAutoPathingRecoveryProbeMode {
+    ProbeCurrentAvatarLowHp,
+    SkipForCommonJobPathing,
 }
 
 impl<C> DesktopAutoPathingMovementRuntime<C> {
@@ -8637,6 +8645,7 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
         auto_eat_plan: AutoEatExecutionPlan,
         only_in_teleport_recover: bool,
         cancellation: Arc<InputCancellationToken>,
+        recovery_probe_mode: DesktopAutoPathingRecoveryProbeMode,
     ) -> Self {
         Self {
             app_root: app_root.to_path_buf(),
@@ -8644,6 +8653,7 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
             auto_eat_plan,
             only_in_teleport_recover,
             cancellation,
+            recovery_probe_mode,
         }
     }
 
@@ -8667,6 +8677,15 @@ where
     ) -> bgi_task::Result<AutoPathingPhaseExecution> {
         self.ensure_not_cancelled()?;
         if context.phase.phase == bgi_core::PathingWaypointPhase::RecoverWhenLowHp {
+            if matches!(
+                self.recovery_probe_mode,
+                DesktopAutoPathingRecoveryProbeMode::SkipForCommonJobPathing
+            ) {
+                return Ok(AutoPathingPhaseExecution::skipped(format!(
+                    "AutoPathing RecoverWhenLowHp skipped for common-job PathExecutor bridge at waypoint {}; recovery side effects remain native-pending",
+                    context.waypoint.global_index
+                )));
+            }
             if self.only_in_teleport_recover
                 && !context
                     .waypoint
@@ -14551,6 +14570,74 @@ fn desktop_common_job_pathing_live_preflight(
     Ok(report)
 }
 
+fn execute_desktop_common_job_pathing_action_boundary<F>(
+    task_name: &str,
+    config: &AppConfig,
+    capture_size: VisionSize,
+    cancellation: Arc<InputCancellationToken>,
+    pathing_json: &str,
+    live_executor: F,
+) -> bgi_task::Result<AutoPathingActionBoundaryReport>
+where
+    F: FnMut(&CommonJobExecutionPlan) -> bgi_task::Result<Option<CommonJobLiveExecutionReport>>,
+{
+    let plan = bgi_task::plan_common_job_pathing_action_boundary(pathing_json)?;
+    let auto_eat_plan = plan_auto_eat(AutoEatExecutionConfig {
+        capture_size,
+        auto_eat_config: config.auto_eat_config.clone(),
+    });
+    let task_name_for_capture = task_name.to_string();
+    let cancellation_for_runtime = Arc::clone(&cancellation);
+    let mut movement_runtime = DesktopAutoPathingMovementRuntime::new(
+        Path::new("."),
+        move || {
+            Err(TaskError::VisionPlan(format!(
+                "{task_name_for_capture} common-job PathExecutor bridge does not capture frames while low-HP recovery probing is skipped"
+            )))
+        },
+        auto_eat_plan,
+        config.pathing_condition_config.only_in_teleport_recover,
+        cancellation_for_runtime,
+        DesktopAutoPathingRecoveryProbeMode::SkipForCommonJobPathing,
+    );
+    execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
+        &plan,
+        capture_size,
+        &mut movement_runtime,
+        || cancellation.is_cancelled(),
+        live_executor,
+    )
+}
+
+fn desktop_common_job_pathing_pending_message(
+    task_name: &str,
+    pathing_json: &str,
+    report: &AutoPathingActionBoundaryReport,
+) -> String {
+    let mut message = format!(
+        "{task_name} live execution consumed PathExecutor movement contract for {pathing_json} but native pathing remains pending: completion_status={:?}, segments={}, waypoints={}",
+        report.movement_completion_status,
+        report.movement_segment_count,
+        report.movement_waypoint_count
+    );
+    if let Some(movement_report) = report.movement_report.as_ref() {
+        if let Some(failed_phase) = movement_report.failed_phase.as_ref() {
+            message.push_str(&format!(
+                " at {:?} waypoint {}: {}",
+                failed_phase.phase, failed_phase.global_index, failed_phase.message
+            ));
+        } else {
+            message.push_str(&format!(
+                ", executed_phases={}, skipped_phases={}, unsupported_phases={}",
+                movement_report.executed_phases,
+                movement_report.skipped_phases,
+                movement_report.unsupported_phases
+            ));
+        }
+    }
+    message
+}
+
 struct DesktopGoToCraftingBenchRuntime<F, I, C> {
     common: PureTemplateCommonJobRuntime<F, I, C>,
     capture_size: VisionSize,
@@ -14973,11 +15060,44 @@ where
         &mut self,
         rule: &GoToAdventurersGuildPathingRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
-        let report = bgi_task::preflight_common_job_pathing_rule(&rule.pathing_json)?;
-        Err(TaskError::CommonJobExecution(format!(
-            "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter for {} after validating {} waypoints",
-            rule.pathing_json, report.waypoint_count
-        )))
+        let config = self.config;
+        let window = self.window;
+        let cancellation = Arc::clone(&self.cancellation);
+        let cancellation_for_live = Arc::clone(&self.cancellation);
+        let report = execute_desktop_common_job_pathing_action_boundary(
+            "GoToAdventurersGuild",
+            config,
+            self.capture_size,
+            cancellation,
+            &rule.pathing_json,
+            move |common_job_plan| {
+                execute_desktop_common_job_live_plan(
+                    config,
+                    Some(window),
+                    Arc::clone(&cancellation_for_live),
+                    common_job_plan,
+                )
+            },
+        )?;
+        let movement_completed = report
+            .movement_report
+            .as_ref()
+            .is_some_and(|movement_report| {
+                movement_report.native_pathing_completed
+                    && movement_report.movement_completion_status
+                        == bgi_task::AutoPathingMovementCompletionStatus::Completed
+            });
+        if movement_completed {
+            Ok(CommonJobRuntimeOutcome::Matched(true))
+        } else {
+            Err(TaskError::CommonJobExecution(
+                desktop_common_job_pathing_pending_message(
+                    "GoToAdventurersGuild",
+                    &rule.pathing_json,
+                    &report,
+                ),
+            ))
+        }
     }
 
     fn retry_adventurers_guild_interaction(
@@ -23007,8 +23127,11 @@ mod tests {
         .unwrap_err();
 
         assert!(adapter_error.contains(
-            "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter"
+            "GoToAdventurersGuild live execution consumed PathExecutor movement contract"
         ));
+        assert!(adapter_error.contains("native pathing remains pending"));
+        assert!(adapter_error.contains("HandleTeleport"));
+        assert!(!adapter_error.contains("requires desktop PathExecutor movement adapter"));
         assert!(!adapter_error.contains("desktop runtime adapter wiring after preflight"));
     }
 
@@ -23044,9 +23167,11 @@ mod tests {
         .unwrap_err();
 
         assert!(error.contains(
-            "GoToAdventurersGuild live execution requires desktop PathExecutor movement adapter"
+            "GoToAdventurersGuild live execution consumed PathExecutor movement contract"
         ));
-        assert!(error.contains("after validating"));
+        assert!(error.contains("native pathing remains pending"));
+        assert!(error.contains("HandleTeleport"));
+        assert!(!error.contains("requires desktop PathExecutor movement adapter"));
         assert!(!error.contains("desktop runtime adapter wiring after preflight"));
         assert!(!error.contains("Catherine interaction adapter"));
     }

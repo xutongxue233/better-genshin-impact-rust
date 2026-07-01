@@ -26775,6 +26775,49 @@ fn common_job_pathing_preflight_reads_bundled_go_to_routes_without_completing_mo
 }
 
 #[test]
+fn common_job_pathing_action_boundary_plan_reuses_legacy_track_conversion() {
+    let pathing_json = "GameTask/Common/Element/Assets/Json/冒险家协会_蒙德.json";
+    let plan = plan_common_job_pathing_action_boundary(pathing_json).unwrap();
+
+    assert_eq!(plan.source, "CommonJobPathingAsset");
+    assert_eq!(plan.route, pathing_json);
+    assert_eq!(plan.normalized_path, std::path::PathBuf::from(pathing_json));
+    assert_eq!(plan.summary.name, "蒙德凯瑟琳");
+    assert!(plan.execution_plan.has_positions);
+    assert_eq!(plan.execution_plan.map_name, "Teyvat");
+    assert!(
+        !plan
+            .execution_plan
+            .movement_contract
+            .movement_executor_ready
+    );
+    assert!(
+        !plan
+            .execution_plan
+            .movement_contract
+            .native_pathing_completed
+    );
+    assert!(plan
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+    assert!(!plan
+        .execution_plan
+        .movement_contract
+        .pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
+    assert!(plan
+        .execution_plan
+        .movement_contract
+        .segments
+        .iter()
+        .flat_map(|segment| &segment.waypoints)
+        .any(|waypoint| waypoint.waypoint_type == "teleport"));
+    assert!(plan.notes.contains("AutoPathing action boundary"));
+}
+
+#[test]
 fn go_to_crafting_bench_plan_preserves_legacy_pathing_interaction_and_condensed_resin_flow() {
     let plan = plan_go_to_crafting_bench(
         Size::new(1920, 1080),

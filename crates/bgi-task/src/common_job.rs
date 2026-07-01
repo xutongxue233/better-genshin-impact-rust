@@ -187,7 +187,10 @@ pub use common_job_one_key_expedition::{
     OneKeyExpeditionStepResult, ONE_KEY_EXPEDITION_COLLECT, ONE_KEY_EXPEDITION_RE_DISPATCH,
     ONE_KEY_EXPEDITION_TASK_KEY, ONE_KEY_EXPEDITION_VK_ESCAPE,
 };
-pub use common_job_pathing::{preflight_common_job_pathing_rule, CommonJobPathingPreflightReport};
+pub use common_job_pathing::{
+    plan_common_job_pathing_action_boundary, preflight_common_job_pathing_rule,
+    CommonJobPathingPreflightReport,
+};
 pub use common_job_relogin::{
     plan_relogin, ReloginDpiAwarePoint, ReloginExecutionConfig, ReloginExecutionPlan,
     ReloginFailurePolicy, ReloginLocators, ReloginRetryAction, ReloginRetryRule, ReloginStep,
