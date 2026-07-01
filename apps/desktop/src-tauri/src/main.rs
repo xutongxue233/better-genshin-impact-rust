@@ -14485,14 +14485,18 @@ fn execute_desktop_go_to_crafting_bench_live(
         })?;
     let main_ui_locator = desktop_main_ui_locator(plan.capture_size)
         .map_err(|error| format!("GoToCraftingBench main UI locator setup failed: {error}"))?;
-    let mut runtime = DesktopGoToCraftingBenchRuntime::new(
-        common_runtime,
-        plan.capture_size,
+    let locators = DesktopGoToCraftingBenchLocators {
         pick_key_locator,
-        plan.locators.talk_ui.clone(),
+        talk_ui_locator: plan.locators.talk_ui.clone(),
         option_icon_locator,
         main_ui_locator,
-    );
+        key_reduce_locator: plan.locators.key_reduce.clone(),
+        key_increase_locator: plan.locators.key_increase.clone(),
+        white_confirm_locator: plan.locators.white_confirm.clone(),
+        black_confirm_locator: plan.locators.black_confirm.clone(),
+    };
+    let mut runtime =
+        DesktopGoToCraftingBenchRuntime::new(common_runtime, plan.capture_size, locators);
     execute_go_to_crafting_bench_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
 }
@@ -14508,17 +14512,14 @@ fn desktop_go_to_crafting_bench_live_preflight(
             GoToCraftingBenchStepAction::InteractionRetry { .. } => {}
             GoToCraftingBenchStepAction::SelectLastTalkOptionUntilEnd { .. } => {}
             GoToCraftingBenchStepAction::RecognizeResinCounts { .. } => {
-                return Err(
-                    "GoToCraftingBench live execution requires desktop resin-count OCR adapter"
-                        .to_string(),
-                );
+                if plan.min_resin_to_keep > 0 {
+                    return Err(
+                        "GoToCraftingBench live execution requires desktop resin-count OCR adapter for MinResinToKeep"
+                            .to_string(),
+                    );
+                }
             }
-            GoToCraftingBenchStepAction::CraftCondensedResin { .. } => {
-                return Err(
-                    "GoToCraftingBench live execution requires desktop condensed-resin crafting adapter"
-                        .to_string(),
-                );
-            }
+            GoToCraftingBenchStepAction::CraftCondensedResin { .. } => {}
             GoToCraftingBenchStepAction::Log { .. }
             | GoToCraftingBenchStepAction::Page { .. }
             | GoToCraftingBenchStepAction::Locator { .. }
@@ -14553,28 +14554,31 @@ fn desktop_common_job_pathing_live_preflight(
 struct DesktopGoToCraftingBenchRuntime<F, I, C> {
     common: PureTemplateCommonJobRuntime<F, I, C>,
     capture_size: VisionSize,
+    locators: DesktopGoToCraftingBenchLocators,
+}
+
+#[derive(Debug, Clone)]
+struct DesktopGoToCraftingBenchLocators {
     pick_key_locator: BvLocatorPlan,
     talk_ui_locator: BvLocatorPlan,
     option_icon_locator: BvLocatorPlan,
     main_ui_locator: BvLocatorPlan,
+    key_reduce_locator: BvLocatorPlan,
+    key_increase_locator: BvLocatorPlan,
+    white_confirm_locator: BvLocatorPlan,
+    black_confirm_locator: BvLocatorPlan,
 }
 
 impl<F, I, C> DesktopGoToCraftingBenchRuntime<F, I, C> {
     fn new(
         common: PureTemplateCommonJobRuntime<F, I, C>,
         capture_size: VisionSize,
-        pick_key_locator: BvLocatorPlan,
-        talk_ui_locator: BvLocatorPlan,
-        option_icon_locator: BvLocatorPlan,
-        main_ui_locator: BvLocatorPlan,
+        locators: DesktopGoToCraftingBenchLocators,
     ) -> Self {
         Self {
             common,
             capture_size,
-            pick_key_locator,
-            talk_ui_locator,
-            option_icon_locator,
-            main_ui_locator,
+            locators,
         }
     }
 }
@@ -14592,7 +14596,7 @@ where
         desktop_auto_pick_interaction_text_detected(
             &mut self.common,
             self.capture_size,
-            &self.pick_key_locator,
+            &self.locators.pick_key_locator,
             &rule.interact_text,
             "GoToCraftingBench",
         )
@@ -14601,10 +14605,33 @@ where
     fn crafting_talk_ui_open(&mut self) -> bgi_task::Result<bool> {
         desktop_locator_exists_on_capture(
             &mut self.common,
-            &self.talk_ui_locator,
+            &self.locators.talk_ui_locator,
             "GoToCraftingBench",
             "talk UI",
         )
+    }
+
+    fn wait_ms(&mut self, milliseconds: u32) -> bgi_task::Result<()> {
+        CommonJobRuntime::execute_page_command(
+            &mut self.common,
+            &BvPageCommand::Wait { milliseconds },
+        )
+        .map(|_| ())
+    }
+
+    fn click_crafting_bench_locator(
+        &mut self,
+        locator: &BvLocatorPlan,
+        label: &str,
+    ) -> bgi_task::Result<()> {
+        let mut click_locator = locator.clone();
+        click_locator.operation = BvLocatorOperation::Click;
+        match CommonJobRuntime::execute_locator(&mut self.common, &click_locator)? {
+            CommonJobRuntimeOutcome::Matched(true) => Ok(()),
+            CommonJobRuntimeOutcome::Matched(false) | CommonJobRuntimeOutcome::None => Err(
+                TaskError::CommonJobExecution(format!("GoToCraftingBench failed to click {label}")),
+            ),
+        }
     }
 }
 
@@ -14694,9 +14721,9 @@ where
         let completed = desktop_select_last_talk_option_until_end(
             &mut self.common,
             DesktopSelectLastTalkOptionRule {
-                talk_ui_locator: &self.talk_ui_locator,
-                option_icon_locator: &self.option_icon_locator,
-                main_ui_locator: Some((&self.main_ui_locator, false)),
+                talk_ui_locator: &self.locators.talk_ui_locator,
+                option_icon_locator: &self.locators.option_icon_locator,
+                main_ui_locator: Some((&self.locators.main_ui_locator, false)),
                 end_locator: Some((until_locator, "crafting page confirm")),
                 max_iterations: DESKTOP_SELECT_LAST_TALK_OPTION_DEFAULT_RETRIES,
                 success_on_talk_ui_closed: false,
@@ -14718,13 +14745,35 @@ where
 
     fn craft_condensed_resin(
         &mut self,
-        _rule: &GoToCraftingBenchResinCraftRule,
-        _crafts_needed: u8,
+        rule: &GoToCraftingBenchResinCraftRule,
+        crafts_needed: u8,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
-        Err(TaskError::CommonJobExecution(
-            "GoToCraftingBench live execution requires desktop condensed-resin crafting adapter"
-                .to_string(),
-        ))
+        if crafts_needed == 0 {
+            return Ok(CommonJobRuntimeOutcome::Matched(false));
+        }
+
+        if rule.min_resin_to_keep > 0 {
+            let reduce_locator = self.locators.key_reduce_locator.clone();
+            for _ in 0..rule.reduce_clicks_before_add {
+                self.click_crafting_bench_locator(&reduce_locator, "reduce button")?;
+                self.wait_ms(rule.reduce_click_delay_ms)?;
+            }
+            self.wait_ms(rule.after_reduce_delay_ms)?;
+
+            let increase_locator = self.locators.key_increase_locator.clone();
+            for _ in 0..crafts_needed.saturating_sub(1) {
+                self.click_crafting_bench_locator(&increase_locator, "increase button")?;
+                self.wait_ms(rule.add_click_delay_ms)?;
+            }
+            self.wait_ms(rule.after_add_delay_ms)?;
+        }
+
+        let white_confirm_locator = self.locators.white_confirm_locator.clone();
+        self.click_crafting_bench_locator(&white_confirm_locator, "white confirm button")?;
+        self.wait_ms(rule.after_white_confirm_delay_ms)?;
+        let black_confirm_locator = self.locators.black_confirm_locator.clone();
+        self.click_crafting_bench_locator(&black_confirm_locator, "black confirm button")?;
+        Ok(CommonJobRuntimeOutcome::Matched(true))
     }
 }
 
@@ -21464,6 +21513,13 @@ mod tests {
     const DESKTOP_TALK_OPTION_TEST_OPTION_PATH: &str = "desktop-talk-option-test-option.bgr";
     const DESKTOP_TALK_OPTION_TEST_END_PATH: &str = "desktop-talk-option-test-end.bgr";
     const DESKTOP_TALK_OPTION_TEST_MAIN_PATH: &str = "desktop-talk-option-test-main.bgr";
+    const DESKTOP_CRAFTING_BENCH_TEST_REDUCE_PATH: &str = "desktop-crafting-bench-test-reduce.bgr";
+    const DESKTOP_CRAFTING_BENCH_TEST_INCREASE_PATH: &str =
+        "desktop-crafting-bench-test-increase.bgr";
+    const DESKTOP_CRAFTING_BENCH_TEST_WHITE_CONFIRM_PATH: &str =
+        "desktop-crafting-bench-test-white-confirm.bgr";
+    const DESKTOP_CRAFTING_BENCH_TEST_BLACK_CONFIRM_PATH: &str =
+        "desktop-crafting-bench-test-black-confirm.bgr";
 
     struct DesktopTalkOptionTestAssets {
         capture_size: VisionSize,
@@ -21552,6 +21608,107 @@ mod tests {
                 DesktopTalkOptionTestInputDriver::default(),
                 DesktopTalkOptionTestClock::default(),
             )
+        }
+    }
+
+    struct DesktopCraftingBenchTestAssets {
+        capture_size: VisionSize,
+        reduce_template: BgrImage,
+        increase_template: BgrImage,
+        white_confirm_template: BgrImage,
+        black_confirm_template: BgrImage,
+        reduce_locator: BvLocatorPlan,
+        increase_locator: BvLocatorPlan,
+        white_confirm_locator: BvLocatorPlan,
+        black_confirm_locator: BvLocatorPlan,
+    }
+
+    impl DesktopCraftingBenchTestAssets {
+        fn new() -> Self {
+            let capture_size = VisionSize::new(48, 40);
+            Self {
+                capture_size,
+                reduce_template: desktop_talk_option_test_template(33),
+                increase_template: desktop_talk_option_test_template(93),
+                white_confirm_template: desktop_talk_option_test_template(153),
+                black_confirm_template: desktop_talk_option_test_template(213),
+                reduce_locator: desktop_talk_option_test_locator(
+                    DESKTOP_CRAFTING_BENCH_TEST_REDUCE_PATH,
+                    capture_size,
+                    BvLocatorOperation::Click,
+                ),
+                increase_locator: desktop_talk_option_test_locator(
+                    DESKTOP_CRAFTING_BENCH_TEST_INCREASE_PATH,
+                    capture_size,
+                    BvLocatorOperation::Click,
+                ),
+                white_confirm_locator: desktop_talk_option_test_locator(
+                    DESKTOP_CRAFTING_BENCH_TEST_WHITE_CONFIRM_PATH,
+                    capture_size,
+                    BvLocatorOperation::Click,
+                ),
+                black_confirm_locator: desktop_talk_option_test_locator(
+                    DESKTOP_CRAFTING_BENCH_TEST_BLACK_CONFIRM_PATH,
+                    capture_size,
+                    BvLocatorOperation::Click,
+                ),
+            }
+        }
+
+        fn frame(&self, template: &BgrImage, x: u32, y: u32) -> BgrImage {
+            let mut frame = desktop_talk_option_test_blank_frame(self.capture_size);
+            desktop_talk_option_test_paint_template(
+                &mut frame.pixels,
+                self.capture_size,
+                template,
+                x,
+                y,
+            );
+            frame
+        }
+
+        fn runtime(
+            &self,
+            frames: impl IntoIterator<Item = BgrImage>,
+        ) -> DesktopGoToCraftingBenchRuntime<
+            DesktopTalkOptionTestFrameSource,
+            DesktopTalkOptionTestInputDriver,
+            DesktopTalkOptionTestClock,
+        > {
+            let backend = PureRustVisionBackend::new()
+                .with_template(
+                    DESKTOP_CRAFTING_BENCH_TEST_REDUCE_PATH,
+                    self.reduce_template.clone(),
+                )
+                .with_template(
+                    DESKTOP_CRAFTING_BENCH_TEST_INCREASE_PATH,
+                    self.increase_template.clone(),
+                )
+                .with_template(
+                    DESKTOP_CRAFTING_BENCH_TEST_WHITE_CONFIRM_PATH,
+                    self.white_confirm_template.clone(),
+                )
+                .with_template(
+                    DESKTOP_CRAFTING_BENCH_TEST_BLACK_CONFIRM_PATH,
+                    self.black_confirm_template.clone(),
+                );
+            let common = bgi_task::TemplateCommonJobRuntime::new(
+                backend,
+                DesktopTalkOptionTestFrameSource::new(frames),
+                DesktopTalkOptionTestInputDriver::default(),
+                DesktopTalkOptionTestClock::default(),
+            );
+            let locators = DesktopGoToCraftingBenchLocators {
+                pick_key_locator: self.reduce_locator.clone(),
+                talk_ui_locator: self.reduce_locator.clone(),
+                option_icon_locator: self.reduce_locator.clone(),
+                main_ui_locator: self.reduce_locator.clone(),
+                key_reduce_locator: self.reduce_locator.clone(),
+                key_increase_locator: self.increase_locator.clone(),
+                white_confirm_locator: self.white_confirm_locator.clone(),
+                black_confirm_locator: self.black_confirm_locator.clone(),
+            };
+            DesktopGoToCraftingBenchRuntime::new(common, self.capture_size, locators)
         }
     }
 
@@ -22646,7 +22803,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_go_to_crafting_bench_preflight_reports_resin_ocr_after_talk_option_adapter() {
+    fn desktop_go_to_crafting_bench_preflight_accepts_default_crafting_adapter() {
         let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
             bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
             Some(&serde_json::json!({ "country": "璃月" })),
@@ -22664,13 +22821,120 @@ mod tests {
         assert!(pathing_report.waypoint_count > 0);
         assert!(!pathing_report.native_pathing_completed);
 
+        desktop_go_to_crafting_bench_live_preflight(&plan).unwrap();
+    }
+
+    #[test]
+    fn desktop_go_to_crafting_bench_preflight_still_reports_resin_ocr_when_min_resin_enabled() {
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月", "minResinToKeep": 120 })),
+        )
+        .unwrap() else {
+            panic!("expected GoToCraftingBench common job plan");
+        };
+
         let error = desktop_go_to_crafting_bench_live_preflight(&plan).unwrap_err();
 
         assert!(error
-            .contains("GoToCraftingBench live execution requires desktop resin-count OCR adapter"));
+            .contains("GoToCraftingBench live execution requires desktop resin-count OCR adapter for MinResinToKeep"));
         assert!(!error.contains("talk-option selection adapter"));
         assert!(!error.contains("crafting-bench interaction adapter"));
+        assert!(!error.contains("condensed-resin crafting adapter"));
         assert!(!error.contains("native PathExecutor adapter"));
+    }
+
+    #[test]
+    fn desktop_go_to_crafting_bench_craft_adapter_clicks_default_confirm_flow() {
+        let assets = DesktopCraftingBenchTestAssets::new();
+        let frames = [
+            assets.frame(&assets.white_confirm_template, 4, 5),
+            assets.frame(&assets.black_confirm_template, 12, 13),
+        ];
+        let mut runtime = assets.runtime(frames);
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月" })),
+        )
+        .unwrap() else {
+            panic!("expected GoToCraftingBench common job plan");
+        };
+
+        let outcome = runtime
+            .craft_condensed_resin(&plan.resin_craft_rule, 1)
+            .unwrap();
+        let common = runtime.common;
+        let (_, frame_source, input_driver, clock, _) = common.into_parts();
+
+        assert_eq!(outcome, CommonJobRuntimeOutcome::Matched(true));
+        assert_eq!(frame_source.captures, 2);
+        assert_eq!(input_driver.clicks, vec![(5, 6), (13, 14)]);
+        assert_eq!(
+            clock.waits,
+            vec![plan.resin_craft_rule.after_white_confirm_delay_ms]
+        );
+    }
+
+    #[test]
+    fn desktop_go_to_crafting_bench_craft_adapter_adjusts_count_before_confirm() {
+        let assets = DesktopCraftingBenchTestAssets::new();
+        let frames = [
+            assets.frame(&assets.reduce_template, 2, 3),
+            assets.frame(&assets.reduce_template, 2, 3),
+            assets.frame(&assets.reduce_template, 2, 3),
+            assets.frame(&assets.reduce_template, 2, 3),
+            assets.frame(&assets.reduce_template, 2, 3),
+            assets.frame(&assets.increase_template, 8, 9),
+            assets.frame(&assets.increase_template, 8, 9),
+            assets.frame(&assets.white_confirm_template, 16, 17),
+            assets.frame(&assets.black_confirm_template, 24, 25),
+        ];
+        let mut runtime = assets.runtime(frames);
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月", "minResinToKeep": 120 })),
+        )
+        .unwrap() else {
+            panic!("expected GoToCraftingBench common job plan");
+        };
+
+        let outcome = runtime
+            .craft_condensed_resin(&plan.resin_craft_rule, 3)
+            .unwrap();
+        let common = runtime.common;
+        let (_, frame_source, input_driver, clock, _) = common.into_parts();
+
+        assert_eq!(outcome, CommonJobRuntimeOutcome::Matched(true));
+        assert_eq!(frame_source.captures, 9);
+        assert_eq!(
+            input_driver.clicks,
+            vec![
+                (3, 4),
+                (3, 4),
+                (3, 4),
+                (3, 4),
+                (3, 4),
+                (9, 10),
+                (9, 10),
+                (17, 18),
+                (25, 26)
+            ]
+        );
+        assert_eq!(
+            clock.waits,
+            vec![
+                plan.resin_craft_rule.reduce_click_delay_ms,
+                plan.resin_craft_rule.reduce_click_delay_ms,
+                plan.resin_craft_rule.reduce_click_delay_ms,
+                plan.resin_craft_rule.reduce_click_delay_ms,
+                plan.resin_craft_rule.reduce_click_delay_ms,
+                plan.resin_craft_rule.after_reduce_delay_ms,
+                plan.resin_craft_rule.add_click_delay_ms,
+                plan.resin_craft_rule.add_click_delay_ms,
+                plan.resin_craft_rule.after_add_delay_ms,
+                plan.resin_craft_rule.after_white_confirm_delay_ms,
+            ]
+        );
     }
 
     #[test]

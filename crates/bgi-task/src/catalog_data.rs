@@ -755,7 +755,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the Adventurers' Guild party switch, encounter reward, navigation, dialogue, and expedition state machine through injectable hooks and invocation live bridge; the desktop common-job route now shares the BitBlt capture backend, game-window metrics, frame-source, and capture-size guard used by other live common jobs, runs condition-aware preflight that skips statically inactive party/encounter branches, recognizes existing nested common-job bridges, validates the bundled PathExecutor JSON through the shared movement-contract preflight, and wires the GoToAdventurersGuild runtime hooks into existing nested common-job live bridges while still rejecting at the desktop PathExecutor movement, Catherine interaction, and talk-option drain/probe adapters before unsupported side effects are claimed.",
+        notes: "Rust now preserves and executes the Adventurers' Guild party switch, encounter reward, navigation, dialogue, and expedition state machine through injectable hooks and invocation live bridge; the desktop common-job route now shares the BitBlt capture backend, game-window metrics, frame-source, and capture-size guard used by other live common jobs, runs condition-aware preflight that skips statically inactive party/encounter branches, recognizes existing nested common-job bridges, validates the bundled PathExecutor JSON through the shared movement-contract preflight, and wires the GoToAdventurersGuild runtime hooks into existing nested common-job live bridges plus Catherine F-interaction and talk-option drain adapters while still rejecting at the desktop PathExecutor movement boundary before unsupported side effects are claimed.",
     },
     TaskCatalogEntry {
         key: "GoToCraftingBench",
@@ -773,7 +773,7 @@ static TASK_CATALOG: &[TaskCatalogEntry] = &[
         launch_policy: TaskLaunchPolicy::CommonJob,
         requires_main_ui_wait: None,
         port_state: TaskPortState::RuntimeScaffolded,
-        notes: "Rust now preserves and executes the crafting-bench navigation, dialogue, resin-count, and condensed-resin crafting state machine through injectable hooks and invocation live bridge; the desktop common-job route validates the bundled PathExecutor JSON through the shared movement-contract preflight and explicitly reports the remaining concrete interaction/OCR/click adapter gaps.",
+        notes: "Rust now preserves and executes the crafting-bench navigation, dialogue, resin-count, and condensed-resin crafting state machine through injectable hooks and invocation live bridge; the desktop common-job route validates the bundled PathExecutor JSON through the shared movement-contract preflight and wires the F-interaction retry, talk-option drain, and condensed-resin reduce/increase/confirm click adapters while still explicitly reporting the remaining desktop PathExecutor movement, OneDragon selected-config, and MinResinToKeep resin-count OCR gaps.",
     },
     TaskCatalogEntry {
         key: "GoToSereniteaPot",
