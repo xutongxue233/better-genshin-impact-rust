@@ -1,5 +1,5 @@
 use super::*;
-use crate::GenshinAction;
+use crate::{GenshinAction, KeyId};
 use std::fs;
 
 #[test]
@@ -847,7 +847,10 @@ fn pathing_execution_plan_models_use_gadget_not_wait_slice() {
         .iter()
         .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
         .expect("expected RunAction contract");
-    assert!(run_action_contract.pending_dependencies.is_empty());
+    assert_eq!(
+        run_action_contract.pending_dependencies,
+        vec![PathingMovementDependency::InputDispatch]
+    );
 }
 
 #[test]
@@ -899,6 +902,147 @@ fn pathing_execution_plan_keeps_use_gadget_cooldown_branch_pending() {
             .pending_dependencies
             .contains(&PathingMovementDependency::ActionHandlers));
     }
+}
+
+#[test]
+fn pathing_execution_plan_models_pick_around_action_sequence() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "pick route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "path", "action": "pick_around", "action_params": "2" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+    let waypoint = &plan.segments[0].waypoints[0];
+
+    assert_eq!(
+        waypoint.declared_action_use,
+        Some(PathingActionUseWaypointType::Custom)
+    );
+    assert!(waypoint.phases.contains(&PathingWaypointPhase::RunAction));
+    let Some(PathingActionPlan::PickAround(pick_around)) = &waypoint.action_plan else {
+        panic!("expected pick_around action plan");
+    };
+    assert_eq!(pick_around.action_code, "pick_around");
+    assert_eq!(pick_around.raw_params.as_deref(), Some("2"));
+    assert_eq!(pick_around.turns, 2);
+    assert_eq!(pick_around.turn_parse_error, None);
+    assert_eq!(pick_around.speed, 1.1);
+    assert_eq!(pick_around.circle_segments_per_turn, 6);
+    assert_eq!(pick_around.circle_start_ms, 600);
+    assert_eq!(pick_around.circle_interval_ms, 400);
+    assert_eq!(pick_around.view_reset_base_ms, 350);
+    assert!(pick_around.executor_ready);
+    assert_eq!(pick_around.turn_plans.len(), 2);
+    assert_eq!(pick_around.steps.len(), 68);
+
+    let first_turn = &pick_around.turn_plans[0];
+    assert_eq!(first_turn.turn_index, 0);
+    assert_eq!(first_turn.edge_delay_ms, 545);
+    assert_eq!(first_turn.move_backward_forward_ms, 200);
+    assert_eq!(first_turn.move_left_forward_ms, 312);
+    assert!((first_turn.radius_time_ms - 311.8097605735693).abs() < 0.000001);
+
+    let second_turn = &pick_around.turn_plans[1];
+    assert_eq!(second_turn.turn_index, 1);
+    assert_eq!(second_turn.edge_delay_ms, 909);
+    assert_eq!(second_turn.move_backward_forward_ms, 498);
+    assert_eq!(second_turn.move_left_forward_ms, 424);
+
+    assert_eq!(
+        pick_around.steps[0],
+        PathingPickAroundStep::Key {
+            turn_index: 0,
+            key: KeyId::MOUSE_MIDDLE_BUTTON,
+            press: PathingInputPress::KeyPress
+        }
+    );
+    assert_eq!(
+        pick_around.steps[1],
+        PathingPickAroundStep::Delay {
+            turn_index: 0,
+            milliseconds: 500
+        }
+    );
+    assert_eq!(
+        pick_around.steps[2],
+        PathingPickAroundStep::GenshinAction {
+            turn_index: 0,
+            action: GenshinAction::MoveBackward,
+            press: PathingInputPress::KeyPress
+        }
+    );
+    assert!(pick_around.steps.iter().any(|step| {
+        *step
+            == PathingPickAroundStep::GenshinAction {
+                turn_index: 0,
+                action: GenshinAction::MoveLeft,
+                press: PathingInputPress::KeyDown,
+            }
+    }));
+    assert!(pick_around.steps.iter().any(|step| {
+        *step
+            == PathingPickAroundStep::Delay {
+                turn_index: 1,
+                milliseconds: 909,
+            }
+    }));
+
+    let run_action_contract = plan.movement_contract.segments[0].waypoints[0]
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
+        .expect("expected RunAction contract");
+    assert_eq!(
+        run_action_contract.pending_dependencies,
+        vec![PathingMovementDependency::InputDispatch]
+    );
+}
+
+#[test]
+fn pathing_execution_plan_preserves_pick_around_turn_parse_fallbacks() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "pick fallback route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "path", "action": "pick_around", "action_params": "bad" },
+                { "x": 11.0, "y": 21.0, "type": "path", "action": "pick_around", "action_params": "0" },
+                { "x": 12.0, "y": 22.0, "type": "path", "action": "pick_around", "action_params": "-2" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+
+    let Some(PathingActionPlan::PickAround(invalid)) = &plan.segments[0].waypoints[0].action_plan
+    else {
+        panic!("expected invalid pick_around action plan");
+    };
+    assert_eq!(invalid.turns, 1);
+    assert!(invalid.turn_parse_error.as_ref().unwrap().contains("bad"));
+    assert_eq!(invalid.turn_plans.len(), 1);
+    assert_eq!(invalid.steps.len(), 34);
+
+    let Some(PathingActionPlan::PickAround(zero)) = &plan.segments[0].waypoints[1].action_plan
+    else {
+        panic!("expected zero-turn pick_around action plan");
+    };
+    assert_eq!(zero.turns, 0);
+    assert!(zero.turn_plans.is_empty());
+    assert!(zero.steps.is_empty());
+
+    let Some(PathingActionPlan::PickAround(negative)) = &plan.segments[0].waypoints[2].action_plan
+    else {
+        panic!("expected negative-turn pick_around action plan");
+    };
+    assert_eq!(negative.turns, -2);
+    assert!(negative.turn_plans.is_empty());
+    assert!(negative.steps.is_empty());
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::{PathingSummary, PathingTask, Waypoint};
-use crate::GenshinAction;
+use crate::{GenshinAction, KeyId};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -230,6 +230,7 @@ pub enum PathingActionPlan {
     CommonJob(PathingCommonJobActionPlan),
     ForceTeleport(PathingForceTeleportActionPlan),
     UseGadget(PathingUseGadgetActionPlan),
+    PickAround(PathingPickAroundActionPlan),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -373,6 +374,61 @@ pub struct PathingUseGadgetActionPlan {
     pub path_executor_after_action_delay_ms: u32,
     pub executor_ready: bool,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingPickAroundActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub turns: i32,
+    pub turn_parse_error: Option<String>,
+    pub speed: f64,
+    pub circle_segments_per_turn: u8,
+    pub circle_start_ms: u32,
+    pub circle_interval_ms: u32,
+    pub circle_time_ms: f64,
+    pub view_reset_base_ms: u32,
+    pub turn_plans: Vec<PathingPickAroundTurnPlan>,
+    pub steps: Vec<PathingPickAroundStep>,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingPickAroundTurnPlan {
+    pub turn_index: u32,
+    pub edge_delay_ms: u32,
+    pub radius_time_ms: f64,
+    pub end_angle_radians: f64,
+    pub move_backward_forward_ms: i32,
+    pub move_left_forward_ms: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathingInputPress {
+    KeyPress,
+    KeyDown,
+    KeyUp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PathingPickAroundStep {
+    GenshinAction {
+        turn_index: u32,
+        action: GenshinAction,
+        press: PathingInputPress,
+    },
+    Key {
+        turn_index: u32,
+        key: KeyId,
+        press: PathingInputPress,
+    },
+    Delay {
+        turn_index: u32,
+        milliseconds: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -854,20 +910,21 @@ fn pathing_phase_pending_dependencies(
 fn pathing_action_pending_dependencies(
     waypoint: &PathingWaypointPlan,
 ) -> Vec<PathingMovementDependency> {
-    let executor_ready = match waypoint.action_plan.as_ref() {
-        Some(PathingActionPlan::SetTime(plan)) => plan.executor_ready,
-        Some(PathingActionPlan::LogOutput(plan)) => plan.executor_ready,
-        Some(PathingActionPlan::CommonJob(plan)) => plan.executor_ready,
-        Some(PathingActionPlan::ForceTeleport(plan)) => plan.executor_ready,
-        Some(PathingActionPlan::LinneaMining(plan)) => plan.executor_ready,
-        Some(PathingActionPlan::UseGadget(plan)) => plan.executor_ready,
-        None => false,
-    };
-
-    if executor_ready {
-        Vec::new()
-    } else {
-        vec![PathingMovementDependency::ActionHandlers]
+    match waypoint.action_plan.as_ref() {
+        Some(PathingActionPlan::SetTime(plan)) if plan.executor_ready => Vec::new(),
+        Some(PathingActionPlan::LogOutput(plan)) if plan.executor_ready => Vec::new(),
+        Some(PathingActionPlan::CommonJob(plan)) if plan.executor_ready => Vec::new(),
+        Some(PathingActionPlan::ForceTeleport(plan)) if plan.executor_ready => Vec::new(),
+        Some(PathingActionPlan::UseGadget(plan)) if plan.executor_ready => {
+            vec![PathingMovementDependency::InputDispatch]
+        }
+        Some(PathingActionPlan::PickAround(plan)) if plan.executor_ready => {
+            vec![PathingMovementDependency::InputDispatch]
+        }
+        Some(PathingActionPlan::LinneaMining(plan)) if plan.executor_ready => {
+            vec![PathingMovementDependency::ActionHandlers]
+        }
+        _ => vec![PathingMovementDependency::ActionHandlers],
     }
 }
 
@@ -939,6 +996,10 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
         ))
     } else if action.eq_ignore_ascii_case("use_gadget") {
         Some(PathingActionPlan::UseGadget(plan_use_gadget_action(
+            action_params,
+        )))
+    } else if action.eq_ignore_ascii_case("pick_around") {
+        Some(PathingActionPlan::PickAround(plan_pick_around_action(
             action_params,
         )))
     } else {
@@ -1087,6 +1148,282 @@ fn plan_use_gadget_action(action_params: Option<&str>) -> PathingUseGadgetAction
         }
         .to_string(),
     }
+}
+
+const PICK_AROUND_SPEED: f64 = 1.1;
+const PICK_AROUND_CIRCLE_SEGMENTS_PER_TURN: u8 = 6;
+const PICK_AROUND_CIRCLE_START_MS: u32 = 600;
+const PICK_AROUND_CIRCLE_INTERVAL_MS: u32 = 400;
+const PICK_AROUND_CIRCLE_TIME_MS: f64 = 33_000.0;
+const PICK_AROUND_VIEW_RESET_BASE_MS: u32 = 350;
+
+fn plan_pick_around_action(action_params: Option<&str>) -> PathingPickAroundActionPlan {
+    let raw_params = action_params.map(ToOwned::to_owned);
+    let (turns, turn_parse_error) = parse_pick_around_turns(action_params);
+    let (turn_plans, steps) = build_pick_around_turns(turns, PICK_AROUND_SPEED);
+
+    PathingPickAroundActionPlan {
+        action_code: "pick_around".to_string(),
+        raw_params,
+        turns,
+        turn_parse_error,
+        speed: PICK_AROUND_SPEED,
+        circle_segments_per_turn: PICK_AROUND_CIRCLE_SEGMENTS_PER_TURN,
+        circle_start_ms: PICK_AROUND_CIRCLE_START_MS,
+        circle_interval_ms: PICK_AROUND_CIRCLE_INTERVAL_MS,
+        circle_time_ms: PICK_AROUND_CIRCLE_TIME_MS,
+        view_reset_base_ms: PICK_AROUND_VIEW_RESET_BASE_MS,
+        turn_plans,
+        steps,
+        executor_ready: true,
+        notes:
+            "Pathing pick_around action is modeled as the legacy circular middle-click pickup movement sequence; sequence-safe desktop input dispatch remains pending."
+                .to_string(),
+    }
+}
+
+fn parse_pick_around_turns(action_params: Option<&str>) -> (i32, Option<String>) {
+    let Some(raw_params) = action_params else {
+        return (1, None);
+    };
+    let trimmed = raw_params.trim();
+    if trimmed.is_empty() {
+        return (1, None);
+    }
+    match trimmed.parse::<i32>() {
+        Ok(turns) => (turns, None),
+        Err(_) => (
+            1,
+            Some(format!(
+                "pick_around turns parameter is not an integer and falls back to 1 like legacy int.TryParse: {trimmed}"
+            )),
+        ),
+    }
+}
+
+fn build_pick_around_turns(
+    turns: i32,
+    speed: f64,
+) -> (Vec<PathingPickAroundTurnPlan>, Vec<PathingPickAroundStep>) {
+    let mut turn_plans = Vec::new();
+    let mut steps = Vec::new();
+    if turns <= 0 {
+        return (turn_plans, steps);
+    }
+
+    let calculator = PickAroundCircularMotionCalculator::new(speed);
+    let mut old_radius_time_ms = 0.0_f64;
+    let mut angle = 0.0_f64;
+    for turn_index in 0..turns as u32 {
+        let circle = calculator.circle_info(turn_index);
+        let move_left_time_ms = circle.radius_time_ms - old_radius_time_ms * angle.cos();
+        let move_backward_time_ms = old_radius_time_ms * angle.sin();
+        let move_backward_forward_ms = round_midpoint_to_even_i32(move_backward_time_ms) + 200;
+        let move_left_forward_ms = round_midpoint_to_even_i32(move_left_time_ms);
+        turn_plans.push(PathingPickAroundTurnPlan {
+            turn_index,
+            edge_delay_ms: round_midpoint_to_even_u32(circle.edge_time_ms),
+            radius_time_ms: circle.radius_time_ms,
+            end_angle_radians: circle.end_angle_radians,
+            move_backward_forward_ms,
+            move_left_forward_ms,
+        });
+        push_pick_around_move_to_next_start_point(
+            &mut steps,
+            turn_index,
+            move_backward_forward_ms,
+            move_left_forward_ms,
+        );
+        push_pick_around_move_circle(
+            &mut steps,
+            turn_index,
+            round_midpoint_to_even_u32(circle.edge_time_ms),
+        );
+        old_radius_time_ms = circle.radius_time_ms;
+        angle = circle.end_angle_radians;
+    }
+
+    (turn_plans, steps)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PickAroundCircleInfo {
+    edge_time_ms: f64,
+    radius_time_ms: f64,
+    end_angle_radians: f64,
+}
+
+struct PickAroundCircularMotionCalculator {
+    speed: f64,
+    mix_angle: f64,
+    mix_x: f64,
+    mix_y: f64,
+}
+
+impl PickAroundCircularMotionCalculator {
+    fn new(speed: f64) -> Self {
+        let view_reset_time_ms = PICK_AROUND_VIEW_RESET_BASE_MS as f64 * speed;
+        let mix_angle = (view_reset_time_ms / PICK_AROUND_CIRCLE_TIME_MS + 1.0 / 4.0)
+            * 2.0
+            * std::f64::consts::PI;
+        let (mix_x, mix_y) = Self::arc_point(view_reset_time_ms / mix_angle, mix_angle);
+        Self {
+            speed,
+            mix_angle,
+            mix_x,
+            mix_y,
+        }
+    }
+
+    fn circle_info(&self, index: u32) -> PickAroundCircleInfo {
+        let edge_time_ms = PICK_AROUND_CIRCLE_START_MS as f64
+            + index as f64 * PICK_AROUND_CIRCLE_INTERVAL_MS as f64;
+        let angle = (edge_time_ms / PICK_AROUND_CIRCLE_TIME_MS + 1.0 / 4.0) * std::f64::consts::PI;
+        let radius_time = PICK_AROUND_CIRCLE_TIME_MS / (2.0 * std::f64::consts::PI);
+        let (rest_x, rest_y) = Self::arc_point(radius_time, 2.0 * angle - self.mix_angle);
+        let x = self.mix_x - rest_x;
+        let y = self.mix_y + rest_y;
+        let small_radius_time = (x.powi(2) + y.powi(2)).sqrt() / (2.0 * angle.sin());
+        let end_angle = angle - self.mix_angle + x.atan2(y) + std::f64::consts::PI / 2.0;
+        PickAroundCircleInfo {
+            edge_time_ms: edge_time_ms / self.speed,
+            radius_time_ms: small_radius_time / self.speed,
+            end_angle_radians: end_angle,
+        }
+    }
+
+    fn arc_point(radius: f64, angle: f64) -> (f64, f64) {
+        (radius * (1.0 - angle.cos()), radius * angle.sin())
+    }
+}
+
+fn push_pick_around_move_to_next_start_point(
+    steps: &mut Vec<PathingPickAroundStep>,
+    turn_index: u32,
+    move_backward_forward_ms: i32,
+    move_left_forward_ms: i32,
+) {
+    push_pick_around_middle_click(steps, turn_index);
+    push_pick_around_delay(steps, turn_index, 500);
+    push_pick_around_move_after_turn(
+        steps,
+        turn_index,
+        GenshinAction::MoveBackward,
+        move_backward_forward_ms,
+    );
+    push_pick_around_move_after_turn(
+        steps,
+        turn_index,
+        GenshinAction::MoveLeft,
+        move_left_forward_ms,
+    );
+}
+
+fn push_pick_around_move_after_turn(
+    steps: &mut Vec<PathingPickAroundStep>,
+    turn_index: u32,
+    action: GenshinAction,
+    forward_ms: i32,
+) {
+    push_pick_around_action(steps, turn_index, action, PathingInputPress::KeyPress);
+    push_pick_around_delay(steps, turn_index, 200);
+    push_pick_around_middle_click(steps, turn_index);
+    push_pick_around_delay(steps, turn_index, 500);
+    if forward_ms > 0 {
+        push_pick_around_action(
+            steps,
+            turn_index,
+            GenshinAction::MoveForward,
+            PathingInputPress::KeyDown,
+        );
+        push_pick_around_delay(steps, turn_index, forward_ms as u32);
+        push_pick_around_action(
+            steps,
+            turn_index,
+            GenshinAction::MoveForward,
+            PathingInputPress::KeyUp,
+        );
+        push_pick_around_delay(steps, turn_index, 200);
+    }
+}
+
+fn push_pick_around_move_circle(
+    steps: &mut Vec<PathingPickAroundStep>,
+    turn_index: u32,
+    edge_delay_ms: u32,
+) {
+    push_pick_around_action(
+        steps,
+        turn_index,
+        GenshinAction::MoveLeft,
+        PathingInputPress::KeyDown,
+    );
+    push_pick_around_delay(steps, turn_index, 30);
+    for _ in 0..PICK_AROUND_CIRCLE_SEGMENTS_PER_TURN {
+        push_pick_around_middle_click(steps, turn_index);
+        push_pick_around_delay(steps, turn_index, edge_delay_ms);
+    }
+    push_pick_around_action(
+        steps,
+        turn_index,
+        GenshinAction::MoveLeft,
+        PathingInputPress::KeyUp,
+    );
+    push_pick_around_delay(steps, turn_index, 200);
+}
+
+fn push_pick_around_middle_click(steps: &mut Vec<PathingPickAroundStep>, turn_index: u32) {
+    steps.push(PathingPickAroundStep::Key {
+        turn_index,
+        key: KeyId::MOUSE_MIDDLE_BUTTON,
+        press: PathingInputPress::KeyPress,
+    });
+}
+
+fn push_pick_around_action(
+    steps: &mut Vec<PathingPickAroundStep>,
+    turn_index: u32,
+    action: GenshinAction,
+    press: PathingInputPress,
+) {
+    steps.push(PathingPickAroundStep::GenshinAction {
+        turn_index,
+        action,
+        press,
+    });
+}
+
+fn push_pick_around_delay(
+    steps: &mut Vec<PathingPickAroundStep>,
+    turn_index: u32,
+    milliseconds: u32,
+) {
+    steps.push(PathingPickAroundStep::Delay {
+        turn_index,
+        milliseconds,
+    });
+}
+
+fn round_midpoint_to_even_u32(value: f64) -> u32 {
+    round_midpoint_to_even_i32(value).max(0) as u32
+}
+
+fn round_midpoint_to_even_i32(value: f64) -> i32 {
+    if !value.is_finite() {
+        return 0;
+    }
+    let floor = value.floor();
+    let fraction = value - floor;
+    let rounded = if (fraction - 0.5).abs() < f64::EPSILON {
+        if (floor as i64).rem_euclid(2) == 0 {
+            floor
+        } else {
+            floor + 1.0
+        }
+    } else {
+        value.round()
+    };
+    rounded as i32
 }
 
 fn parse_legacy_bool(value: &str) -> Option<bool> {

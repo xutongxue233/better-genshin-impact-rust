@@ -21751,6 +21751,62 @@ fn auto_pathing_action_boundary_keeps_use_gadget_cooldown_branch_pending() {
 }
 
 #[test]
+fn auto_pathing_action_boundary_reports_pick_around_sequence_without_live_dispatch() {
+    let root = unique_test_root("auto-pathing-pick-around");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("pick_around_route.json"),
+        r#"{
+                "info": { "name": "pick around route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 3.0, "y": 4.0, "type": "path", "move_mode": "walk", "action": "pick_around", "action_params": "2" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/pick_around_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            panic!("pick_around must not call common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 0);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.unsupported_actions, 0);
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+    assert!(!report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::ActionHandlers));
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected pick_around action report");
+    assert_eq!(action_report.action_code, "pick_around");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Reported);
+    assert!(action_report.message.contains("2 turn"));
+    assert!(action_report.message.contains("68 planned input step"));
+    assert!(action_report.message.contains("middle-click"));
+    assert!(action_report.message.contains("dispatch remains pending"));
+    assert!(action_report.common_job_plan.is_none());
+    assert!(action_report.common_job_live_execution.is_none());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_action_boundary_reports_log_output_and_runs_common_jobs() {
     let root = unique_test_root("auto-pathing-log-common-jobs");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");

@@ -6,8 +6,8 @@ use bgi_core::{
     legacy_track_map_point_for_pathing, read_pathing_task, PathingActionPlan,
     PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
     PathingLogOutputActionPlan, PathingMovementDependency, PathingMovementPhaseContract,
-    PathingMovementSegmentContract, PathingMovementWaypointContract, PathingPoint,
-    PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
+    PathingMovementSegmentContract, PathingMovementWaypointContract, PathingPickAroundActionPlan,
+    PathingPoint, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
     PathingTrackConversionContext, PathingUseGadgetActionPlan, PathingWaypointPhase,
     PathingWaypointPlan,
 };
@@ -515,7 +515,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence and pick_around circular middle-click pickup input sequence, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
                 .to_string(),
     })
 }
@@ -1503,6 +1503,9 @@ where
         Some(PathingActionPlan::UseGadget(use_gadget)) => {
             execute_use_gadget_pathing_action(use_gadget)
         }
+        Some(PathingActionPlan::PickAround(pick_around)) => {
+            execute_pick_around_pathing_action(pick_around)
+        }
         Some(PathingActionPlan::ForceTeleport(_)) => Ok(PathingActionBoundaryReport {
             action_code: "force_tp".to_string(),
             status: PathingBoundaryStatus::Unsupported,
@@ -1543,6 +1546,25 @@ fn execute_log_output_pathing_action(
         action_code: log_output.action_code.clone(),
         status: PathingBoundaryStatus::Reported,
         message: format!("pathing log_output action reported: {}", log_output.message),
+        common_job_task_key: None,
+        common_job_plan: None,
+        common_job_live_execution: None,
+    })
+}
+
+fn execute_pick_around_pathing_action(
+    pick_around: &PathingPickAroundActionPlan,
+) -> Result<PathingActionBoundaryReport> {
+    Ok(PathingActionBoundaryReport {
+        action_code: pick_around.action_code.clone(),
+        status: PathingBoundaryStatus::Reported,
+        message: format!(
+            "pathing pick_around action is modeled as {} turn(s), {} planned input step(s), speed {}, and {} middle-click pickup segment(s) per turn; sequence-safe desktop input dispatch remains pending",
+            pick_around.turns,
+            pick_around.steps.len(),
+            pick_around.speed,
+            pick_around.circle_segments_per_turn
+        ),
         common_job_task_key: None,
         common_job_plan: None,
         common_job_live_execution: None,

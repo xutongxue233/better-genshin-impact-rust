@@ -47,12 +47,13 @@ pub use pathing::{
     LinneaMiningClusterRule, LinneaMiningDetectionRule, LinneaMiningDetectionSource,
     LinneaMiningMineRule, LinneaMiningScanRule, PathingActionPlan, PathingActionUseWaypointType,
     PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
-    PathingFarmingExecutionPlan, PathingForceTeleportActionPlan, PathingLogOutputActionPlan,
-    PathingMovementContractPlan, PathingMovementDependency, PathingMovementPhaseContract,
-    PathingMovementSegmentContract, PathingMovementWaypointContract, PathingNativePhaseStatus,
-    PathingPoint, PathingPreflightPlan, PathingSegmentPlan, PathingSetTimeActionPlan,
-    PathingSummary, PathingTask, PathingTrackConversionContext, PathingUseGadgetActionPlan,
-    PathingWaypointPhase, PathingWaypointPlan, Waypoint,
+    PathingFarmingExecutionPlan, PathingForceTeleportActionPlan, PathingInputPress,
+    PathingLogOutputActionPlan, PathingMovementContractPlan, PathingMovementDependency,
+    PathingMovementPhaseContract, PathingMovementSegmentContract, PathingMovementWaypointContract,
+    PathingNativePhaseStatus, PathingPickAroundActionPlan, PathingPickAroundStep,
+    PathingPickAroundTurnPlan, PathingPoint, PathingPreflightPlan, PathingSegmentPlan,
+    PathingSetTimeActionPlan, PathingSummary, PathingTask, PathingTrackConversionContext,
+    PathingUseGadgetActionPlan, PathingWaypointPhase, PathingWaypointPlan, Waypoint,
 };
 pub use trigger::{initial_triggers, GameUiCategory, TriggerDescriptor};
 pub use ui::{default_navigation, ui_shell_decision, NavigationItem, UiShellDecision};
