@@ -4919,17 +4919,6 @@ impl DesktopAutoEatRuntime {
             })?;
         Ok(region.is_exist())
     }
-
-    fn execute_events(&self, events: Vec<bgi_input::InputEvent>) -> bgi_task::Result<()> {
-        self.ensure_not_cancelled()?;
-        bgi_script::GlobalInputExecution::execute_events(
-            events,
-            GlobalInputDispatchMode::SendInput,
-            Some(self.window_handle),
-        )
-        .map(|_| ())
-        .map_err(|error| TaskError::VisionPlan(error.to_string()))
-    }
 }
 
 impl AutoEatRuntime for DesktopAutoEatRuntime {
@@ -4957,19 +4946,12 @@ impl AutoEatRuntime for DesktopAutoEatRuntime {
         &mut self,
         action: &AutoEatTriggeredAction,
     ) -> bgi_task::Result<()> {
-        let action = match action {
-            AutoEatTriggeredAction::Eat { action }
-            | AutoEatTriggeredAction::Resurrect { action } => action,
-        };
-        let action = desktop_auto_eat_genshin_action(action).ok_or_else(|| {
-            TaskError::VisionPlan(format!(
-                "AutoEat action is not supported on desktop: {action}"
-            ))
-        })?;
-        let events =
-            input_events_for_action(&self.key_bindings_config, action, KeyActionType::KeyPress)
-                .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
-        self.execute_events(events)
+        desktop_dispatch_auto_eat_action(
+            action,
+            &self.key_bindings_config,
+            self.window_handle,
+            &self.cancellation,
+        )
     }
 }
 
@@ -5009,6 +4991,38 @@ fn desktop_auto_eat_genshin_action(action: &str) -> Option<GenshinAction> {
         "GIActions.QuickUseGadget" | "QuickUseGadget" => Some(GenshinAction::QuickUseGadget),
         _ => None,
     }
+}
+
+fn desktop_dispatch_auto_eat_action(
+    action: &AutoEatTriggeredAction,
+    key_bindings_config: &KeyBindingsConfig,
+    window_handle: isize,
+    cancellation: &InputCancellationToken,
+) -> bgi_task::Result<()> {
+    if cancellation.is_cancelled() {
+        return Err(TaskError::VisionPlan(
+            "AutoEat desktop action dispatch cancelled".to_string(),
+        ));
+    }
+    let action = match action {
+        AutoEatTriggeredAction::Eat { action } | AutoEatTriggeredAction::Resurrect { action } => {
+            action
+        }
+    };
+    let action = desktop_auto_eat_genshin_action(action).ok_or_else(|| {
+        TaskError::VisionPlan(format!(
+            "AutoEat action is not supported on desktop: {action}"
+        ))
+    })?;
+    let events = input_events_for_action(key_bindings_config, action, KeyActionType::KeyPress)
+        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+    bgi_script::GlobalInputExecution::execute_events(
+        events,
+        GlobalInputDispatchMode::SendInput,
+        Some(window_handle),
+    )
+    .map(|_| ())
+    .map_err(|error| TaskError::VisionPlan(error.to_string()))
 }
 
 fn execute_desktop_auto_fish_tick_live_plan(
@@ -8597,13 +8611,30 @@ fn execute_desktop_auto_pathing_action_boundary_live_plan(
             .map_err(|error| TaskError::VisionPlan(error.to_string()))
     };
 
+    let key_bindings_config = config.key_bindings_config.clone();
+    let window_handle = window.handle.0;
+    let cancellation_for_auto_eat = Arc::clone(&cancellation);
+    let auto_eat_action_dispatcher: DesktopAutoPathingAutoEatActionDispatcher =
+        Box::new(move |action| {
+            desktop_dispatch_auto_eat_action(
+                action,
+                &key_bindings_config,
+                window_handle,
+                &cancellation_for_auto_eat,
+            )
+        });
+    let capture_runtime = DesktopAutoPathingCaptureRuntime {
+        capture,
+        auto_eat_action_dispatcher: Some(auto_eat_action_dispatcher),
+    };
+
     execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
         app_root,
         config,
         capture_size,
         Arc::clone(&cancellation),
         plan,
-        capture,
+        capture_runtime,
         |common_job_plan| {
             execute_desktop_common_job_live_plan(
                 config,
@@ -8621,7 +8652,7 @@ fn execute_desktop_auto_pathing_action_boundary_live_plan_with_capture<C, F>(
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
     plan: &AutoPathingExecutionPlan,
-    capture: C,
+    capture_runtime: DesktopAutoPathingCaptureRuntime<C>,
     live_executor: F,
 ) -> Result<AutoPathingActionBoundaryReport, String>
 where
@@ -8632,10 +8663,15 @@ where
         capture_size,
         auto_eat_config: config.auto_eat_config.clone(),
     });
+    let DesktopAutoPathingCaptureRuntime {
+        capture,
+        auto_eat_action_dispatcher,
+    } = capture_runtime;
     let mut movement_runtime = DesktopAutoPathingMovementRuntime::new(
         app_root,
         capture,
         auto_eat_plan,
+        auto_eat_action_dispatcher,
         config.pathing_condition_config.only_in_teleport_recover,
         Arc::clone(&cancellation),
         DesktopAutoPathingRecoveryProbeMode::ProbeCurrentAvatarLowHp,
@@ -8650,14 +8686,24 @@ where
     .map_err(|error| error.to_string())
 }
 
+struct DesktopAutoPathingCaptureRuntime<C> {
+    capture: C,
+    auto_eat_action_dispatcher: Option<DesktopAutoPathingAutoEatActionDispatcher>,
+}
+
 struct DesktopAutoPathingMovementRuntime<C> {
     app_root: PathBuf,
     capture: C,
     auto_eat_plan: AutoEatExecutionPlan,
+    auto_eat_state: AutoEatTriggerState,
+    auto_eat_action_dispatcher: Option<DesktopAutoPathingAutoEatActionDispatcher>,
     only_in_teleport_recover: bool,
     cancellation: Arc<InputCancellationToken>,
     recovery_probe_mode: DesktopAutoPathingRecoveryProbeMode,
 }
+
+type DesktopAutoPathingAutoEatActionDispatcher =
+    Box<dyn FnMut(&AutoEatTriggeredAction) -> bgi_task::Result<()> + Send>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DesktopAutoPathingRecoveryProbeMode {
@@ -8670,6 +8716,7 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
         app_root: &Path,
         capture: C,
         auto_eat_plan: AutoEatExecutionPlan,
+        auto_eat_action_dispatcher: Option<DesktopAutoPathingAutoEatActionDispatcher>,
         only_in_teleport_recover: bool,
         cancellation: Arc<InputCancellationToken>,
         recovery_probe_mode: DesktopAutoPathingRecoveryProbeMode,
@@ -8678,6 +8725,8 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
             app_root: app_root.to_path_buf(),
             capture,
             auto_eat_plan,
+            auto_eat_state: AutoEatTriggerState::default(),
+            auto_eat_action_dispatcher,
             only_in_teleport_recover,
             cancellation,
             recovery_probe_mode,
@@ -8691,6 +8740,62 @@ impl<C> DesktopAutoPathingMovementRuntime<C> {
             ));
         }
         Ok(())
+    }
+
+    fn try_auto_eat_low_hp_recovery(
+        &mut self,
+        context: &AutoPathingMovementPhaseExecutionContext<'_>,
+        first_image: BgrImage,
+    ) -> bgi_task::Result<AutoPathingPhaseExecution>
+    where
+        C: FnMut() -> bgi_task::Result<BgrImage>,
+    {
+        let plan = self.auto_eat_plan.clone();
+        let mut runtime = DesktopAutoPathingAutoEatRuntime::new(
+            bgi_task::task_asset_root(),
+            plan.capture_size,
+            &mut self.capture,
+            first_image,
+            &mut self.auto_eat_action_dispatcher,
+            Arc::clone(&self.cancellation),
+        );
+        let report = match execute_auto_eat_tick_plan(&plan, &mut self.auto_eat_state, &mut runtime)
+        {
+            Ok(report) => report,
+            Err(error) => {
+                return Ok(AutoPathingPhaseExecution::unsupported(format!(
+                    "AutoPathing RecoverWhenLowHp detected low HP at waypoint {}, but AutoEat quick-use recovery could not run: {error}; party healing, revive modal handling, and Statue of the Seven recovery remain native-pending",
+                    context.waypoint.global_index
+                )));
+            }
+        };
+        drop(runtime);
+
+        if report.dispatched_actions.is_empty() {
+            return Ok(AutoPathingPhaseExecution::unsupported(format!(
+                "AutoPathing RecoverWhenLowHp detected low HP at waypoint {}, but AutoEat quick-use recovery did not dispatch an action (processed={}, skip_reason={:?}, recovery_available={}, resurrection_available={}); party healing, revive modal handling, and Statue of the Seven recovery remain native-pending",
+                context.waypoint.global_index,
+                report.decision.processed,
+                report.decision.skip_reason,
+                report.decision.recovery_available,
+                report.decision.resurrection_available
+            )));
+        }
+
+        let verify_image = (self.capture)()?;
+        if desktop_auto_eat_current_avatar_low_hp(&verify_image, &self.auto_eat_plan) {
+            return Ok(AutoPathingPhaseExecution::unsupported(format!(
+                "AutoPathing RecoverWhenLowHp dispatched AutoEat quick-use action(s) {:?} at waypoint {}, but the current-avatar low-HP probe is still low; party healing, revive modal handling, and Statue of the Seven recovery remain native-pending",
+                report.dispatched_actions,
+                context.waypoint.global_index
+            )));
+        }
+
+        Ok(AutoPathingPhaseExecution::executed(format!(
+            "AutoPathing RecoverWhenLowHp dispatched AutoEat quick-use action(s) {:?} at waypoint {} and the follow-up HP probe no longer reports low HP",
+            report.dispatched_actions,
+            context.waypoint.global_index
+        )))
     }
 
     fn wait_for_pre_teleport_delay(&self, duration_ms: u32) -> bool {
@@ -8774,10 +8879,7 @@ where
             }
             let image = (self.capture)()?;
             if desktop_auto_eat_current_avatar_low_hp(&image, &self.auto_eat_plan) {
-                return Ok(AutoPathingPhaseExecution::unsupported(format!(
-                    "AutoPathing RecoverWhenLowHp detected low HP at waypoint {}; party healing, revive modal handling, and Statue of the Seven recovery remain native-pending",
-                    context.waypoint.global_index
-                )));
+                return self.try_auto_eat_low_hp_recovery(&context, image);
             }
             return Ok(AutoPathingPhaseExecution::executed(format!(
                 "AutoPathing RecoverWhenLowHp probed current avatar HP at waypoint {} and no recovery was needed",
@@ -8818,6 +8920,118 @@ where
             context.waypoint.global_index,
             context.phase.pending_dependencies
         )))
+    }
+}
+
+struct DesktopAutoPathingAutoEatRuntime<'a, C> {
+    template_root: PathBuf,
+    vision_backend: PureRustVisionBackend,
+    capture_size: VisionSize,
+    capture: &'a mut C,
+    first_image: Option<BgrImage>,
+    action_dispatcher: &'a mut Option<DesktopAutoPathingAutoEatActionDispatcher>,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl<'a, C> DesktopAutoPathingAutoEatRuntime<'a, C>
+where
+    C: FnMut() -> bgi_task::Result<BgrImage>,
+{
+    fn new(
+        template_root: PathBuf,
+        capture_size: VisionSize,
+        capture: &'a mut C,
+        first_image: BgrImage,
+        action_dispatcher: &'a mut Option<DesktopAutoPathingAutoEatActionDispatcher>,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            vision_backend: PureRustVisionBackend::new().with_template_root(&template_root),
+            template_root,
+            capture_size,
+            capture,
+            first_image: Some(first_image),
+            action_dispatcher,
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::VisionPlan(
+                "AutoPathing AutoEat recovery cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn capture_bgr_image(&mut self) -> bgi_task::Result<BgrImage> {
+        self.ensure_not_cancelled()?;
+        if let Some(first_image) = self.first_image.take() {
+            return Ok(first_image);
+        }
+        (self.capture)()
+    }
+
+    fn locate_auto_eat_template(
+        &self,
+        capture: &ImageRegion,
+        locator: &AutoEatTemplateLocator,
+    ) -> bgi_task::Result<bool> {
+        let object =
+            desktop_auto_eat_template_object(locator, self.capture_size).map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoPathing AutoEat template object failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        let region = capture
+            .find(&self.vision_backend, &object)
+            .map_err(|error| {
+                TaskError::VisionPlan(format!(
+                    "AutoPathing AutoEat template lookup failed under {}: {error}",
+                    self.template_root.display()
+                ))
+            })?;
+        Ok(region.is_exist())
+    }
+}
+
+impl<C> AutoEatRuntime for DesktopAutoPathingAutoEatRuntime<'_, C>
+where
+    C: FnMut() -> bgi_task::Result<BgrImage>,
+{
+    fn observe_auto_eat_tick(
+        &mut self,
+        plan: &AutoEatExecutionPlan,
+    ) -> bgi_task::Result<AutoEatTickObservation> {
+        let image = self.capture_bgr_image()?;
+        let current_avatar_low_hp = desktop_auto_eat_current_avatar_low_hp(&image, plan);
+        let capture = ImageRegion::capture(image);
+        let recovery_icon_detected =
+            self.locate_auto_eat_template(&capture, &plan.locators.recovery_icon)?;
+        let resurrection_icon_detected =
+            self.locate_auto_eat_template(&capture, &plan.locators.resurrection_icon)?;
+        let now_ms = current_time_ms().map_err(TaskError::VisionPlan)?;
+        Ok(AutoEatTickObservation {
+            now_ms,
+            current_avatar_low_hp,
+            recovery_icon_detected,
+            resurrection_icon_detected,
+        })
+    }
+
+    fn dispatch_auto_eat_action(
+        &mut self,
+        action: &AutoEatTriggeredAction,
+    ) -> bgi_task::Result<()> {
+        self.ensure_not_cancelled()?;
+        let Some(dispatcher) = self.action_dispatcher.as_mut() else {
+            return Err(TaskError::VisionPlan(
+                "AutoPathing AutoEat recovery has no desktop action dispatcher".to_string(),
+            ));
+        };
+        dispatcher(action)
     }
 }
 
@@ -14771,6 +14985,7 @@ where
             )))
         },
         auto_eat_plan,
+        None,
         config.pathing_condition_config.only_in_teleport_recover,
         cancellation_for_runtime,
         DesktopAutoPathingRecoveryProbeMode::SkipForCommonJobPathing,
@@ -27133,7 +27348,10 @@ mod tests {
             capture_size,
             Arc::new(InputCancellationToken::new()),
             &auto_pathing_plan,
-            move || frame_source.capture_frame(),
+            DesktopAutoPathingCaptureRuntime {
+                capture: move || frame_source.capture_frame(),
+                auto_eat_action_dispatcher: None,
+            },
             |common_job_plan| {
                 panic!(
                     "log_output AutoPathing route should not call common-job live executor: {}",
@@ -27239,7 +27457,10 @@ mod tests {
             capture_size,
             Arc::new(InputCancellationToken::new()),
             &auto_pathing_plan,
-            move || frame_source.capture_frame(),
+            DesktopAutoPathingCaptureRuntime {
+                capture: move || frame_source.capture_frame(),
+                auto_eat_action_dispatcher: None,
+            },
             |common_job_plan| {
                 panic!(
                     "low-HP AutoPathing recovery probe should not call common-job live executor yet: {}",
@@ -27277,6 +27498,113 @@ mod tests {
     }
 
     #[test]
+    fn desktop_auto_pathing_recovery_probe_executes_auto_eat_quick_use_slice() {
+        let root = desktop_test_temp_root("auto-pathing-auto-eat-recovery");
+        write_desktop_auto_pathing_log_route(&root);
+        let auto_pathing_plan = plan_auto_pathing(&root, "liyue/live_log_route.json").unwrap();
+        let capture_size = VisionSize::new(1920, 1080);
+        let mut config = AppConfig::default();
+        config.auto_eat_config.enabled = true;
+        let auto_eat_plan = plan_auto_eat(AutoEatExecutionConfig {
+            capture_size,
+            auto_eat_config: config.auto_eat_config.clone(),
+        });
+        let mut low_hp_frame = desktop_talk_option_test_blank_frame(capture_size);
+        let point = auto_eat_plan.detection_rule.low_hp_pixel_probe.point;
+        set_desktop_bgr_pixel(
+            &mut low_hp_frame.pixels,
+            capture_size,
+            (point.x as u32, point.y as u32),
+            [90, 90, 255],
+        );
+        let recovery_template = BgrImage::read(
+            bgi_task::task_asset_root()
+                .join("GameTask")
+                .join("AutoEat")
+                .join("Assets")
+                .join("1920x1080")
+                .join("Recovery.png"),
+        )
+        .unwrap();
+        desktop_talk_option_test_paint_template(
+            &mut low_hp_frame.pixels,
+            capture_size,
+            &recovery_template,
+            auto_eat_plan.locators.recovery_icon.roi.x as u32,
+            auto_eat_plan.locators.recovery_icon.roi.y as u32,
+        );
+        let healthy_frame = desktop_talk_option_test_blank_frame(capture_size);
+        let mut frame_source = DesktopTalkOptionTestFrameSource::new([low_hp_frame, healthy_frame]);
+        let dispatched_actions: Arc<Mutex<Vec<AutoEatTriggeredAction>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let dispatched_actions_for_runtime = Arc::clone(&dispatched_actions);
+        let auto_eat_action_dispatcher: DesktopAutoPathingAutoEatActionDispatcher =
+            Box::new(move |action| {
+                dispatched_actions_for_runtime
+                    .lock()
+                    .unwrap()
+                    .push(action.clone());
+                Ok(())
+            });
+
+        let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+            &root,
+            &config,
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+            &auto_pathing_plan,
+            DesktopAutoPathingCaptureRuntime {
+                capture: move || frame_source.capture_frame(),
+                auto_eat_action_dispatcher: Some(auto_eat_action_dispatcher),
+            },
+            |common_job_plan| {
+                panic!(
+                    "AutoEat AutoPathing recovery route should not call common-job live executor: {}",
+                    common_job_plan.task_key()
+                )
+            },
+        )
+        .unwrap();
+
+        let dispatched_actions = dispatched_actions.lock().unwrap().clone();
+        assert_eq!(
+            dispatched_actions,
+            vec![AutoEatTriggeredAction::Eat {
+                action: "QuickUseGadget".to_string()
+            }]
+        );
+        assert!(report.boundary_completed);
+        assert!(report.movement_attempted);
+        assert!(!report.native_pathing_completed);
+        let movement_report = report
+            .movement_report
+            .as_ref()
+            .expect("expected movement contract report");
+        assert_eq!(movement_report.executed_phases, 2);
+        assert_eq!(movement_report.unsupported_phases, 1);
+        let movement_phase_reports =
+            &movement_report.segment_reports[0].waypoint_reports[0].phase_reports;
+        assert_eq!(
+            movement_phase_reports[0].phase,
+            bgi_core::PathingWaypointPhase::RecoverWhenLowHp
+        );
+        assert_eq!(
+            movement_phase_reports[0].status,
+            bgi_task::AutoPathingPhaseExecutionStatus::Executed
+        );
+        assert!(movement_phase_reports[0].message.contains("QuickUseGadget"));
+        assert!(movement_phase_reports[0]
+            .message
+            .contains("follow-up HP probe"));
+        assert!(!movement_phase_reports[0].message.contains("恢复完成"));
+        assert_eq!(
+            movement_report.failed_phase.as_ref().unwrap().phase,
+            bgi_core::PathingWaypointPhase::MoveTo
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn desktop_auto_pathing_recovery_probe_respects_only_in_teleport_recover() {
         let root = desktop_test_temp_root("auto-pathing-only-teleport-recovery");
         write_desktop_auto_pathing_log_route(&root);
@@ -27292,12 +27620,15 @@ mod tests {
             capture_size,
             Arc::new(InputCancellationToken::new()),
             &auto_pathing_plan,
-            || {
-                capture_called.set(true);
-                Err(TaskError::VisionPlan(
-                    "only-in-teleport recovery should not capture non-teleport waypoint"
-                        .to_string(),
-                ))
+            DesktopAutoPathingCaptureRuntime {
+                capture: || {
+                    capture_called.set(true);
+                    Err(TaskError::VisionPlan(
+                        "only-in-teleport recovery should not capture non-teleport waypoint"
+                            .to_string(),
+                    ))
+                },
+                auto_eat_action_dispatcher: None,
             },
             |common_job_plan| {
                 panic!(
