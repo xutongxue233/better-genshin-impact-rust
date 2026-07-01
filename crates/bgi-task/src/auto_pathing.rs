@@ -6,8 +6,9 @@ use bgi_core::{
     legacy_track_map_point_for_pathing, read_pathing_task, PathingActionPlan,
     PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
     PathingLogOutputActionPlan, PathingMovementDependency, PathingMovementPhaseContract,
-    PathingMovementSegmentContract, PathingMovementWaypointContract, PathingPickAroundActionPlan,
-    PathingPoint, PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
+    PathingMovementSegmentContract, PathingMovementWaypointContract,
+    PathingNahidaCollectActionPlan, PathingPickAroundActionPlan, PathingPoint,
+    PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
     PathingTrackConversionContext, PathingUseGadgetActionPlan, PathingWaypointPhase,
     PathingWaypointPlan,
 };
@@ -515,7 +516,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence and pick_around circular middle-click pickup input sequence, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence, pick_around circular middle-click pickup input sequence, and nahida_collect long-hold ElementalSkill scan sequence, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
                 .to_string(),
     })
 }
@@ -1500,6 +1501,9 @@ where
         Some(PathingActionPlan::CommonJob(common_job)) => {
             execute_common_job_pathing_action(common_job, capture_size, live_executor)
         }
+        Some(PathingActionPlan::NahidaCollect(nahida_collect)) => {
+            execute_nahida_collect_pathing_action(nahida_collect)
+        }
         Some(PathingActionPlan::UseGadget(use_gadget)) => {
             execute_use_gadget_pathing_action(use_gadget)
         }
@@ -1564,6 +1568,26 @@ fn execute_pick_around_pathing_action(
             pick_around.steps.len(),
             pick_around.speed,
             pick_around.circle_segments_per_turn
+        ),
+        common_job_task_key: None,
+        common_job_plan: None,
+        common_job_live_execution: None,
+    })
+}
+
+fn execute_nahida_collect_pathing_action(
+    nahida_collect: &PathingNahidaCollectActionPlan,
+) -> Result<PathingActionBoundaryReport> {
+    Ok(PathingActionBoundaryReport {
+        action_code: nahida_collect.action_code.clone(),
+        status: PathingBoundaryStatus::Unsupported,
+        message: format!(
+            "pathing nahida_collect action is modeled for avatar {}, {} planned input step(s), {} ground scan move(s), {} raised scan move(s), and PathExecutor after-action delay {}ms, but combat-scene avatar selection, skill cooldown tracking, DPI-aware mouse movement, and sequence-safe desktop input dispatch remain pending",
+            nahida_collect.avatar_name,
+            nahida_collect.steps.len(),
+            nahida_collect.ground_scan_iterations,
+            nahida_collect.raised_scan_iterations,
+            nahida_collect.path_executor_after_action_delay_ms
         ),
         common_job_task_key: None,
         common_job_plan: None,

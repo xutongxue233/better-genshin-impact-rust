@@ -905,6 +905,133 @@ fn pathing_execution_plan_keeps_use_gadget_cooldown_branch_pending() {
 }
 
 #[test]
+fn pathing_execution_plan_models_nahida_collect_scan_sequence() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "nahida route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "target", "action": "nahida_collect", "action_params": "ignored" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+    let waypoint = &plan.segments[0].waypoints[0];
+
+    assert_eq!(
+        waypoint.declared_action_use,
+        Some(PathingActionUseWaypointType::Custom)
+    );
+    assert!(waypoint.phases.contains(&PathingWaypointPhase::RunAction));
+    let Some(PathingActionPlan::NahidaCollect(nahida_collect)) = &waypoint.action_plan else {
+        panic!("expected nahida_collect action plan");
+    };
+    assert_eq!(nahida_collect.action_code, "nahida_collect");
+    assert_eq!(nahida_collect.raw_params.as_deref(), Some("ignored"));
+    assert_eq!(nahida_collect.avatar_name, "纳西妲");
+    assert!(nahida_collect.requires_combat_scenes);
+    assert!(nahida_collect.switch_avatar_before_collect);
+    assert!(nahida_collect.wait_skill_cooldown_before_collect);
+    assert!(nahida_collect.update_skill_cooldown_after_collect);
+    assert!(nahida_collect.dpi_scale_required);
+    assert_eq!(nahida_collect.lower_view_mouse_move_y, 10_000);
+    assert_eq!(
+        nahida_collect.elemental_skill_action,
+        GenshinAction::ElementalSkill
+    );
+    assert_eq!(nahida_collect.ground_scan_iterations, 15);
+    assert_eq!(nahida_collect.ground_scan_move_x, 400);
+    assert!(nahida_collect.ground_scan_move_x_dpi_scaled);
+    assert_eq!(nahida_collect.ground_scan_move_y, 500);
+    assert!(!nahida_collect.ground_scan_move_y_dpi_scaled);
+    assert_eq!(nahida_collect.raised_scan_iterations, 60);
+    assert_eq!(nahida_collect.raised_scan_initial_move_y, -30);
+    assert_eq!(nahida_collect.raised_scan_y_adjust_before_iteration, 20);
+    assert_eq!(nahida_collect.raised_scan_y_adjust_delta, -20);
+    assert_eq!(nahida_collect.scan_step_delay_ms, 30);
+    assert_eq!(nahida_collect.post_skill_release_cd_update_delay_ms, 200);
+    assert_eq!(nahida_collect.after_collect_delay_ms, 800);
+    assert_eq!(nahida_collect.restore_view_key, KeyId::MOUSE_MIDDLE_BUTTON);
+    assert_eq!(nahida_collect.restore_view_delay_ms, 1_000);
+    assert_eq!(nahida_collect.path_executor_after_action_delay_ms, 1_000);
+    assert!(nahida_collect.skill_release_in_finally);
+    assert!(!nahida_collect.executor_ready);
+    assert_eq!(nahida_collect.steps.len(), 159);
+
+    assert_eq!(
+        nahida_collect.steps[0],
+        PathingNahidaCollectStep::MouseMoveBy {
+            dx: 0,
+            dy: 10_000,
+            dx_dpi_scaled: false,
+            dy_dpi_scaled: false,
+        }
+    );
+    assert_eq!(
+        nahida_collect.steps[2],
+        PathingNahidaCollectStep::GenshinAction {
+            action: GenshinAction::ElementalSkill,
+            press: PathingInputPress::KeyDown
+        }
+    );
+    assert_eq!(
+        nahida_collect.steps[4],
+        PathingNahidaCollectStep::MouseMoveBy {
+            dx: 400,
+            dy: 500,
+            dx_dpi_scaled: true,
+            dy_dpi_scaled: false,
+        }
+    );
+    assert_eq!(
+        nahida_collect.steps[34],
+        PathingNahidaCollectStep::MouseMoveBy {
+            dx: 400,
+            dy: -30,
+            dx_dpi_scaled: true,
+            dy_dpi_scaled: true,
+        }
+    );
+    assert_eq!(
+        nahida_collect.steps[72],
+        PathingNahidaCollectStep::MouseMoveBy {
+            dx: 400,
+            dy: -50,
+            dx_dpi_scaled: true,
+            dy_dpi_scaled: true,
+        }
+    );
+    assert_eq!(
+        nahida_collect.steps[154],
+        PathingNahidaCollectStep::GenshinAction {
+            action: GenshinAction::ElementalSkill,
+            press: PathingInputPress::KeyUp
+        }
+    );
+    assert_eq!(
+        nahida_collect.steps[157],
+        PathingNahidaCollectStep::Key {
+            key: KeyId::MOUSE_MIDDLE_BUTTON,
+            press: PathingInputPress::KeyPress
+        }
+    );
+
+    let run_action_contract = plan.movement_contract.segments[0].waypoints[0]
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
+        .expect("expected RunAction contract");
+    assert_eq!(
+        run_action_contract.pending_dependencies,
+        vec![
+            PathingMovementDependency::InputDispatch,
+            PathingMovementDependency::ActionHandlers
+        ]
+    );
+}
+
+#[test]
 fn pathing_execution_plan_models_pick_around_action_sequence() {
     let task = PathingTask::from_json(
         r#"{

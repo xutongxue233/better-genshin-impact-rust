@@ -21807,6 +21807,66 @@ fn auto_pathing_action_boundary_reports_pick_around_sequence_without_live_dispat
 }
 
 #[test]
+fn auto_pathing_action_boundary_reports_nahida_collect_modeled_but_pending() {
+    let root = unique_test_root("auto-pathing-nahida-collect");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("nahida_collect_route.json"),
+        r#"{
+                "info": { "name": "nahida collect route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 3.0, "y": 4.0, "type": "target", "move_mode": "walk", "action": "nahida_collect" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/nahida_collect_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            panic!("nahida_collect must not call common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 0);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.unsupported_actions, 1);
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::ActionHandlers));
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected nahida_collect action report");
+    assert_eq!(action_report.action_code, "nahida_collect");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Unsupported);
+    assert!(action_report.message.contains("159 planned input step"));
+    assert!(action_report.message.contains("15 ground scan"));
+    assert!(action_report.message.contains("60 raised scan"));
+    assert!(action_report.message.contains("after-action delay 1000ms"));
+    assert!(action_report
+        .message
+        .contains("combat-scene avatar selection"));
+    assert!(action_report.message.contains("DPI-aware mouse movement"));
+    assert!(action_report.common_job_plan.is_none());
+    assert!(action_report.common_job_live_execution.is_none());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_action_boundary_reports_log_output_and_runs_common_jobs() {
     let root = unique_test_root("auto-pathing-log-common-jobs");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");

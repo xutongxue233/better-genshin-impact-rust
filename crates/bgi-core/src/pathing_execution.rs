@@ -229,6 +229,7 @@ pub enum PathingActionPlan {
     LogOutput(PathingLogOutputActionPlan),
     CommonJob(PathingCommonJobActionPlan),
     ForceTeleport(PathingForceTeleportActionPlan),
+    NahidaCollect(PathingNahidaCollectActionPlan),
     UseGadget(PathingUseGadgetActionPlan),
     PickAround(PathingPickAroundActionPlan),
 }
@@ -374,6 +375,66 @@ pub struct PathingUseGadgetActionPlan {
     pub path_executor_after_action_delay_ms: u32,
     pub executor_ready: bool,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingNahidaCollectActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub avatar_name: String,
+    pub requires_combat_scenes: bool,
+    pub switch_avatar_before_collect: bool,
+    pub wait_skill_cooldown_before_collect: bool,
+    pub update_skill_cooldown_after_collect: bool,
+    pub dpi_scale_required: bool,
+    pub lower_view_mouse_move_y: i32,
+    pub lower_view_delay_ms: u32,
+    pub elemental_skill_action: GenshinAction,
+    pub skill_hold_initial_delay_ms: u32,
+    pub ground_scan_iterations: u8,
+    pub ground_scan_move_x: i32,
+    pub ground_scan_move_x_dpi_scaled: bool,
+    pub ground_scan_move_y: i32,
+    pub ground_scan_move_y_dpi_scaled: bool,
+    pub raised_scan_iterations: u8,
+    pub raised_scan_move_x: i32,
+    pub raised_scan_move_x_dpi_scaled: bool,
+    pub raised_scan_initial_move_y: i32,
+    pub raised_scan_y_adjust_before_iteration: u8,
+    pub raised_scan_y_adjust_delta: i32,
+    pub raised_scan_move_y_dpi_scaled: bool,
+    pub scan_step_delay_ms: u32,
+    pub post_skill_release_cd_update_delay_ms: u32,
+    pub after_collect_delay_ms: u32,
+    pub restore_view_key: KeyId,
+    pub restore_view_delay_ms: u32,
+    pub path_executor_after_action_delay_ms: u32,
+    pub skill_release_in_finally: bool,
+    pub steps: Vec<PathingNahidaCollectStep>,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PathingNahidaCollectStep {
+    GenshinAction {
+        action: GenshinAction,
+        press: PathingInputPress,
+    },
+    Key {
+        key: KeyId,
+        press: PathingInputPress,
+    },
+    MouseMoveBy {
+        dx: i32,
+        dy: i32,
+        dx_dpi_scaled: bool,
+        dy_dpi_scaled: bool,
+    },
+    Delay {
+        milliseconds: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -921,6 +982,10 @@ fn pathing_action_pending_dependencies(
         Some(PathingActionPlan::PickAround(plan)) if plan.executor_ready => {
             vec![PathingMovementDependency::InputDispatch]
         }
+        Some(PathingActionPlan::NahidaCollect(_)) => vec![
+            PathingMovementDependency::InputDispatch,
+            PathingMovementDependency::ActionHandlers,
+        ],
         Some(PathingActionPlan::LinneaMining(plan)) if plan.executor_ready => {
             vec![PathingMovementDependency::ActionHandlers]
         }
@@ -994,6 +1059,10 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
         Some(PathingActionPlan::ForceTeleport(
             plan_force_teleport_action(action_params),
         ))
+    } else if action.eq_ignore_ascii_case("nahida_collect") {
+        Some(PathingActionPlan::NahidaCollect(
+            plan_nahida_collect_action(action_params),
+        ))
     } else if action.eq_ignore_ascii_case("use_gadget") {
         Some(PathingActionPlan::UseGadget(plan_use_gadget_action(
             action_params,
@@ -1005,6 +1074,135 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
     } else {
         None
     }
+}
+
+const NAHIDA_COLLECT_AVATAR_NAME: &str = "纳西妲";
+const NAHIDA_COLLECT_LOWER_VIEW_MOUSE_MOVE_Y: i32 = 10_000;
+const NAHIDA_COLLECT_LOWER_VIEW_DELAY_MS: u32 = 200;
+const NAHIDA_COLLECT_SKILL_HOLD_INITIAL_DELAY_MS: u32 = 200;
+const NAHIDA_COLLECT_GROUND_SCAN_ITERATIONS: u8 = 15;
+const NAHIDA_COLLECT_GROUND_SCAN_MOVE_X: i32 = 400;
+const NAHIDA_COLLECT_GROUND_SCAN_MOVE_Y: i32 = 500;
+const NAHIDA_COLLECT_RAISED_SCAN_ITERATIONS: u8 = 60;
+const NAHIDA_COLLECT_RAISED_SCAN_MOVE_X: i32 = 400;
+const NAHIDA_COLLECT_RAISED_SCAN_INITIAL_MOVE_Y: i32 = -30;
+const NAHIDA_COLLECT_RAISED_SCAN_Y_ADJUST_BEFORE_ITERATION: u8 = 20;
+const NAHIDA_COLLECT_RAISED_SCAN_Y_ADJUST_DELTA: i32 = -20;
+const NAHIDA_COLLECT_SCAN_STEP_DELAY_MS: u32 = 30;
+const NAHIDA_COLLECT_POST_SKILL_RELEASE_CD_UPDATE_DELAY_MS: u32 = 200;
+const NAHIDA_COLLECT_AFTER_COLLECT_DELAY_MS: u32 = 800;
+const NAHIDA_COLLECT_RESTORE_VIEW_DELAY_MS: u32 = 1_000;
+const NAHIDA_COLLECT_PATH_EXECUTOR_AFTER_ACTION_DELAY_MS: u32 = 1_000;
+
+fn plan_nahida_collect_action(action_params: Option<&str>) -> PathingNahidaCollectActionPlan {
+    PathingNahidaCollectActionPlan {
+        action_code: "nahida_collect".to_string(),
+        raw_params: action_params.map(ToOwned::to_owned),
+        avatar_name: NAHIDA_COLLECT_AVATAR_NAME.to_string(),
+        requires_combat_scenes: true,
+        switch_avatar_before_collect: true,
+        wait_skill_cooldown_before_collect: true,
+        update_skill_cooldown_after_collect: true,
+        dpi_scale_required: true,
+        lower_view_mouse_move_y: NAHIDA_COLLECT_LOWER_VIEW_MOUSE_MOVE_Y,
+        lower_view_delay_ms: NAHIDA_COLLECT_LOWER_VIEW_DELAY_MS,
+        elemental_skill_action: GenshinAction::ElementalSkill,
+        skill_hold_initial_delay_ms: NAHIDA_COLLECT_SKILL_HOLD_INITIAL_DELAY_MS,
+        ground_scan_iterations: NAHIDA_COLLECT_GROUND_SCAN_ITERATIONS,
+        ground_scan_move_x: NAHIDA_COLLECT_GROUND_SCAN_MOVE_X,
+        ground_scan_move_x_dpi_scaled: true,
+        ground_scan_move_y: NAHIDA_COLLECT_GROUND_SCAN_MOVE_Y,
+        ground_scan_move_y_dpi_scaled: false,
+        raised_scan_iterations: NAHIDA_COLLECT_RAISED_SCAN_ITERATIONS,
+        raised_scan_move_x: NAHIDA_COLLECT_RAISED_SCAN_MOVE_X,
+        raised_scan_move_x_dpi_scaled: true,
+        raised_scan_initial_move_y: NAHIDA_COLLECT_RAISED_SCAN_INITIAL_MOVE_Y,
+        raised_scan_y_adjust_before_iteration:
+            NAHIDA_COLLECT_RAISED_SCAN_Y_ADJUST_BEFORE_ITERATION,
+        raised_scan_y_adjust_delta: NAHIDA_COLLECT_RAISED_SCAN_Y_ADJUST_DELTA,
+        raised_scan_move_y_dpi_scaled: true,
+        scan_step_delay_ms: NAHIDA_COLLECT_SCAN_STEP_DELAY_MS,
+        post_skill_release_cd_update_delay_ms: NAHIDA_COLLECT_POST_SKILL_RELEASE_CD_UPDATE_DELAY_MS,
+        after_collect_delay_ms: NAHIDA_COLLECT_AFTER_COLLECT_DELAY_MS,
+        restore_view_key: KeyId::MOUSE_MIDDLE_BUTTON,
+        restore_view_delay_ms: NAHIDA_COLLECT_RESTORE_VIEW_DELAY_MS,
+        path_executor_after_action_delay_ms: NAHIDA_COLLECT_PATH_EXECUTOR_AFTER_ACTION_DELAY_MS,
+        skill_release_in_finally: true,
+        steps: build_nahida_collect_steps(),
+        executor_ready: false,
+        notes:
+            "Pathing nahida_collect action is modeled as the legacy Nahida long-hold ElementalSkill scan sequence; live combat-scene avatar selection, skill-cooldown tracking, DPI-aware mouse dispatch, and sequence-safe input dispatch remain pending."
+                .to_string(),
+    }
+}
+
+fn build_nahida_collect_steps() -> Vec<PathingNahidaCollectStep> {
+    let mut steps = vec![
+        PathingNahidaCollectStep::MouseMoveBy {
+            dx: 0,
+            dy: NAHIDA_COLLECT_LOWER_VIEW_MOUSE_MOVE_Y,
+            dx_dpi_scaled: false,
+            dy_dpi_scaled: false,
+        },
+        PathingNahidaCollectStep::Delay {
+            milliseconds: NAHIDA_COLLECT_LOWER_VIEW_DELAY_MS,
+        },
+        PathingNahidaCollectStep::GenshinAction {
+            action: GenshinAction::ElementalSkill,
+            press: PathingInputPress::KeyDown,
+        },
+        PathingNahidaCollectStep::Delay {
+            milliseconds: NAHIDA_COLLECT_SKILL_HOLD_INITIAL_DELAY_MS,
+        },
+    ];
+
+    for _ in 0..NAHIDA_COLLECT_GROUND_SCAN_ITERATIONS {
+        steps.push(PathingNahidaCollectStep::MouseMoveBy {
+            dx: NAHIDA_COLLECT_GROUND_SCAN_MOVE_X,
+            dy: NAHIDA_COLLECT_GROUND_SCAN_MOVE_Y,
+            dx_dpi_scaled: true,
+            dy_dpi_scaled: false,
+        });
+        steps.push(PathingNahidaCollectStep::Delay {
+            milliseconds: NAHIDA_COLLECT_SCAN_STEP_DELAY_MS,
+        });
+    }
+
+    for iteration in 1..=NAHIDA_COLLECT_RAISED_SCAN_ITERATIONS {
+        let dy = if iteration >= NAHIDA_COLLECT_RAISED_SCAN_Y_ADJUST_BEFORE_ITERATION {
+            NAHIDA_COLLECT_RAISED_SCAN_INITIAL_MOVE_Y + NAHIDA_COLLECT_RAISED_SCAN_Y_ADJUST_DELTA
+        } else {
+            NAHIDA_COLLECT_RAISED_SCAN_INITIAL_MOVE_Y
+        };
+        steps.push(PathingNahidaCollectStep::MouseMoveBy {
+            dx: NAHIDA_COLLECT_RAISED_SCAN_MOVE_X,
+            dy,
+            dx_dpi_scaled: true,
+            dy_dpi_scaled: true,
+        });
+        steps.push(PathingNahidaCollectStep::Delay {
+            milliseconds: NAHIDA_COLLECT_SCAN_STEP_DELAY_MS,
+        });
+    }
+
+    steps.push(PathingNahidaCollectStep::GenshinAction {
+        action: GenshinAction::ElementalSkill,
+        press: PathingInputPress::KeyUp,
+    });
+    steps.push(PathingNahidaCollectStep::Delay {
+        milliseconds: NAHIDA_COLLECT_POST_SKILL_RELEASE_CD_UPDATE_DELAY_MS,
+    });
+    steps.push(PathingNahidaCollectStep::Delay {
+        milliseconds: NAHIDA_COLLECT_AFTER_COLLECT_DELAY_MS,
+    });
+    steps.push(PathingNahidaCollectStep::Key {
+        key: KeyId::MOUSE_MIDDLE_BUTTON,
+        press: PathingInputPress::KeyPress,
+    });
+    steps.push(PathingNahidaCollectStep::Delay {
+        milliseconds: NAHIDA_COLLECT_RESTORE_VIEW_DELAY_MS,
+    });
+    steps
 }
 
 fn plan_set_time_action(action_params: Option<&str>) -> PathingSetTimeActionPlan {
