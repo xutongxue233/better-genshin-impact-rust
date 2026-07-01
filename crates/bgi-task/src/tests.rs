@@ -21651,6 +21651,106 @@ fn auto_pathing_action_boundary_rejects_invalid_set_time_without_live_call() {
 }
 
 #[test]
+fn auto_pathing_action_boundary_reports_use_gadget_not_wait_slice() {
+    let root = unique_test_root("auto-pathing-use-gadget-not-wait");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("use_gadget_route.json"),
+        r#"{
+                "info": { "name": "use gadget route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 3.0, "y": 4.0, "type": "path", "move_mode": "walk", "action": "use_gadget", "action_params": "not_wait" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/use_gadget_route.json").unwrap();
+    let mut calls = 0;
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            calls += 1;
+            panic!("use_gadget must not call common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert_eq!(calls, 0);
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.unsupported_actions, 0);
+    assert!(!report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::ActionHandlers));
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected use_gadget action report");
+    assert_eq!(action_report.action_code, "use_gadget");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Reported);
+    assert!(action_report.message.contains("QuickUseGadget"));
+    assert!(action_report.message.contains("2"));
+    assert!(action_report.message.contains("300ms"));
+    assert!(action_report.message.contains("1000ms"));
+    assert!(action_report.message.contains("dispatch remains pending"));
+    assert!(action_report.common_job_plan.is_none());
+    assert!(action_report.common_job_live_execution.is_none());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn auto_pathing_action_boundary_keeps_use_gadget_cooldown_branch_pending() {
+    let root = unique_test_root("auto-pathing-use-gadget-cooldown-pending");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("use_gadget_cd_route.json"),
+        r#"{
+                "info": { "name": "use gadget cd route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 3.0, "y": 4.0, "type": "path", "move_mode": "walk", "action": "use_gadget", "action_params": "2.5" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/use_gadget_cd_route.json").unwrap();
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            panic!("use_gadget cooldown branch must not call common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.unsupported_actions, 1);
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::ActionHandlers));
+    let action_report = report
+        .waypoint_reports
+        .iter()
+        .find_map(|waypoint| waypoint.action_report.as_ref())
+        .expect("expected use_gadget action report");
+    assert_eq!(action_report.status, PathingBoundaryStatus::Unsupported);
+    assert!(action_report.message.contains("cooldown OCR"));
+    assert!(action_report.common_job_plan.is_none());
+    assert!(action_report.common_job_live_execution.is_none());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_action_boundary_reports_log_output_and_runs_common_jobs() {
     let root = unique_test_root("auto-pathing-log-common-jobs");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");

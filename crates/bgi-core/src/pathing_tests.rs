@@ -808,6 +808,100 @@ fn pathing_execution_plan_models_force_tp_as_teleport_intent() {
 }
 
 #[test]
+fn pathing_execution_plan_models_use_gadget_not_wait_slice() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "gadget route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "path", "action": "use_gadget", "action_params": "not_wait" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+    let waypoint = &plan.segments[0].waypoints[0];
+
+    assert_eq!(
+        waypoint.declared_action_use,
+        Some(PathingActionUseWaypointType::Custom)
+    );
+    assert!(waypoint.phases.contains(&PathingWaypointPhase::RunAction));
+    let Some(PathingActionPlan::UseGadget(use_gadget)) = &waypoint.action_plan else {
+        panic!("expected use_gadget action plan");
+    };
+    assert_eq!(use_gadget.action_code, "use_gadget");
+    assert_eq!(use_gadget.raw_params.as_deref(), Some("not_wait"));
+    assert_eq!(use_gadget.genshin_action, GenshinAction::QuickUseGadget);
+    assert!(use_gadget.not_wait);
+    assert!(!use_gadget.cooldown_ocr_required);
+    assert_eq!(use_gadget.max_wait_seconds, None);
+    assert_eq!(use_gadget.max_wait_parse_error, None);
+    assert_eq!(use_gadget.quick_use_gadget_press_count, 2);
+    assert_eq!(use_gadget.handler_delay_ms, 300);
+    assert_eq!(use_gadget.path_executor_after_action_delay_ms, 1_000);
+    assert!(use_gadget.executor_ready);
+
+    let run_action_contract = plan.movement_contract.segments[0].waypoints[0]
+        .phase_contracts
+        .iter()
+        .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
+        .expect("expected RunAction contract");
+    assert!(run_action_contract.pending_dependencies.is_empty());
+}
+
+#[test]
+fn pathing_execution_plan_keeps_use_gadget_cooldown_branch_pending() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "gadget cd route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "path", "action": "use_gadget", "action_params": "2.5" },
+                { "x": 11.0, "y": 21.0, "type": "path", "action": "use_gadget", "action_params": "bad" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+
+    let Some(PathingActionPlan::UseGadget(timed)) = &plan.segments[0].waypoints[0].action_plan
+    else {
+        panic!("expected timed use_gadget action plan");
+    };
+    assert!(!timed.not_wait);
+    assert!(timed.cooldown_ocr_required);
+    assert_eq!(timed.max_wait_seconds, Some(2.5));
+    assert_eq!(timed.max_wait_parse_error, None);
+    assert_eq!(timed.cooldown_overlong_skip_threshold_seconds, 100.0);
+    assert_eq!(timed.cooldown_wait_padding_ms, 100);
+    assert!(!timed.executor_ready);
+
+    let Some(PathingActionPlan::UseGadget(invalid)) = &plan.segments[0].waypoints[1].action_plan
+    else {
+        panic!("expected invalid use_gadget action plan");
+    };
+    assert_eq!(invalid.max_wait_seconds, Some(0.0));
+    assert!(invalid
+        .max_wait_parse_error
+        .as_ref()
+        .unwrap()
+        .contains("bad"));
+    assert!(!invalid.executor_ready);
+
+    for waypoint in &plan.movement_contract.segments[0].waypoints {
+        let run_action_contract = waypoint
+            .phase_contracts
+            .iter()
+            .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
+            .expect("expected RunAction contract");
+        assert!(run_action_contract
+            .pending_dependencies
+            .contains(&PathingMovementDependency::ActionHandlers));
+    }
+}
+
+#[test]
 fn empty_pathing_execution_plan_skips_preflight_like_legacy_executor() {
     let task = PathingTask::from_json(
         r#"{

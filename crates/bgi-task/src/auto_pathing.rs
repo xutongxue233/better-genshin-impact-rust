@@ -8,7 +8,8 @@ use bgi_core::{
     PathingLogOutputActionPlan, PathingMovementDependency, PathingMovementPhaseContract,
     PathingMovementSegmentContract, PathingMovementWaypointContract, PathingPoint,
     PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
-    PathingTrackConversionContext, PathingWaypointPhase, PathingWaypointPlan,
+    PathingTrackConversionContext, PathingUseGadgetActionPlan, PathingWaypointPhase,
+    PathingWaypointPlan,
 };
 use bgi_vision::Size;
 use serde::{Deserialize, Serialize};
@@ -514,7 +515,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; native movement dispatch plus full PathExecutor recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
                 .to_string(),
     })
 }
@@ -1499,6 +1500,9 @@ where
         Some(PathingActionPlan::CommonJob(common_job)) => {
             execute_common_job_pathing_action(common_job, capture_size, live_executor)
         }
+        Some(PathingActionPlan::UseGadget(use_gadget)) => {
+            execute_use_gadget_pathing_action(use_gadget)
+        }
         Some(PathingActionPlan::ForceTeleport(_)) => Ok(PathingActionBoundaryReport {
             action_code: "force_tp".to_string(),
             status: PathingBoundaryStatus::Unsupported,
@@ -1539,6 +1543,43 @@ fn execute_log_output_pathing_action(
         action_code: log_output.action_code.clone(),
         status: PathingBoundaryStatus::Reported,
         message: format!("pathing log_output action reported: {}", log_output.message),
+        common_job_task_key: None,
+        common_job_plan: None,
+        common_job_live_execution: None,
+    })
+}
+
+fn execute_use_gadget_pathing_action(
+    use_gadget: &PathingUseGadgetActionPlan,
+) -> Result<PathingActionBoundaryReport> {
+    if !use_gadget.executor_ready {
+        return Ok(PathingActionBoundaryReport {
+            action_code: use_gadget.action_code.clone(),
+            status: PathingBoundaryStatus::Unsupported,
+            message: if let Some(parse_error) = use_gadget.max_wait_parse_error.as_ref() {
+                format!(
+                    "pathing use_gadget default branch needs cooldown OCR before native execution; {parse_error}"
+                )
+            } else {
+                "pathing use_gadget default branch needs cooldown OCR before native execution"
+                    .to_string()
+            },
+            common_job_task_key: None,
+            common_job_plan: None,
+            common_job_live_execution: None,
+        });
+    }
+
+    Ok(PathingActionBoundaryReport {
+        action_code: use_gadget.action_code.clone(),
+        status: PathingBoundaryStatus::Reported,
+        message: format!(
+            "pathing use_gadget not_wait action is modeled as {} {:?} press(es), handler delay {}ms, and PathExecutor after-action delay {}ms; sequence-safe desktop input dispatch remains pending",
+            use_gadget.quick_use_gadget_press_count,
+            use_gadget.genshin_action,
+            use_gadget.handler_delay_ms,
+            use_gadget.path_executor_after_action_delay_ms
+        ),
         common_job_task_key: None,
         common_job_plan: None,
         common_job_live_execution: None,

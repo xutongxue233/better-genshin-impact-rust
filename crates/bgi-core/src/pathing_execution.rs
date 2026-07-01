@@ -229,6 +229,7 @@ pub enum PathingActionPlan {
     LogOutput(PathingLogOutputActionPlan),
     CommonJob(PathingCommonJobActionPlan),
     ForceTeleport(PathingForceTeleportActionPlan),
+    UseGadget(PathingUseGadgetActionPlan),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -352,6 +353,24 @@ pub struct PathingForceTeleportActionPlan {
     pub action_code: String,
     pub raw_params: Option<String>,
     pub force_teleport: bool,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingUseGadgetActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub genshin_action: GenshinAction,
+    pub not_wait: bool,
+    pub cooldown_ocr_required: bool,
+    pub max_wait_seconds: Option<f64>,
+    pub max_wait_parse_error: Option<String>,
+    pub cooldown_overlong_skip_threshold_seconds: f64,
+    pub cooldown_wait_padding_ms: u32,
+    pub quick_use_gadget_press_count: u8,
+    pub handler_delay_ms: u32,
+    pub path_executor_after_action_delay_ms: u32,
     pub executor_ready: bool,
     pub notes: String,
 }
@@ -841,6 +860,7 @@ fn pathing_action_pending_dependencies(
         Some(PathingActionPlan::CommonJob(plan)) => plan.executor_ready,
         Some(PathingActionPlan::ForceTeleport(plan)) => plan.executor_ready,
         Some(PathingActionPlan::LinneaMining(plan)) => plan.executor_ready,
+        Some(PathingActionPlan::UseGadget(plan)) => plan.executor_ready,
         None => false,
     };
 
@@ -917,6 +937,10 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
         Some(PathingActionPlan::ForceTeleport(
             plan_force_teleport_action(action_params),
         ))
+    } else if action.eq_ignore_ascii_case("use_gadget") {
+        Some(PathingActionPlan::UseGadget(plan_use_gadget_action(
+            action_params,
+        )))
     } else {
         None
     }
@@ -1018,6 +1042,50 @@ fn plan_force_teleport_action(action_params: Option<&str>) -> PathingForceTelepo
         executor_ready: false,
         notes: "Pathing force_tp action is represented as a force-teleport intent for the HandleTeleport phase; native TpTask dispatch and final navigation state updates remain pending."
             .to_string(),
+    }
+}
+
+fn plan_use_gadget_action(action_params: Option<&str>) -> PathingUseGadgetActionPlan {
+    let raw_params = action_params.map(ToOwned::to_owned);
+    let trimmed_params = action_params.map(str::trim).unwrap_or_default();
+    let not_wait = trimmed_params.to_ascii_lowercase().contains("not_wait");
+    let cooldown_ocr_required = !not_wait;
+    let (max_wait_seconds, max_wait_parse_error) = if !cooldown_ocr_required {
+        (None, None)
+    } else if trimmed_params.is_empty() {
+        (Some(100.0), None)
+    } else {
+        match trimmed_params.parse::<f64>() {
+            Ok(value) => (Some(value), None),
+            Err(_) => (
+                Some(0.0),
+                Some(format!(
+                    "use_gadget max wait parameter is not numeric and falls back to 0 seconds like legacy double.TryParse: {trimmed_params}"
+                )),
+            ),
+        }
+    };
+
+    PathingUseGadgetActionPlan {
+        action_code: "use_gadget".to_string(),
+        raw_params,
+        genshin_action: GenshinAction::QuickUseGadget,
+        not_wait,
+        cooldown_ocr_required,
+        max_wait_seconds,
+        max_wait_parse_error,
+        cooldown_overlong_skip_threshold_seconds: 100.0,
+        cooldown_wait_padding_ms: 100,
+        quick_use_gadget_press_count: 2,
+        handler_delay_ms: 300,
+        path_executor_after_action_delay_ms: 1_000,
+        executor_ready: not_wait,
+        notes: if not_wait {
+            "Pathing use_gadget not_wait branch is modeled as two QuickUseGadget presses followed by the legacy handler and PathExecutor delays; cooldown OCR is skipped."
+        } else {
+            "Pathing use_gadget default branch is modeled with legacy cooldown OCR wait rules, but live execution remains pending until the cooldown OCR probe is migrated."
+        }
+        .to_string(),
     }
 }
 
