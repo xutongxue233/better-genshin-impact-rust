@@ -68,19 +68,19 @@ use bgi_task::{
     execute_auto_eat_tick_plan, execute_auto_fight_finish_detection_live_probe,
     execute_auto_fish_tick_plan, execute_auto_music_album_plan,
     execute_auto_music_performance_plan, execute_auto_open_chest_plan,
-    execute_auto_pathing_action_boundary_with_live_executor, execute_auto_pick_tick_plan,
-    execute_auto_track_plan, execute_auto_wood_plan, execute_blessing_of_the_welkin_moon_live,
-    execute_check_rewards_plan, execute_choose_talk_option_plan,
-    execute_claim_battle_pass_rewards_plan, execute_claim_encounter_points_rewards_plan,
-    execute_claim_mail_rewards_live, execute_count_inventory_item_plan,
-    execute_get_grid_icons_plan, execute_go_to_adventurers_guild_plan,
-    execute_go_to_crafting_bench_plan, execute_independent_task_live_if_available,
-    execute_independent_task_with_cancel, execute_lower_head_then_walk_to_plan,
-    execute_macro_hotkey_plan, execute_one_key_expedition_live, execute_quick_buy_plan,
-    execute_quick_serenitea_pot_plan, execute_quick_teleport_tick_plan,
-    execute_realtime_trigger_live_if_available, execute_relogin_live, execute_return_main_ui_live,
-    execute_return_main_ui_plan, execute_set_time_live, execute_switch_party_plan,
-    execute_team_context_combat_script_inputs,
+    execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation,
+    execute_auto_pick_tick_plan, execute_auto_track_plan, execute_auto_wood_plan,
+    execute_blessing_of_the_welkin_moon_live, execute_check_rewards_plan,
+    execute_choose_talk_option_plan, execute_claim_battle_pass_rewards_plan,
+    execute_claim_encounter_points_rewards_plan, execute_claim_mail_rewards_live,
+    execute_count_inventory_item_plan, execute_get_grid_icons_plan,
+    execute_go_to_adventurers_guild_plan, execute_go_to_crafting_bench_plan,
+    execute_independent_task_live_if_available, execute_independent_task_with_cancel,
+    execute_lower_head_then_walk_to_plan, execute_macro_hotkey_plan,
+    execute_one_key_expedition_live, execute_quick_buy_plan, execute_quick_serenitea_pot_plan,
+    execute_quick_teleport_tick_plan, execute_realtime_trigger_live_if_available,
+    execute_relogin_live, execute_return_main_ui_live, execute_return_main_ui_plan,
+    execute_set_time_live, execute_switch_party_plan, execute_team_context_combat_script_inputs,
     execute_team_context_combat_script_inputs_with_frame, execute_teleport_plan,
     execute_use_redeem_code_plan, execute_walk_to_f_live, execute_wonderland_cycle_live,
     execute_wonderland_cycle_plan, extract_redeem_codes_from_text, independent_tasks,
@@ -107,7 +107,8 @@ use bgi_task::{
     AutoMusicTemplateLocator, AutoOpenChestAction, AutoOpenChestActionPress,
     AutoOpenChestExecutionConfig, AutoOpenChestExecutionPlan, AutoOpenChestExecutionReport,
     AutoOpenChestObservation, AutoOpenChestRuntime, AutoPathingActionBoundaryReport,
-    AutoPathingExecutionConfig, AutoPathingExecutionPlan, AutoPathingResolutionPreflightStatus,
+    AutoPathingExecutionConfig, AutoPathingExecutionPlan, AutoPathingMovementPhaseExecutionContext,
+    AutoPathingMovementRuntime, AutoPathingPhaseExecution, AutoPathingResolutionPreflightStatus,
     AutoPickExecutionConfig, AutoPickExecutionPlan, AutoPickRelativeTemplateLocator,
     AutoPickRuntime, AutoPickRuntimeLists, AutoPickTemplateLocator, AutoPickTickExecutionReport,
     AutoPickTickObservation, AutoTrackActionPress, AutoTrackExecutionConfig,
@@ -8376,15 +8377,138 @@ fn execute_desktop_auto_pathing_action_boundary_live_plan(
         return Err(preflight.message);
     }
 
-    execute_auto_pathing_action_boundary_with_live_executor(plan, capture_size, |common_job_plan| {
-        execute_desktop_common_job_live_plan(
-            config,
-            game_window,
-            Arc::clone(&cancellation),
-            common_job_plan,
-        )
-    })
+    let settings = CaptureSettings {
+        mode: native_capture_mode(&config.capture_mode),
+        auto_fix_win11_bit_blt: config.auto_fix_win11_bit_blt,
+        ..CaptureSettings::default()
+    };
+    if !matches!(settings.mode, NativeCaptureMode::BitBlt) {
+        return Err(
+            "AutoPathing recovery movement phase requires the BitBlt capture backend".to_string(),
+        );
+    }
+    let capture_source = DesktopGameCaptureFrameSource::new(window.handle, settings)
+        .map_err(|error| error.to_string())?;
+    let capture = move || {
+        let frame = capture_source
+            .capture_frame()
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        bgr_image_from_desktop_capture_frame(frame)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))
+    };
+
+    execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+        config,
+        capture_size,
+        Arc::clone(&cancellation),
+        plan,
+        capture,
+        |common_job_plan| {
+            execute_desktop_common_job_live_plan(
+                config,
+                game_window,
+                Arc::clone(&cancellation),
+                common_job_plan,
+            )
+        },
+    )
+}
+
+fn execute_desktop_auto_pathing_action_boundary_live_plan_with_capture<C, F>(
+    config: &AppConfig,
+    capture_size: VisionSize,
+    cancellation: Arc<InputCancellationToken>,
+    plan: &AutoPathingExecutionPlan,
+    capture: C,
+    live_executor: F,
+) -> Result<AutoPathingActionBoundaryReport, String>
+where
+    C: FnMut() -> bgi_task::Result<BgrImage>,
+    F: FnMut(&CommonJobExecutionPlan) -> bgi_task::Result<Option<CommonJobLiveExecutionReport>>,
+{
+    let auto_eat_plan = plan_auto_eat(AutoEatExecutionConfig {
+        capture_size,
+        auto_eat_config: config.auto_eat_config.clone(),
+    });
+    let mut movement_runtime =
+        DesktopAutoPathingMovementRuntime::new(capture, auto_eat_plan, Arc::clone(&cancellation));
+    execute_auto_pathing_action_boundary_with_movement_runtime_and_cancellation(
+        plan,
+        capture_size,
+        &mut movement_runtime,
+        || cancellation.is_cancelled(),
+        live_executor,
+    )
     .map_err(|error| error.to_string())
+}
+
+struct DesktopAutoPathingMovementRuntime<C> {
+    capture: C,
+    auto_eat_plan: AutoEatExecutionPlan,
+    cancellation: Arc<InputCancellationToken>,
+}
+
+impl<C> DesktopAutoPathingMovementRuntime<C> {
+    fn new(
+        capture: C,
+        auto_eat_plan: AutoEatExecutionPlan,
+        cancellation: Arc<InputCancellationToken>,
+    ) -> Self {
+        Self {
+            capture,
+            auto_eat_plan,
+            cancellation,
+        }
+    }
+
+    fn ensure_not_cancelled(&self) -> bgi_task::Result<()> {
+        if self.cancellation.is_cancelled() {
+            return Err(TaskError::CommonJobExecution(
+                "AutoPathing movement execution cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl<C> AutoPathingMovementRuntime for DesktopAutoPathingMovementRuntime<C>
+where
+    C: FnMut() -> bgi_task::Result<BgrImage>,
+{
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
+    ) -> bgi_task::Result<AutoPathingPhaseExecution> {
+        self.ensure_not_cancelled()?;
+        if context.phase.phase == bgi_core::PathingWaypointPhase::RecoverWhenLowHp {
+            let image = (self.capture)()?;
+            if desktop_auto_eat_current_avatar_low_hp(&image, &self.auto_eat_plan) {
+                return Ok(AutoPathingPhaseExecution::unsupported(format!(
+                    "AutoPathing RecoverWhenLowHp detected low HP at waypoint {}; party healing, revive modal handling, and Statue of the Seven recovery remain native-pending",
+                    context.waypoint.global_index
+                )));
+            }
+            return Ok(AutoPathingPhaseExecution::executed(format!(
+                "AutoPathing RecoverWhenLowHp probed current avatar HP at waypoint {} and no recovery was needed",
+                context.waypoint.global_index
+            )));
+        }
+
+        if context.phase.pending_dependencies.is_empty() {
+            return Ok(AutoPathingPhaseExecution::skipped(format!(
+                "{:?} has no native side effect for AutoPathing route {}",
+                context.phase.phase, context.plan.route
+            )));
+        }
+
+        Ok(AutoPathingPhaseExecution::unsupported(format!(
+            "{:?} is still native-pending for AutoPathing route {} at waypoint {} because it requires {:?}",
+            context.phase.phase,
+            context.plan.route,
+            context.waypoint.global_index,
+            context.phase.pending_dependencies
+        )))
+    }
 }
 
 fn execute_desktop_turn_around_macro_live_plan(
@@ -23589,34 +23713,57 @@ mod tests {
     fn desktop_independent_task_live_plan_runs_auto_pathing_action_boundary() {
         let root = desktop_test_temp_root("auto-pathing-action-boundary");
         write_desktop_auto_pathing_log_route(&root);
-        let plan = desktop_auto_pathing_log_route_invocation_plan();
-        let window = desktop_test_game_window(1920, 1080);
+        let auto_pathing_plan = plan_auto_pathing(&root, "liyue/live_log_route.json").unwrap();
+        let capture_size = VisionSize::new(1920, 1080);
+        let mut frame_source =
+            DesktopTalkOptionTestFrameSource::new([desktop_talk_option_test_blank_frame(
+                capture_size,
+            )]);
 
-        let live_report = execute_desktop_independent_task_live_plan(
-            &root,
+        let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
             &AppConfig::default(),
-            Some(&window),
+            capture_size,
             Arc::new(InputCancellationToken::new()),
-            &plan,
+            &auto_pathing_plan,
+            move || frame_source.capture_frame(),
+            |common_job_plan| {
+                panic!(
+                    "log_output AutoPathing route should not call common-job live executor: {}",
+                    common_job_plan.task_key()
+                )
+            },
         )
-        .unwrap()
-        .expect("expected AutoPathing live boundary report");
-
-        assert_eq!(live_report.task_name(), "AutoPathing");
-        assert!(!live_report.completed());
-        let IndependentTaskLiveExecutionReport::AutoPathingActionBoundary(report) = live_report
-        else {
-            panic!("expected AutoPathing action-boundary report");
-        };
+        .unwrap();
 
         assert!(report.boundary_completed);
-        assert!(!report.movement_attempted);
+        assert!(report.movement_attempted);
         assert!(!report.native_pathing_completed);
+        assert_eq!(
+            report.movement_completion_status,
+            bgi_task::AutoPathingMovementCompletionStatus::NativePending
+        );
         let movement_report = report
             .movement_report
             .as_ref()
             .expect("expected movement contract report");
         assert!(movement_report.movement_contract_consumed);
+        assert_eq!(movement_report.executed_phases, 1);
+        assert_eq!(movement_report.skipped_phases, 1);
+        assert_eq!(movement_report.unsupported_phases, 1);
+        assert_eq!(
+            movement_report.failed_phase.as_ref().unwrap().phase,
+            bgi_core::PathingWaypointPhase::MoveTo
+        );
+        let movement_phase_reports =
+            &movement_report.segment_reports[0].waypoint_reports[0].phase_reports;
+        assert_eq!(
+            movement_phase_reports[0].phase,
+            bgi_core::PathingWaypointPhase::RecoverWhenLowHp
+        );
+        assert_eq!(
+            movement_phase_reports[0].status,
+            bgi_task::AutoPathingPhaseExecutionStatus::Executed
+        );
         assert!(!movement_report
             .movement_pending_dependencies
             .contains(&bgi_core::PathingMovementDependency::CoordinateConversion));
@@ -23641,6 +23788,68 @@ mod tests {
                 phase.phase == bgi_core::PathingWaypointPhase::MoveTo
                     && phase.status == bgi_task::PathingBoundaryStatus::Unsupported
             }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_auto_pathing_recovery_probe_stops_on_low_hp_pending_recovery() {
+        let root = desktop_test_temp_root("auto-pathing-low-hp-recovery-pending");
+        write_desktop_auto_pathing_log_route(&root);
+        let auto_pathing_plan = plan_auto_pathing(&root, "liyue/live_log_route.json").unwrap();
+        let capture_size = VisionSize::new(1920, 1080);
+        let auto_eat_plan = plan_auto_eat(AutoEatExecutionConfig {
+            capture_size,
+            auto_eat_config: AppConfig::default().auto_eat_config,
+        });
+        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
+        let point = auto_eat_plan.detection_rule.low_hp_pixel_probe.point;
+        set_desktop_bgr_pixel(
+            &mut frame.pixels,
+            capture_size,
+            (point.x as u32, point.y as u32),
+            [90, 90, 255],
+        );
+        let mut frame_source = DesktopTalkOptionTestFrameSource::new([frame]);
+
+        let report = execute_desktop_auto_pathing_action_boundary_live_plan_with_capture(
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+            &auto_pathing_plan,
+            move || frame_source.capture_frame(),
+            |common_job_plan| {
+                panic!(
+                    "low-HP AutoPathing recovery probe should not call common-job live executor yet: {}",
+                    common_job_plan.task_key()
+                )
+            },
+        )
+        .unwrap();
+
+        assert!(report.boundary_completed);
+        assert!(!report.movement_attempted);
+        assert!(!report.native_pathing_completed);
+        let movement_report = report
+            .movement_report
+            .as_ref()
+            .expect("expected movement contract report");
+        assert_eq!(movement_report.executed_phases, 0);
+        assert_eq!(movement_report.skipped_phases, 0);
+        assert_eq!(movement_report.unsupported_phases, 1);
+        let failed = movement_report.failed_phase.as_ref().unwrap();
+        assert_eq!(
+            failed.phase,
+            bgi_core::PathingWaypointPhase::RecoverWhenLowHp
+        );
+        assert!(failed.message.contains("detected low HP"));
+        assert!(failed.message.contains("Statue of the Seven recovery"));
+        let movement_phase_reports =
+            &movement_report.segment_reports[0].waypoint_reports[0].phase_reports;
+        assert_eq!(movement_phase_reports.len(), 1);
+        assert_eq!(
+            movement_phase_reports[0].status,
+            bgi_task::AutoPathingPhaseExecutionStatus::Unsupported
+        );
         let _ = fs::remove_dir_all(root);
     }
 

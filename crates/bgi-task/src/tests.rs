@@ -20979,6 +20979,92 @@ impl AutoPathingMovementRuntime for CompletingAutoPathingMovementRuntime {
     }
 }
 
+#[derive(Default)]
+struct RecoveryOnlyAutoPathingMovementRuntime {
+    phases: Vec<bgi_core::PathingWaypointPhase>,
+}
+
+impl AutoPathingMovementRuntime for RecoveryOnlyAutoPathingMovementRuntime {
+    fn execute_movement_phase(
+        &mut self,
+        context: AutoPathingMovementPhaseExecutionContext<'_>,
+    ) -> Result<AutoPathingPhaseExecution> {
+        self.phases.push(context.phase.phase);
+        match context.phase.phase {
+            bgi_core::PathingWaypointPhase::RecoverWhenLowHp => Ok(
+                AutoPathingPhaseExecution::executed("healthy route recovery probe completed"),
+            ),
+            bgi_core::PathingWaypointPhase::BeforeMoveToTarget
+            | bgi_core::PathingWaypointPhase::BeforeMoveCloseToTarget
+                if context.phase.pending_dependencies.is_empty() =>
+            {
+                Ok(AutoPathingPhaseExecution::skipped(
+                    "legacy hook phase has no standalone native side effect",
+                ))
+            }
+            other => Ok(AutoPathingPhaseExecution::unsupported(format!(
+                "{other:?} remains pending after recovery probe"
+            ))),
+        }
+    }
+}
+
+#[test]
+fn auto_pathing_movement_contract_can_advance_past_recovery_probe_without_completion() {
+    let root = unique_test_root("auto-pathing-recovery-probe-advances");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("recovery_probe.json"),
+        r#"{
+                "info": { "name": "recovery probe route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 1.0, "y": 2.0, "type": "path", "move_mode": "dash" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/recovery_probe.json").unwrap();
+    let mut runtime = RecoveryOnlyAutoPathingMovementRuntime::default();
+
+    let report = execute_auto_pathing_movement_contract_with_runtime(&plan, &mut runtime).unwrap();
+
+    assert!(report.movement_contract_consumed);
+    assert!(!report.movement_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_phases, 1);
+    assert_eq!(report.skipped_phases, 1);
+    assert_eq!(report.unsupported_phases, 1);
+    assert_eq!(
+        runtime.phases,
+        vec![
+            bgi_core::PathingWaypointPhase::RecoverWhenLowHp,
+            bgi_core::PathingWaypointPhase::BeforeMoveToTarget,
+            bgi_core::PathingWaypointPhase::MoveTo
+        ]
+    );
+    let failed = report.failed_phase.as_ref().unwrap();
+    assert_eq!(failed.phase, bgi_core::PathingWaypointPhase::MoveTo);
+    let phase_reports = &report.segment_reports[0].waypoint_reports[0].phase_reports;
+    assert_eq!(
+        phase_reports[0].phase,
+        bgi_core::PathingWaypointPhase::RecoverWhenLowHp
+    );
+    assert_eq!(
+        phase_reports[0].status,
+        AutoPathingPhaseExecutionStatus::Executed
+    );
+    assert_eq!(
+        phase_reports[1].status,
+        AutoPathingPhaseExecutionStatus::Skipped
+    );
+    assert_eq!(
+        phase_reports[2].status,
+        AutoPathingPhaseExecutionStatus::Unsupported
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn auto_pathing_action_boundary_executes_ready_set_time_and_reports_native_phases() {
     let root = unique_test_root("auto-pathing-action-boundary");
