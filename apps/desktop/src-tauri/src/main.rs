@@ -155,28 +155,29 @@ use bgi_task::{
     GoToSereniteaPotExecutionPlan, GoToSereniteaPotExecutionReport, GoToSereniteaPotFindAYuanRule,
     GoToSereniteaPotFinishRule, GoToSereniteaPotMapEntryRule, GoToSereniteaPotOcrRule,
     GoToSereniteaPotRewardRule, GoToSereniteaPotRuntime, GoToSereniteaPotShopRule,
-    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GridIconClassifierRule,
-    GridIconCropRule, GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule,
-    GridTemplate, IndependentTaskExecution, IndependentTaskExecutionRequest,
-    IndependentTaskLiveExecutionReport, InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan,
-    LowerHeadThenWalkToExecutionReport, LowerHeadThenWalkToFKeyRule,
-    LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime, LowerHeadThenWalkToStepResult,
-    LowerHeadThenWalkToTrackingObservation, MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan,
-    MacroHotkeyExecutionReport, MacroHotkeyPreflightRule, MacroHotkeyRuntime,
-    MacroHotkeyScreenPoint, OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport,
-    PartyTextClickYAnchor, PureTemplateCommonJobRuntime, QuickBuyClickTarget,
-    QuickBuyExecutionConfig, QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule,
-    QuickBuyRuntime, QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig,
-    QuickSereniteaPotExecutionPlan, QuickSereniteaPotExecutionReport,
-    QuickSereniteaPotExecutionResult, QuickSereniteaPotInteractionOutcome,
-    QuickSereniteaPotInteractionRule, QuickSereniteaPotPlacementOutcome,
-    QuickSereniteaPotPlacementRule, QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime,
-    QuickSereniteaPotScreenPoint, QuickTeleportDecisionAction, QuickTeleportDecisionInput,
-    QuickTeleportExecutionConfig, QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate,
-    QuickTeleportRuntime, QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport,
-    RealtimeTriggerExecutionPlan, RealtimeTriggerLiveExecutionReport, RedeemCodeEntry,
-    ReloginDpiAwarePoint, ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver,
-    ReloginThirdPartyRule, ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
+    GoToSereniteaPotStepAction, GoToSereniteaPotStepCondition, GoToSereniteaPotTimedAction,
+    GoToSereniteaPotTimedActionKind, GridIconClassifierRule, GridIconCropRule,
+    GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate,
+    IndependentTaskExecution, IndependentTaskExecutionRequest, IndependentTaskLiveExecutionReport,
+    InventoryTabAssetPair, LowerHeadThenWalkToExecutionPlan, LowerHeadThenWalkToExecutionReport,
+    LowerHeadThenWalkToFKeyRule, LowerHeadThenWalkToMovementRule, LowerHeadThenWalkToRuntime,
+    LowerHeadThenWalkToStepResult, LowerHeadThenWalkToTrackingObservation,
+    MacroHotkeyExecutionConfig, MacroHotkeyExecutionPlan, MacroHotkeyExecutionReport,
+    MacroHotkeyPreflightRule, MacroHotkeyRuntime, MacroHotkeyScreenPoint,
+    OneKeyExpeditionExecutionPlan, OneKeyExpeditionExecutionReport, PartyTextClickYAnchor,
+    PureTemplateCommonJobRuntime, QuickBuyClickTarget, QuickBuyExecutionConfig,
+    QuickBuyExecutionPlan, QuickBuyExecutionReport, QuickBuyPreflightRule, QuickBuyRuntime,
+    QuickBuyScreenPoint, QuickSereniteaPotExecutionConfig, QuickSereniteaPotExecutionPlan,
+    QuickSereniteaPotExecutionReport, QuickSereniteaPotExecutionResult,
+    QuickSereniteaPotInteractionOutcome, QuickSereniteaPotInteractionRule,
+    QuickSereniteaPotPlacementOutcome, QuickSereniteaPotPlacementRule,
+    QuickSereniteaPotPreflightRule, QuickSereniteaPotRuntime, QuickSereniteaPotScreenPoint,
+    QuickTeleportDecisionAction, QuickTeleportDecisionInput, QuickTeleportExecutionConfig,
+    QuickTeleportExecutionPlan, QuickTeleportMapChooseCandidate, QuickTeleportRuntime,
+    QuickTeleportTemplateLocator, QuickTeleportTickExecutionReport, RealtimeTriggerExecutionPlan,
+    RealtimeTriggerLiveExecutionReport, RedeemCodeEntry, ReloginDpiAwarePoint,
+    ReloginExecutionPlan, ReloginExecutionReport, ReloginPlatformDriver, ReloginThirdPartyRule,
+    ReturnMainUiExecutionPlan, ReturnMainUiExecutionReport, RunnerRuntime,
     ScanPickDropsExecutionPlan, ScanPickDropsExecutionReport, ScriptDispatcherExecutionPlan,
     ScriptDispatcherLiveExecutionReport, SetTimeExecutionPlan, SetTimeExecutionReport, ShellConfig,
     ShellExecutionResult, SwitchPartyChooseMenuRule, SwitchPartyConfirmRule,
@@ -15094,6 +15095,8 @@ fn execute_desktop_go_to_serenitea_pot_live(
         capture_size: plan.capture_size,
         main_ui_locator: desktop_main_ui_locator(plan.capture_size)
             .map_err(|error| format!("GoToSereniteaPot main-UI locator setup failed: {error}"))?,
+        pick_key_locator: desktop_auto_pick_key_locator(plan.capture_size)
+            .map_err(|error| format!("GoToSereniteaPot F-key locator setup failed: {error}"))?,
     };
     execute_go_to_serenitea_pot_plan(plan, &config.key_bindings_config, &mut runtime)
         .map_err(|error| error.to_string())
@@ -15106,6 +15109,16 @@ struct DesktopGoToSereniteaPotRuntime<'a, F, I, C> {
     cancellation: Arc<InputCancellationToken>,
     capture_size: VisionSize,
     main_ui_locator: BvLocatorPlan,
+    pick_key_locator: BvLocatorPlan,
+}
+
+struct DesktopGoToSereniteaPotAyuanCandidate {
+    rect: Rect,
+}
+
+enum DesktopGoToSereniteaPotAyuanAlignment {
+    Aligned,
+    MoveMouseBy { dx: i32, dy: i32 },
 }
 
 impl<F, I, C> DesktopGoToSereniteaPotRuntime<'_, F, I, C>
@@ -15131,13 +15144,24 @@ where
         &mut self,
         action: GenshinAction,
     ) -> bgi_task::Result<()> {
-        let events = input_events_for_action(
-            &self.config.key_bindings_config,
-            action,
-            KeyActionType::KeyPress,
-        )
-        .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
-        CommonJobRuntime::dispatch_input(&mut self.common, &events)?;
+        self.go_to_serenitea_pot_dispatch_action_type(action, KeyActionType::KeyPress)
+    }
+
+    fn go_to_serenitea_pot_dispatch_action_type(
+        &mut self,
+        action: GenshinAction,
+        action_type: KeyActionType,
+    ) -> bgi_task::Result<()> {
+        let events = input_events_for_action(&self.config.key_bindings_config, action, action_type)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        self.go_to_serenitea_pot_dispatch_events(&events)
+    }
+
+    fn go_to_serenitea_pot_dispatch_events(
+        &mut self,
+        events: &[bgi_input::InputEvent],
+    ) -> bgi_task::Result<()> {
+        CommonJobRuntime::dispatch_input(&mut self.common, events)?;
         Ok(())
     }
 
@@ -15198,6 +15222,165 @@ where
             }
         }
         Ok(())
+    }
+
+    fn go_to_serenitea_pot_execute_timed_action(
+        &mut self,
+        action: &GoToSereniteaPotTimedAction,
+    ) -> bgi_task::Result<()> {
+        match action.action {
+            GoToSereniteaPotTimedActionKind::GenshinAction {
+                action: genshin_action,
+            } => {
+                self.go_to_serenitea_pot_dispatch_action_type(
+                    genshin_action,
+                    KeyActionType::KeyDown,
+                )?;
+                let wait_result = action
+                    .hold_ms
+                    .filter(|milliseconds| *milliseconds > 0)
+                    .map(|milliseconds| self.go_to_serenitea_pot_wait(milliseconds))
+                    .transpose();
+                let release_result = self
+                    .go_to_serenitea_pot_dispatch_action_type(genshin_action, KeyActionType::KeyUp);
+                wait_result?;
+                release_result?;
+            }
+            GoToSereniteaPotTimedActionKind::MouseMiddleClick => {
+                let events = InputSequence::new()
+                    .mouse_click(MouseButton::Middle)
+                    .events()
+                    .to_vec();
+                self.go_to_serenitea_pot_dispatch_events(&events)?;
+            }
+        }
+        if action.wait_after_ms > 0 {
+            self.go_to_serenitea_pot_wait(action.wait_after_ms)?;
+        }
+        Ok(())
+    }
+
+    fn go_to_serenitea_pot_apply_realm_adjustment(
+        &mut self,
+        rule: &GoToSereniteaPotFindAYuanRule,
+        realm_name: Option<&str>,
+    ) -> bgi_task::Result<()> {
+        let Some(realm_name) = realm_name else {
+            return Ok(());
+        };
+        let Some(adjustment) = rule
+            .realm_adjustments
+            .iter()
+            .find(|adjustment| adjustment.realm_name == realm_name)
+        else {
+            return Ok(());
+        };
+        for action in &adjustment.actions {
+            self.go_to_serenitea_pot_execute_timed_action(action)?;
+        }
+        Ok(())
+    }
+
+    fn go_to_serenitea_pot_find_ayuan_candidate(
+        &mut self,
+        rule: &GoToSereniteaPotFindAYuanRule,
+    ) -> bgi_task::Result<Option<DesktopGoToSereniteaPotAyuanCandidate>> {
+        let frame = self.common.frame_source_mut().capture_frame()?;
+        let roi = desktop_ocr_roi_for_image(frame.size, rule.search_ocr.roi)?;
+        let cropped = crop_bgr_image(&frame, roi)
+            .map_err(|error| TaskError::VisionPlan(error.to_string()))?;
+        let regions = desktop_winrt_ocr_bgr_image(&cropped).map_err(|error| {
+            TaskError::CommonJobExecution(format!(
+                "GoToSereniteaPot A Yuan search WinRT OCR failed: {error}"
+            ))
+        })?;
+        Ok(desktop_go_to_serenitea_pot_ayuan_candidate_from_regions(
+            &regions,
+            roi,
+            &rule.accepted_texts,
+        ))
+    }
+
+    fn go_to_serenitea_pot_search_ayuan(
+        &mut self,
+        rule: &GoToSereniteaPotFindAYuanRule,
+    ) -> bgi_task::Result<bool> {
+        self.go_to_serenitea_pot_dispatch_events(&rule.middle_click_events)?;
+        if rule.wait_after_middle_click_ms > 0 {
+            self.go_to_serenitea_pot_wait(rule.wait_after_middle_click_ms)?;
+        }
+
+        let mut missing_rotations = 0;
+        while missing_rotations <= rule.max_missing_rotations {
+            if let Some(candidate) = self.go_to_serenitea_pot_find_ayuan_candidate(rule)? {
+                match desktop_go_to_serenitea_pot_ayuan_alignment(
+                    candidate.rect,
+                    self.capture_size,
+                    rule,
+                ) {
+                    DesktopGoToSereniteaPotAyuanAlignment::Aligned => return Ok(true),
+                    DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy { dx, dy } => {
+                        self.go_to_serenitea_pot_dispatch_events(
+                            InputSequence::new().move_mouse_by(dx, dy).events(),
+                        )?;
+                        if rule.align_delay_ms > 0 {
+                            self.go_to_serenitea_pot_wait(rule.align_delay_ms)?;
+                        }
+                    }
+                }
+            } else {
+                let dx = (f64::from(self.capture_size.width) * rule.missing_rotate_width_ratio)
+                    .round() as i32;
+                self.go_to_serenitea_pot_dispatch_events(
+                    InputSequence::new().move_mouse_by(dx, 0).events(),
+                )?;
+                missing_rotations += 1;
+            }
+            if rule.blur_safe_delay_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.blur_safe_delay_ms)?;
+            }
+        }
+        Ok(false)
+    }
+
+    fn go_to_serenitea_pot_approach_ayuan(
+        &mut self,
+        rule: &GoToSereniteaPotFindAYuanRule,
+    ) -> bgi_task::Result<bool> {
+        self.go_to_serenitea_pot_dispatch_action_type(
+            rule.approach_action,
+            KeyActionType::KeyDown,
+        )?;
+        let approach_result = self.go_to_serenitea_pot_approach_ayuan_loop(rule);
+        let release_result = self
+            .go_to_serenitea_pot_dispatch_action_type(rule.approach_action, KeyActionType::KeyUp);
+        match (approach_result, release_result) {
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(found), Ok(())) => Ok(found),
+        }
+    }
+
+    fn go_to_serenitea_pot_approach_ayuan_loop(
+        &mut self,
+        rule: &GoToSereniteaPotFindAYuanRule,
+    ) -> bgi_task::Result<bool> {
+        for _ in 0..rule.max_missing_rotations.max(1) {
+            if desktop_auto_pick_interaction_text_detected(
+                &mut self.common,
+                self.capture_size,
+                &self.pick_key_locator,
+                &rule.approach_dialog_text,
+                "GoToSereniteaPot",
+            )? {
+                return Ok(true);
+            }
+            self.go_to_serenitea_pot_dispatch_action(rule.drop_action)?;
+            if rule.drop_interval_ms > 0 {
+                self.go_to_serenitea_pot_wait(rule.drop_interval_ms)?;
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -15300,13 +15483,14 @@ where
 
     fn find_and_approach_serenitea_pot_ayuan(
         &mut self,
-        _rule: &GoToSereniteaPotFindAYuanRule,
-        _realm_name: Option<&str>,
+        rule: &GoToSereniteaPotFindAYuanRule,
+        realm_name: Option<&str>,
     ) -> bgi_task::Result<bool> {
-        Err(TaskError::CommonJobExecution(
-            "GoToSereniteaPot live execution requires desktop A Yuan interaction adapter"
-                .to_string(),
-        ))
+        self.go_to_serenitea_pot_apply_realm_adjustment(rule, realm_name)?;
+        if !self.go_to_serenitea_pot_search_ayuan(rule)? {
+            return Ok(false);
+        }
+        self.go_to_serenitea_pot_approach_ayuan(rule)
     }
 
     fn claim_serenitea_pot_rewards(
@@ -15381,6 +15565,70 @@ fn desktop_go_to_serenitea_pot_first_ocr_text(regions: &[OcrResultRegion]) -> Op
         .collect::<Vec<_>>();
     regions.sort_by_key(|region| (region.rect.y, region.rect.x));
     regions.first().map(|region| region.text.trim().to_string())
+}
+
+fn desktop_go_to_serenitea_pot_ayuan_candidate_from_regions(
+    regions: &[OcrResultRegion],
+    roi: Rect,
+    accepted_texts: &[String],
+) -> Option<DesktopGoToSereniteaPotAyuanCandidate> {
+    let accepted_texts = accepted_texts
+        .iter()
+        .map(|text| normalize_desktop_ocr_text(text))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    regions
+        .iter()
+        .filter(|region| {
+            let text = normalize_desktop_ocr_text(&region.text);
+            accepted_texts
+                .iter()
+                .any(|accepted| text.contains(accepted))
+        })
+        .min_by_key(|region| (region.rect.y, region.rect.x))
+        .and_then(|region| {
+            Rect::new(
+                roi.x + region.rect.x,
+                roi.y + region.rect.y,
+                region.rect.width,
+                region.rect.height,
+            )
+            .ok()
+        })
+        .map(|rect| DesktopGoToSereniteaPotAyuanCandidate { rect })
+}
+
+fn desktop_go_to_serenitea_pot_ayuan_alignment(
+    rect: Rect,
+    capture_size: VisionSize,
+    rule: &GoToSereniteaPotFindAYuanRule,
+) -> DesktopGoToSereniteaPotAyuanAlignment {
+    let center = rect.center();
+    let target_y_max = (f64::from(capture_size.height) * rule.target_y_max_ratio).round() as i32;
+    if center.y > target_y_max {
+        return DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy {
+            dx: 0,
+            dy: center.y - target_y_max + rule.target_y_offset_px,
+        };
+    }
+
+    let screen_middle = (capture_size.width / 2) as i32;
+    let horizontal_delta = center.x - screen_middle;
+    let tolerance =
+        (f64::from(rect.width) * rule.horizontal_tolerance_width_multiplier).round() as i32;
+    if horizontal_delta.abs() <= tolerance {
+        DesktopGoToSereniteaPotAyuanAlignment::Aligned
+    } else if horizontal_delta > 0 {
+        DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy {
+            dx: horizontal_delta / 2,
+            dy: 0,
+        }
+    } else {
+        DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy {
+            dx: horizontal_delta * 3 / 2,
+            dy: 0,
+        }
+    }
 }
 
 fn desktop_go_to_serenitea_pot_live_preflight(
@@ -22048,6 +22296,98 @@ mod tests {
             Some("妙香林")
         );
         assert_eq!(desktop_go_to_serenitea_pot_first_ocr_text(&[]), None);
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_ayuan_candidate_offsets_roi_and_matches_text() {
+        let regions = vec![
+            OcrResultRegion {
+                rect: Rect::new(60, 30, 20, 12).unwrap(),
+                text: "路人".to_string(),
+                score: 0.4,
+            },
+            OcrResultRegion {
+                rect: Rect::new(30, 40, 24, 16).unwrap(),
+                text: "< 壶 灵 >".to_string(),
+                score: 0.9,
+            },
+            OcrResultRegion {
+                rect: Rect::new(10, 20, 18, 10).unwrap(),
+                text: "阿圆".to_string(),
+                score: 0.8,
+            },
+        ];
+        let accepted = vec!["阿圆".to_string(), "壶灵".to_string(), "<壶灵>".to_string()];
+
+        let candidate = desktop_go_to_serenitea_pot_ayuan_candidate_from_regions(
+            &regions,
+            Rect::new(100, 50, 400, 250).unwrap(),
+            &accepted,
+        )
+        .unwrap();
+
+        assert_eq!(candidate.rect, Rect::new(110, 70, 18, 10).unwrap());
+    }
+
+    #[test]
+    fn desktop_go_to_serenitea_pot_ayuan_alignment_matches_legacy_moves() {
+        let rule = bgi_task::GoToSereniteaPotFindAYuanRule {
+            realm_adjustments: Vec::new(),
+            middle_click_events: Vec::new(),
+            wait_after_middle_click_ms: 0,
+            search_ocr: bgi_task::GoToSereniteaPotOcrRule {
+                roi: Rect::new(0, 0, 1, 1).unwrap(),
+                recognition_type: bgi_task::GoToSereniteaPotRecognitionType::Ocr,
+                attempts: 1,
+                retry_delay_ms: 0,
+            },
+            accepted_texts: Vec::new(),
+            target_y_max_ratio: 0.25,
+            target_y_offset_px: 100,
+            horizontal_tolerance_width_multiplier: 1.4,
+            missing_rotate_width_ratio: 0.1,
+            align_delay_ms: 300,
+            blur_safe_delay_ms: 500,
+            max_missing_rotations: 180,
+            approach_action: GenshinAction::MoveForward,
+            approach_dialog_text: "阿圆".to_string(),
+            drop_action: GenshinAction::Drop,
+            drop_interval_ms: 50,
+        };
+        let capture_size = VisionSize::new(1920, 1080);
+
+        assert!(matches!(
+            desktop_go_to_serenitea_pot_ayuan_alignment(
+                Rect::new(940, 230, 40, 20).unwrap(),
+                capture_size,
+                &rule
+            ),
+            DesktopGoToSereniteaPotAyuanAlignment::Aligned
+        ));
+        assert!(matches!(
+            desktop_go_to_serenitea_pot_ayuan_alignment(
+                Rect::new(940, 320, 40, 20).unwrap(),
+                capture_size,
+                &rule
+            ),
+            DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy { dx: 0, dy: 160 }
+        ));
+        assert!(matches!(
+            desktop_go_to_serenitea_pot_ayuan_alignment(
+                Rect::new(1300, 230, 40, 20).unwrap(),
+                capture_size,
+                &rule
+            ),
+            DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy { dx: 180, dy: 0 }
+        ));
+        assert!(matches!(
+            desktop_go_to_serenitea_pot_ayuan_alignment(
+                Rect::new(400, 230, 40, 20).unwrap(),
+                capture_size,
+                &rule
+            ),
+            DesktopGoToSereniteaPotAyuanAlignment::MoveMouseBy { dx: -810, dy: 0 }
+        ));
     }
 
     fn quick_serenitea_pot_report(
