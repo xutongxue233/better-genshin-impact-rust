@@ -2773,11 +2773,11 @@ fn auto_eat_food_plan_preserves_legacy_inventory_food_flow_and_result_contract()
         .notes
         .contains("desktop script-dispatcher live execution now covers"));
     assert!(food_catalog.notes.contains(
-        "runs inventory-food through shared game-window, BitBlt, capture-size, and CountInventory first-active-adapter preflight"
+        "runs inventory-food through shared game-window, BitBlt, capture-size, inventory open/prompt/tab handling, first-page de-highlight/column stitching"
     ));
     assert!(food_catalog
         .notes
-        .contains("live inventory input/grid/ONNX/OCR/click adapters are wired"));
+        .contains("live GridIcon ONNX/OCR/click adapters are wired"));
 }
 
 #[test]
@@ -2973,7 +2973,7 @@ struct FakeAutoEatFoodRuntime {
     confirm_outcomes: VecDeque<CommonJobRuntimeOutcome>,
     open_tab_outcomes: VecDeque<CommonJobRuntimeOutcome>,
     load_classifier_outcomes: VecDeque<CommonJobRuntimeOutcome>,
-    grid_items: VecDeque<Vec<CountInventoryGridItemFrame>>,
+    grid_items: VecDeque<CountInventoryGridEnumeration>,
     crop_outcomes: VecDeque<CommonJobRuntimeOutcome>,
     infer_outcomes: VecDeque<Vec<CountInventoryGridIconMatch>>,
     ocr_texts: VecDeque<Option<String>>,
@@ -3013,6 +3013,20 @@ impl FakeAutoEatFoodRuntime {
     fn with_grid_items(
         mut self,
         batches: impl IntoIterator<Item = Vec<CountInventoryGridItemFrame>>,
+    ) -> Self {
+        self.grid_items = batches
+            .into_iter()
+            .map(|items| CountInventoryGridEnumeration {
+                items,
+                scan_complete: true,
+            })
+            .collect();
+        self
+    }
+
+    fn with_grid_enumerations(
+        mut self,
+        batches: impl IntoIterator<Item = CountInventoryGridEnumeration>,
     ) -> Self {
         self.grid_items = batches.into_iter().collect();
         self
@@ -3104,7 +3118,7 @@ impl AutoEatFoodRuntime for FakeAutoEatFoodRuntime {
         template: &GridTemplate,
         detection_rule: &GridItemDetectionRule,
         scroll_rule: &GridScrollRule,
-    ) -> Result<Vec<CountInventoryGridItemFrame>> {
+    ) -> Result<CountInventoryGridEnumeration> {
         self.enumerate_calls.push((
             template.clone(),
             detection_rule.clone(),
@@ -3310,6 +3324,35 @@ fn auto_eat_food_executor_returns_not_found_without_clicking() {
         .logs
         .iter()
         .any(|message| message == "没有找到甜甜花酿鸡"));
+}
+
+#[test]
+fn auto_eat_food_executor_rejects_not_found_before_grid_scan_complete() {
+    let plan = plan_auto_eat_food(
+        AutoEatFoodExecutionConfig::from_value(Some(&serde_json::json!({
+            "foodName": "甜甜花酿鸡"
+        })))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut runtime = FakeAutoEatFoodRuntime::new()
+        .with_grid_enumerations([CountInventoryGridEnumeration {
+            items: vec![fake_inventory_frame(0)],
+            scan_complete: false,
+        }])
+        .with_infer_outcomes([vec![fake_inventory_match(0, "晶核")]]);
+
+    let error = execute_auto_eat_food_plan(&plan, &mut runtime).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TaskError::CommonJobExecution(message)
+            if message.contains("AutoEatFood inventory scan did not complete")
+                && message.contains("GridScroller adapter remains pending")
+    ));
+    assert!(runtime.clicked_items.is_empty());
+    assert!(runtime.ocr_calls.is_empty());
+    assert!(runtime.confirm_assets.is_empty());
 }
 
 #[test]

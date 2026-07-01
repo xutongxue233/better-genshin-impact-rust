@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    plan_count_inventory_item, CommonJobRuntimeOutcome, CountInventoryGridIconMatch,
-    CountInventoryGridItemFrame, CountInventoryItemExecutionConfig,
+    plan_count_inventory_item, CommonJobRuntimeOutcome, CountInventoryGridEnumeration,
+    CountInventoryGridIconMatch, CountInventoryGridItemFrame, CountInventoryItemExecutionConfig,
     CountInventoryItemExecutionPlan, CountInventoryOpenInventoryOutcome,
     CountInventoryOpenInventoryRule, GridIconClassifierRule, GridIconCropRule,
     GridItemCountOcrRule, GridItemDetectionRule, GridScreenName, GridScrollRule, GridTemplate,
@@ -605,6 +605,7 @@ pub struct AutoEatFoodExecutorState {
     pub inventory_tab_opened: Option<bool>,
     pub classifier_loaded: bool,
     pub grid_items: Vec<CountInventoryGridItemFrame>,
+    pub grid_scan_complete: bool,
     pub grid_icons_cropped: bool,
     pub inferred_icons: Vec<CountInventoryGridIconMatch>,
     pub target_match: Option<CountInventoryGridIconMatch>,
@@ -664,7 +665,7 @@ pub trait AutoEatFoodRuntime {
         template: &GridTemplate,
         detection_rule: &GridItemDetectionRule,
         scroll_rule: &GridScrollRule,
-    ) -> Result<Vec<CountInventoryGridItemFrame>>;
+    ) -> Result<CountInventoryGridEnumeration>;
 
     fn crop_auto_eat_food_grid_icons(
         &mut self,
@@ -807,11 +808,11 @@ pub fn plan_auto_eat_food(config: AutoEatFoodExecutionConfig) -> Result<AutoEatF
         result_contract,
         steps,
         pending_native: vec![
-            "desktop inventory-food live routing now shares game-window, BitBlt, capture-size, and CountInventory adapter-boundary preflight; live ReturnMainUi, opening Food inventory, expired-item prompt confirmation, Food tab selection, GridIcon classifier asset parsing, visible-page grid candidate probing, and normalized icon crop helpers are wired through the shared common-job runtime, while AutoEatFood remains blocked at the full GridScroller scan_complete boundary before parsed-prototype-backed GridIcon ONNX feature extraction, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi can run".to_string(),
+            "desktop inventory-food live routing now shares game-window, BitBlt, capture-size, and CountInventory adapter-boundary preflight; live ReturnMainUi, opening Food inventory, expired-item prompt confirmation, Food tab selection, GridIcon classifier asset parsing, ordinary first-page de-highlight/column stitching, visible-page grid candidate probing, stitched visible-cell icon crop caching, and explicit scan_complete protection are wired through the shared common-job runtime, while parsed-prototype-backed GridIcon ONNX feature extraction, full GridScroller scan completion, count OCR, matched food click, white confirm click, overlay cleanup, and final ReturnMainUi remain pending".to_string(),
             "portable nutrition bag loop for script-dispatched AutoEat without foodName remains pending"
                 .to_string(),
         ],
-        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, and an injectable Rust executor for the inventory-food branch; desktop live routing shares CountInventory game-window, BitBlt, capture-size, inventory opening, expired-prompt confirmation, tab-selection, classifier asset parsing, visible-page grid candidate probing, normalized icon crop helpers, and first-active-adapter preflight before the remaining full GridScroller scan_complete, ONNX feature extraction, OCR, and click adapters are wired.".to_string(),
+        notes: "Rust models the script-dispatched AutoEatTask foodName/foodEffectType resolution, Food inventory grid constants through CountInventoryItem, icon classifier/OCR contracts, use-confirm rule, full-width digit normalization, legacy int? result semantics, explicit scan_complete protection, and an injectable Rust executor for the inventory-food branch; desktop live routing shares CountInventory game-window, BitBlt, capture-size, inventory opening, expired-prompt confirmation, tab-selection, classifier asset parsing, ordinary first-page de-highlight/column stitching, stitched visible-page cell caching, normalized icon crop helpers, and first-active-adapter preflight before the remaining full GridScroller scan completion, ONNX feature extraction, OCR, and click adapters are wired.".to_string(),
     })
 }
 
@@ -1057,11 +1058,13 @@ where
         outcome,
     ));
 
-    state.grid_items = runtime.enumerate_auto_eat_food_grid_items(
+    let enumeration = runtime.enumerate_auto_eat_food_grid_items(
         &inventory_plan.grid_template,
         &inventory_plan.grid_item_detection_rule,
         &inventory_plan.scroll_rule,
     )?;
+    state.grid_scan_complete = enumeration.scan_complete;
+    state.grid_items = enumeration.items;
     executed_actions.push(auto_eat_food_action_report(
         AutoEatFoodRuntimeActionKind::EnumerateGridItems,
         CommonJobRuntimeOutcome::Matched(!state.grid_items.is_empty()),
@@ -1086,6 +1089,12 @@ where
         AutoEatFoodRuntimeActionKind::InferGridIcon,
         CommonJobRuntimeOutcome::Matched(state.target_match.is_some()),
     ));
+
+    if state.target_match.is_none() && !state.grid_scan_complete {
+        return Err(TaskError::CommonJobExecution(
+            "AutoEatFood inventory scan did not complete; full GridScroller adapter remains pending before returning not-found".to_string(),
+        ));
+    }
 
     if let Some(matched) = state.target_match.as_ref() {
         state.ocr_count_text =

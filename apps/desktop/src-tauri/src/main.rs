@@ -6916,7 +6916,7 @@ impl AutoEatFoodRuntime for DesktopAutoEatFoodRuntime {
         _template: &GridTemplate,
         _detection_rule: &GridItemDetectionRule,
         _scroll_rule: &GridScrollRule,
-    ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
+    ) -> bgi_task::Result<CountInventoryGridEnumeration> {
         self.ensure_not_cancelled()?;
         Err(TaskError::CommonJobExecution(
             "AutoEatFood grid enumeration adapter is not wired".to_string(),
@@ -7004,6 +7004,7 @@ struct DesktopAutoEatFoodInventoryRuntime<F, I, C> {
     capture_size: VisionSize,
     cancellation: Arc<InputCancellationToken>,
     grid_icon_prototype_count: usize,
+    visible_grid_item_cells: Vec<BgrImage>,
     cropped_grid_icons: Vec<BgrImage>,
 }
 
@@ -7020,6 +7021,7 @@ impl<F, I, C> DesktopAutoEatFoodInventoryRuntime<F, I, C> {
             capture_size,
             cancellation,
             grid_icon_prototype_count: 0,
+            visible_grid_item_cells: Vec::new(),
             cropped_grid_icons: Vec::new(),
         }
     }
@@ -7127,20 +7129,20 @@ where
         template: &GridTemplate,
         detection_rule: &GridItemDetectionRule,
         _scroll_rule: &GridScrollRule,
-    ) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>> {
+    ) -> bgi_task::Result<CountInventoryGridEnumeration> {
         self.ensure_not_cancelled()?;
-        let visible_items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
+        let (visible_items, visible_grid_item_cells) =
+            desktop_enumerate_first_inventory_page_items_and_cells_without_highlight_with_common_runtime(
             &mut self.common,
             self.capture_size,
             template,
             detection_rule,
         )?;
-        Err(TaskError::CommonJobExecution(
-            format!(
-                "AutoEatFood inventory-food live execution requires full desktop GridScroller inventory grid enumeration adapter after visible-page enumeration found {} current-page cell(s)",
-                visible_items.len()
-            ),
-        ))
+        self.visible_grid_item_cells = visible_grid_item_cells;
+        Ok(CountInventoryGridEnumeration {
+            items: visible_items,
+            scan_complete: false,
+        })
     }
 
     fn crop_auto_eat_food_grid_icons(
@@ -7149,8 +7151,12 @@ where
         rule: &GridIconCropRule,
     ) -> bgi_task::Result<CommonJobRuntimeOutcome> {
         self.ensure_not_cancelled()?;
-        self.cropped_grid_icons =
-            desktop_crop_inventory_grid_icons_with_common_runtime(&mut self.common, items, rule)?;
+        self.cropped_grid_icons = desktop_crop_visible_inventory_grid_icons_from_cached_cells(
+            &self.visible_grid_item_cells,
+            items,
+            rule,
+            "AutoEatFood inventory-food",
+        )?;
         Ok(CommonJobRuntimeOutcome::Matched(
             !self.cropped_grid_icons.is_empty(),
         ))
@@ -7234,7 +7240,7 @@ fn desktop_auto_eat_food_inventory_live_preflight(
     desktop_inventory_count_plan_live_preflight(
         "AutoEatFood inventory-food",
         inventory_plan,
-        true,
+        false,
     )?;
 
     for step in &plan.steps {
@@ -13845,38 +13851,6 @@ where
     ))
 }
 
-fn desktop_enumerate_visible_inventory_grid_items_with_common_runtime<F, I, C>(
-    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
-    capture_size: VisionSize,
-    template: &GridTemplate,
-    detection_rule: &GridItemDetectionRule,
-) -> bgi_task::Result<Vec<CountInventoryGridItemFrame>>
-where
-    F: CommonJobFrameSource,
-    I: CommonJobInputDriver,
-    C: CommonJobClock,
-{
-    let frame = common.frame_source_mut().capture_frame()?;
-    let spec = desktop_visible_inventory_grid_spec(capture_size, template, detection_rule)
-        .map_err(|error| {
-            TaskError::VisionPlan(format!("inventory visible grid spec failed: {error}"))
-        })?;
-    let cells = bgi_vision::enumerate_visible_grid_cells(&frame, spec).map_err(|error| {
-        TaskError::VisionPlan(format!(
-            "inventory visible grid enumeration failed: {error}"
-        ))
-    })?;
-    Ok(cells
-        .into_iter()
-        .enumerate()
-        .map(|(index, cell)| CountInventoryGridItemFrame {
-            page_index: 0,
-            item_index: index as u32,
-            rect: cell.rect,
-        })
-        .collect())
-}
-
 fn desktop_enumerate_visible_inventory_grid_items_and_cells_with_common_runtime<F, I, C>(
     common: &mut PureTemplateCommonJobRuntime<F, I, C>,
     capture_size: VisionSize,
@@ -14137,45 +14111,6 @@ fn desktop_scaled_rect_1080p(rect: Rect, capture_size: VisionSize) -> bgi_vision
         desktop_scaled_1080p(rect.width, capture_size),
         desktop_scaled_1080p(rect.height, capture_size),
     )
-}
-
-fn desktop_crop_inventory_grid_icons_with_common_runtime<F, I, C>(
-    common: &mut PureTemplateCommonJobRuntime<F, I, C>,
-    items: &[CountInventoryGridItemFrame],
-    rule: &GridIconCropRule,
-) -> bgi_task::Result<Vec<BgrImage>>
-where
-    F: CommonJobFrameSource,
-    I: CommonJobInputDriver,
-    C: CommonJobClock,
-{
-    if items.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let spec = GridIconCropSpec {
-        normalized_size: VisionSize::new(rule.normalized_width, rule.normalized_height),
-        icon_crop: rule.icon_crop,
-        bottom_crop: rule.bottom_crop,
-    };
-    let frame = common.frame_source_mut().capture_frame()?;
-    let mut icons = Vec::with_capacity(items.len());
-    for item in items {
-        let cell = crop_bgr_image(&frame, item.rect).map_err(|error| {
-            TaskError::VisionPlan(format!(
-                "inventory grid cell crop failed for page {} item {} rect {:?}: {error}",
-                item.page_index, item.item_index, item.rect
-            ))
-        })?;
-        let crops = crop_grid_icon(&cell, spec).map_err(|error| {
-            TaskError::VisionPlan(format!(
-                "inventory grid icon crop failed for page {} item {} rect {:?}: {error}",
-                item.page_index, item.item_index, item.rect
-            ))
-        })?;
-        icons.push(crops.icon);
-    }
-    Ok(icons)
 }
 
 fn desktop_crop_visible_inventory_grid_icons_from_cached_cells(
@@ -20449,35 +20384,19 @@ mod tests {
     }
 
     #[test]
-    fn desktop_inventory_grid_icon_crop_adapter_crops_current_frame() {
-        let capture_size = VisionSize::new(1920, 1080);
-        let cell_rect = Rect::new(106, 110, 125, 153).unwrap();
+    fn desktop_inventory_grid_icon_crop_adapter_crops_cached_cells() {
         let cell = BgrImage::new(
             VisionSize::new(125, 153),
             (0..125 * 153).flat_map(|_| [23_u8, 45_u8, 67_u8]).collect(),
         )
         .unwrap();
-        let mut frame = desktop_talk_option_test_blank_frame(capture_size);
-        desktop_talk_option_test_paint_template(
-            &mut frame.pixels,
-            capture_size,
-            &cell,
-            cell_rect.x as u32,
-            cell_rect.y as u32,
-        );
-        let mut runtime = bgi_task::TemplateCommonJobRuntime::new(
-            PureRustVisionBackend::new(),
-            DesktopTalkOptionTestFrameSource::new([frame]),
-            DesktopTalkOptionTestInputDriver::default(),
-            DesktopTalkOptionTestClock::default(),
-        );
 
-        let icons = desktop_crop_inventory_grid_icons_with_common_runtime(
-            &mut runtime,
+        let icons = desktop_crop_visible_inventory_grid_icons_from_cached_cells(
+            &[cell],
             &[CountInventoryGridItemFrame {
-                page_index: 2,
-                item_index: 7,
-                rect: cell_rect,
+                page_index: 0,
+                item_index: 0,
+                rect: Rect::new(106, 110, 125, 153).unwrap(),
             }],
             &GridIconCropRule {
                 normalized_width: 125,
@@ -20485,11 +20404,10 @@ mod tests {
                 icon_crop: Rect::new(0, 0, 125, 125).unwrap(),
                 bottom_crop: Rect::new(0, 126, 125, 27).unwrap(),
             },
+            "DesktopInventoryTest",
         )
         .unwrap();
-        let (_, frame_source, _, _, _) = runtime.into_parts();
 
-        assert_eq!(frame_source.captures, 1);
         assert_eq!(icons.len(), 1);
         assert_eq!(icons[0].size, VisionSize::new(125, 125));
         assert_eq!(
@@ -20530,17 +20448,19 @@ mod tests {
             DesktopTalkOptionTestClock::default(),
         );
 
-        let items = desktop_enumerate_visible_inventory_grid_items_with_common_runtime(
-            &mut runtime,
-            capture_size,
-            &template,
-            &detection_rule,
-        )
-        .unwrap();
+        let (items, cell_images) =
+            desktop_enumerate_visible_inventory_grid_items_and_cells_with_common_runtime(
+                &mut runtime,
+                capture_size,
+                &template,
+                &detection_rule,
+            )
+            .unwrap();
         let (_, frame_source, _, _, _) = runtime.into_parts();
 
         assert_eq!(frame_source.captures, 1);
         assert_eq!(items.len(), 6);
+        assert_eq!(cell_images.len(), 6);
         assert!(items.iter().all(|item| item.page_index == 0));
         assert_eq!(
             items.iter().map(|item| item.item_index).collect::<Vec<_>>(),
@@ -20621,6 +20541,104 @@ mod tests {
 
         runtime
             .crop_count_inventory_grid_icons(
+                &enumeration.items,
+                &GridIconCropRule {
+                    normalized_width: 125,
+                    normalized_height: 153,
+                    icon_crop: Rect::new(0, 0, 125, 125).unwrap(),
+                    bottom_crop: Rect::new(0, 126, 125, 27).unwrap(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(runtime.cropped_grid_icons.len(), 6);
+
+        let common = runtime.common;
+        let (_, frame_source, input_driver, clock, _) = common.into_parts();
+        assert_eq!(frame_source.captures, 2);
+        assert_eq!(
+            input_driver.clicks,
+            vec![
+                geometry.third_column_click,
+                geometry.third_column_click,
+                geometry.first_column_click,
+                geometry.first_column_click
+            ]
+        );
+        assert_eq!(clock.waits, vec![300, 500, 300, 500]);
+    }
+
+    #[test]
+    fn desktop_auto_eat_food_visible_route_uses_first_page_dehighlight_cell_cache() {
+        let capture_size = VisionSize::new(1920, 1080);
+        let template = GridTemplate {
+            roi_1080p: Rect::new(200, 150, 300, 220).unwrap(),
+            columns: 3,
+            s1_round: 3,
+            round_milliseconds: 40,
+            s2_round: 32,
+            s3_scale: 0.024,
+        };
+        let geometry =
+            desktop_inventory_first_page_dehighlight_geometry(capture_size, &template).unwrap();
+        let detection_rule = desktop_test_inventory_grid_detection_rule();
+        let grid_rects = [
+            Rect::new(220, 170, 60, 80).unwrap(),
+            Rect::new(310, 170, 60, 80).unwrap(),
+            Rect::new(400, 170, 60, 80).unwrap(),
+            Rect::new(220, 270, 60, 80).unwrap(),
+        ];
+        let left_cell_probe = Rect::new(235, 205, 20, 20).unwrap();
+        let mut first_columns_frame = desktop_talk_option_test_blank_frame(capture_size);
+        let mut rest_frame = desktop_talk_option_test_blank_frame(capture_size);
+        for rect in grid_rects {
+            draw_desktop_bgr_rect_edge(&mut first_columns_frame, rect, [245, 245, 245]);
+            draw_desktop_bgr_rect_edge(&mut rest_frame, rect, [245, 245, 245]);
+        }
+        fill_desktop_bgr_rect(&mut first_columns_frame, left_cell_probe, [11, 22, 33]);
+        fill_desktop_bgr_rect(&mut rest_frame, left_cell_probe, [91, 101, 111]);
+        let common_runtime = bgi_task::TemplateCommonJobRuntime::new(
+            PureRustVisionBackend::new(),
+            DesktopTalkOptionTestFrameSource::new([first_columns_frame, rest_frame]),
+            DesktopTalkOptionTestInputDriver::default(),
+            DesktopTalkOptionTestClock::default(),
+        );
+        let mut runtime = DesktopAutoEatFoodInventoryRuntime::new(
+            common_runtime,
+            &AppConfig::default(),
+            capture_size,
+            Arc::new(InputCancellationToken::new()),
+        );
+        let scroll_rule = GridScrollRule {
+            test_scroll_rounds: 3,
+            page_scroll_rounds: 32,
+            scroll_delta_per_round: -2,
+            fine_scroll_delta: -1,
+            round_wait_ms: 40,
+            settle_wait_ms: 300,
+            fine_scroll_check_interval_ms: 60,
+            fine_scroll_timeout_ms: 2000,
+            phase_correlation_lower_threshold: 0.5,
+            phase_correlation_upper_threshold: 0.95,
+        };
+
+        let enumeration = runtime
+            .enumerate_auto_eat_food_grid_items(&template, &detection_rule, &scroll_rule)
+            .unwrap();
+        assert!(!enumeration.scan_complete);
+        assert_eq!(enumeration.items.len(), 6);
+        assert_eq!(runtime.visible_grid_item_cells.len(), 6);
+        assert_eq!(
+            runtime.visible_grid_item_cells[0].bgr_pixel_at(20, 40),
+            Some(bgi_vision::BgrPixel {
+                b: 11,
+                g: 22,
+                r: 33
+            })
+        );
+
+        runtime
+            .crop_auto_eat_food_grid_icons(
                 &enumeration.items,
                 &GridIconCropRule {
                     normalized_width: 125,
@@ -23746,7 +23764,7 @@ mod tests {
 
         let static_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
         assert!(static_error.contains(
-            "AutoEatFood inventory-food live execution requires full desktop GridScroller inventory grid enumeration adapter"
+            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX feature extraction adapter"
         ));
         assert!(!static_error.contains("inventory grid/ONNX/OCR/click adapters"));
     }
@@ -23904,13 +23922,13 @@ mod tests {
         )
         .unwrap();
 
-        let grid_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
-        assert!(grid_error.contains(
-            "AutoEatFood inventory-food live execution requires full desktop GridScroller inventory grid enumeration adapter"
+        let inference_error = desktop_auto_eat_food_inventory_live_preflight(&plan).unwrap_err();
+        assert!(inference_error.contains(
+            "AutoEatFood inventory-food live execution requires desktop GridIcon ONNX feature extraction adapter"
         ));
-        assert!(!grid_error.contains("expired-item prompt adapter"));
-        assert!(!grid_error.contains("inventory tab adapter"));
-        assert!(!grid_error.contains("GridIcon ONNX feature extraction adapter"));
+        assert!(!inference_error.contains("expired-item prompt adapter"));
+        assert!(!inference_error.contains("inventory tab adapter"));
+        assert!(!inference_error.contains("full desktop GridScroller"));
 
         let mut after_inventory_scan = plan.clone();
         after_inventory_scan
