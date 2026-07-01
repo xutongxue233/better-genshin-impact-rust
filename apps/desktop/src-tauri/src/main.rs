@@ -89,16 +89,17 @@ use bgi_task::{
     plan_auto_music_game, plan_auto_open_chest, plan_auto_pathing, plan_auto_pick, plan_auto_wood,
     plan_choose_talk_option, plan_get_grid_icons,
     plan_get_grid_icons_artifact_set_flower_without_glyph_ocr,
-    plan_get_grid_icons_artifact_set_icon_crop, plan_quick_buy, plan_quick_enhance_artifact_macro,
-    plan_quick_serenitea_pot, plan_quick_teleport, plan_return_main_ui, plan_turn_around_macro,
-    plan_wonderland_cycle, redeem_code_entries_from_strings,
-    reduce_lower_head_then_walk_to_tracking_frame, resolve_get_grid_icons_artifact_set_flower_name,
-    runtime_triggers, select_triggers_for_tick, switch_party_find_matching_text_candidate,
-    switch_party_text_candidates_from_ocr_regions, task_catalog, AutoCookExecutionConfig,
-    AutoCookExecutionPlan, AutoCookExecutionReport, AutoCookExecutionStatus, AutoCookRuntime,
-    AutoCookRuntimeFrame, AutoCookTemplateLocator, AutoEatExecutionConfig, AutoEatExecutionPlan,
-    AutoEatFoodExecutionPlan, AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime,
-    AutoEatRuntime, AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
+    plan_get_grid_icons_artifact_set_icon_crop, plan_go_to_crafting_bench, plan_quick_buy,
+    plan_quick_enhance_artifact_macro, plan_quick_serenitea_pot, plan_quick_teleport,
+    plan_return_main_ui, plan_turn_around_macro, plan_wonderland_cycle,
+    redeem_code_entries_from_strings, reduce_lower_head_then_walk_to_tracking_frame,
+    resolve_get_grid_icons_artifact_set_flower_name, runtime_triggers, select_triggers_for_tick,
+    switch_party_find_matching_text_candidate, switch_party_text_candidates_from_ocr_regions,
+    task_catalog, AutoCookExecutionConfig, AutoCookExecutionPlan, AutoCookExecutionReport,
+    AutoCookExecutionStatus, AutoCookRuntime, AutoCookRuntimeFrame, AutoCookTemplateLocator,
+    AutoEatExecutionConfig, AutoEatExecutionPlan, AutoEatFoodExecutionPlan,
+    AutoEatFoodExecutionReport, AutoEatFoodPlanMode, AutoEatFoodRuntime, AutoEatRuntime,
+    AutoEatTemplateLocator, AutoEatTickExecutionReport, AutoEatTickObservation,
     AutoEatTriggerState, AutoEatTriggeredAction, AutoFightExecutionConfig, AutoFightExecutionPlan,
     AutoFightFinishDetectionExecutionMode, AutoFightFinishDetectionLiveExecution, AutoFightParam,
     AutoFishBiteRule, AutoFishExecutionConfig, AutoFishExecutionPlan, AutoFishInputAction,
@@ -4512,6 +4513,7 @@ fn execute_desktop_task_invocation_live_in_javascript_outcome(
         .chain(outcome.task_execution.genshin.iter_mut())
     {
         execute_desktop_common_job_live_result(
+            app_root,
             config,
             game_window,
             Arc::clone(&cancellation),
@@ -4639,14 +4641,36 @@ fn execute_desktop_realtime_trigger_live_result(
 }
 
 fn execute_desktop_common_job_live_result(
+    app_root: &Path,
     config: &AppConfig,
     game_window: Option<&GameWindowMatch>,
     cancellation: Arc<InputCancellationToken>,
     result: &mut TaskInvocationExecutionResult,
 ) {
-    let Some(plan) = result.common_job_execution_plan.clone() else {
+    let Some(mut plan) = result.common_job_execution_plan.clone() else {
         return;
     };
+    if let CommonJobExecutionPlan::GoToCraftingBench(crafting_plan) = &plan {
+        match desktop_go_to_crafting_bench_plan_with_selected_one_dragon_config(
+            app_root,
+            config,
+            crafting_plan,
+        ) {
+            Ok(Some(injected_plan)) => {
+                plan = CommonJobExecutionPlan::GoToCraftingBench(injected_plan);
+                result.common_job_execution_plan = Some(plan.clone());
+            }
+            Ok(None) => {}
+            Err(error) => {
+                result.status = TaskInvocationExecutionStatus::Invalid;
+                result.executed = false;
+                result.message = format!("GoToCraftingBench live execution failed: {error}");
+                result.live_completed = None;
+                result.common_job_live_execution = None;
+                return;
+            }
+        }
+    }
     let task_key = plan.task_key().to_string();
     match execute_desktop_common_job_live_plan(config, game_window, cancellation, &plan) {
         Ok(Some(report)) => {
@@ -14465,6 +14489,108 @@ fn execute_desktop_one_key_expedition_live(
     .map_err(|error| error.to_string())
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+struct DesktopOneDragonFlowConfig {
+    #[serde(alias = "Name")]
+    name: String,
+    #[serde(alias = "MinResinToKeep")]
+    min_resin_to_keep: i32,
+}
+
+fn desktop_go_to_crafting_bench_plan_with_selected_one_dragon_config(
+    app_root: &Path,
+    config: &AppConfig,
+    plan: &GoToCraftingBenchExecutionPlan,
+) -> Result<Option<GoToCraftingBenchExecutionPlan>, String> {
+    if plan.min_resin_to_keep > 0 {
+        return Ok(None);
+    }
+    let selected_config = desktop_selected_one_dragon_flow_config(
+        app_root,
+        &config.selected_one_dragon_flow_config_name,
+    )?;
+    if selected_config.min_resin_to_keep <= 0 {
+        return Ok(None);
+    }
+    let injected_plan = plan_go_to_crafting_bench(
+        plan.capture_size,
+        plan.country.clone(),
+        plan.localized_texts.clone(),
+        selected_config.min_resin_to_keep,
+        plan.interaction_rule.interact_vk,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(Some(injected_plan))
+}
+
+fn desktop_selected_one_dragon_flow_config(
+    app_root: &Path,
+    selected_config_name: &str,
+) -> Result<DesktopOneDragonFlowConfig, String> {
+    let configs = desktop_read_one_dragon_flow_configs(app_root)?;
+    let selected_config_name = selected_config_name.trim();
+    if !selected_config_name.is_empty() {
+        if let Some(config) = configs
+            .iter()
+            .find(|config| config.name == selected_config_name)
+        {
+            return Ok(config.clone());
+        }
+    }
+    Ok(configs
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| DesktopOneDragonFlowConfig {
+            name: "默认配置".to_string(),
+            min_resin_to_keep: 0,
+        }))
+}
+
+fn desktop_read_one_dragon_flow_configs(
+    app_root: &Path,
+) -> Result<Vec<DesktopOneDragonFlowConfig>, String> {
+    let folder = app_root.join("User").join("OneDragon");
+    let read_dir = match fs::read_dir(&folder) {
+        Ok(read_dir) => read_dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "failed to read OneDragon config folder {}: {error}",
+                folder.display()
+            ));
+        }
+    };
+    let mut files = read_dir
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+
+    let mut configs = Vec::new();
+    for path in files {
+        let text = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "failed to read OneDragon config {}: {error}",
+                path.display()
+            )
+        })?;
+        let config =
+            serde_json::from_str::<DesktopOneDragonFlowConfig>(&text).map_err(|error| {
+                format!(
+                    "failed to parse OneDragon config {}: {error}",
+                    path.display()
+                )
+            })?;
+        configs.push(config);
+    }
+    Ok(configs)
+}
+
 fn execute_desktop_go_to_crafting_bench_live(
     config: &AppConfig,
     window: &GameWindowMatch,
@@ -23014,6 +23140,145 @@ mod tests {
         assert!(!error.contains("condensed-resin crafting adapter"));
         assert!(!error.contains("consumed PathExecutor movement contract"));
         assert!(!error.contains("requires desktop PathExecutor movement adapter"));
+    }
+
+    #[test]
+    fn desktop_go_to_crafting_bench_selected_config_resolves_min_resin_to_keep_with_legacy_fallbacks(
+    ) {
+        let root = desktop_test_temp_root("crafting-bench-one-dragon");
+        let one_dragon_dir = root.join("User").join("OneDragon");
+        fs::create_dir_all(&one_dragon_dir).unwrap();
+        fs::write(
+            one_dragon_dir.join("00-first.json"),
+            r#"{"Name":"第一个配置","MinResinToKeep":40}"#,
+        )
+        .unwrap();
+        fs::write(
+            one_dragon_dir.join("01-selected.json"),
+            r#"{"name":"选中配置","minResinToKeep":120}"#,
+        )
+        .unwrap();
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(base_plan)) = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月" })),
+        )
+        .unwrap() else {
+            panic!("expected GoToCraftingBench common job plan");
+        };
+        let selected_config = AppConfig {
+            selected_one_dragon_flow_config_name: "选中配置".to_string(),
+            ..AppConfig::default()
+        };
+
+        let injected = desktop_go_to_crafting_bench_plan_with_selected_one_dragon_config(
+            &root,
+            &selected_config,
+            &base_plan,
+        )
+        .unwrap()
+        .expect("expected selected OneDragon MinResinToKeep injection");
+
+        assert_eq!(injected.country, "璃月");
+        assert_eq!(injected.min_resin_to_keep, 120);
+        assert_eq!(injected.resin_craft_rule.min_resin_to_keep, 120);
+
+        let fallback_config = AppConfig {
+            selected_one_dragon_flow_config_name: "缺失配置".to_string(),
+            ..AppConfig::default()
+        };
+        let fallback = desktop_go_to_crafting_bench_plan_with_selected_one_dragon_config(
+            &root,
+            &fallback_config,
+            &base_plan,
+        )
+        .unwrap()
+        .expect("expected first OneDragon config fallback");
+        assert_eq!(fallback.min_resin_to_keep, 40);
+
+        let explicit_plan = bgi_task::plan_common_job(
+            bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY,
+            Some(&serde_json::json!({ "country": "璃月", "minResinToKeep": 80 })),
+        )
+        .unwrap();
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(explicit_plan)) = explicit_plan else {
+            panic!("expected explicit GoToCraftingBench plan");
+        };
+        assert!(
+            desktop_go_to_crafting_bench_plan_with_selected_one_dragon_config(
+                &root,
+                &selected_config,
+                &explicit_plan,
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        let empty_root = desktop_test_temp_root("crafting-bench-one-dragon-empty");
+        assert!(
+            desktop_go_to_crafting_bench_plan_with_selected_one_dragon_config(
+                &empty_root,
+                &selected_config,
+                &base_plan,
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(empty_root);
+    }
+
+    #[test]
+    fn desktop_common_job_live_result_injects_crafting_bench_selected_one_dragon_config() {
+        let root = desktop_test_temp_root("crafting-bench-live-result-one-dragon");
+        let one_dragon_dir = root.join("User").join("OneDragon");
+        fs::create_dir_all(&one_dragon_dir).unwrap();
+        fs::write(
+            one_dragon_dir.join("selected.json"),
+            r#"{"Name":"合成配置","MinResinToKeep":120}"#,
+        )
+        .unwrap();
+        let app_config = AppConfig {
+            selected_one_dragon_flow_config_name: "合成配置".to_string(),
+            ..AppConfig::default()
+        };
+        let plan = bgi_task::TaskInvocationPlan::from_script_dispatcher_command(
+            bgi_task::ScriptDispatcherCommandInput::RunBuiltinTask {
+                name: bgi_task::GO_TO_CRAFTING_BENCH_TASK_KEY.to_string(),
+                config: serde_json::json!({ "country": "璃月" }),
+                uses_linked_cancellation: false,
+            },
+        )
+        .unwrap();
+        let mut result = bgi_task::evaluate_task_invocation_plan(
+            plan,
+            bgi_task::TaskInvocationExecutionMode::ExecuteReady,
+        );
+
+        execute_desktop_common_job_live_result(
+            &root,
+            &app_config,
+            None,
+            Arc::new(InputCancellationToken::new()),
+            &mut result,
+        );
+
+        assert!(matches!(
+            result.status,
+            bgi_task::TaskInvocationExecutionStatus::Invalid
+        ));
+        assert!(result
+            .message
+            .contains("GoToCraftingBench live execution requires a detected game window"));
+        let Some(CommonJobExecutionPlan::GoToCraftingBench(plan)) =
+            result.common_job_execution_plan
+        else {
+            panic!("expected injected GoToCraftingBench plan");
+        };
+        assert_eq!(plan.min_resin_to_keep, 120);
+        assert_eq!(plan.resin_craft_rule.min_resin_to_keep, 120);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
