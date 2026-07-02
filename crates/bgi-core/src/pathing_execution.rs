@@ -230,6 +230,7 @@ pub enum PathingActionPlan {
     CommonJob(PathingCommonJobActionPlan),
     ForceTeleport(PathingForceTeleportActionPlan),
     NahidaCollect(PathingNahidaCollectActionPlan),
+    ElementalCollect(PathingElementalCollectActionPlan),
     UseGadget(PathingUseGadgetActionPlan),
     PickAround(PathingPickAroundActionPlan),
 }
@@ -413,6 +414,51 @@ pub struct PathingNahidaCollectActionPlan {
     pub steps: Vec<PathingNahidaCollectStep>,
     pub executor_ready: bool,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingElementalCollectActionPlan {
+    pub action_code: String,
+    pub raw_params: Option<String>,
+    pub element: PathingElementalCollectElement,
+    pub element_chinese: String,
+    pub requires_combat_scenes: bool,
+    pub legacy_preflight_validates_avatar: bool,
+    pub scans_team_order: bool,
+    pub switch_avatar_before_collect: bool,
+    pub normal_attack_preferred_over_skill: bool,
+    pub normal_attack_duration_ms: u32,
+    pub wait_skill_cooldown_before_skill: bool,
+    pub path_executor_after_action_delay_ms: u32,
+    pub candidates: Vec<PathingElementalCollectAvatarPlan>,
+    pub executor_ready: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathingElementalCollectElement {
+    Hydro,
+    Electro,
+    Anemo,
+    Pyro,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PathingElementalCollectAvatarPlan {
+    pub avatar_name: String,
+    pub normal_attack: bool,
+    pub elemental_skill: bool,
+    pub selected_action: PathingElementalCollectAvatarAction,
+    pub normal_attack_duration_ms: Option<u32>,
+    pub waits_skill_cooldown: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathingElementalCollectAvatarAction {
+    NormalAttack,
+    ElementalSkill,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -986,6 +1032,10 @@ fn pathing_action_pending_dependencies(
             PathingMovementDependency::InputDispatch,
             PathingMovementDependency::ActionHandlers,
         ],
+        Some(PathingActionPlan::ElementalCollect(_)) => vec![
+            PathingMovementDependency::InputDispatch,
+            PathingMovementDependency::ActionHandlers,
+        ],
         Some(PathingActionPlan::LinneaMining(plan)) if plan.executor_ready => {
             vec![PathingMovementDependency::ActionHandlers]
         }
@@ -1062,6 +1112,10 @@ fn pathing_action_plan(action: &str, action_params: Option<&str>) -> Option<Path
     } else if action.eq_ignore_ascii_case("nahida_collect") {
         Some(PathingActionPlan::NahidaCollect(
             plan_nahida_collect_action(action_params),
+        ))
+    } else if let Some(element) = elemental_collect_element_from_action(action) {
+        Some(PathingActionPlan::ElementalCollect(
+            plan_elemental_collect_action(action, action_params, element),
         ))
     } else if action.eq_ignore_ascii_case("use_gadget") {
         Some(PathingActionPlan::UseGadget(plan_use_gadget_action(
@@ -1203,6 +1257,159 @@ fn build_nahida_collect_steps() -> Vec<PathingNahidaCollectStep> {
         milliseconds: NAHIDA_COLLECT_RESTORE_VIEW_DELAY_MS,
     });
     steps
+}
+
+const ELEMENTAL_COLLECT_NORMAL_ATTACK_DURATION_MS: u32 = 100;
+const ELEMENTAL_COLLECT_PATH_EXECUTOR_AFTER_ACTION_DELAY_MS: u32 = 1_000;
+
+fn elemental_collect_element_from_action(action: &str) -> Option<PathingElementalCollectElement> {
+    if action.eq_ignore_ascii_case("hydro_collect") {
+        Some(PathingElementalCollectElement::Hydro)
+    } else if action.eq_ignore_ascii_case("electro_collect") {
+        Some(PathingElementalCollectElement::Electro)
+    } else if action.eq_ignore_ascii_case("anemo_collect") {
+        Some(PathingElementalCollectElement::Anemo)
+    } else if action.eq_ignore_ascii_case("pyro_collect") {
+        Some(PathingElementalCollectElement::Pyro)
+    } else {
+        None
+    }
+}
+
+fn plan_elemental_collect_action(
+    action_code: &str,
+    action_params: Option<&str>,
+    element: PathingElementalCollectElement,
+) -> PathingElementalCollectActionPlan {
+    PathingElementalCollectActionPlan {
+        action_code: action_code.to_string(),
+        raw_params: action_params.map(ToOwned::to_owned),
+        element,
+        element_chinese: elemental_collect_element_chinese(element).to_string(),
+        requires_combat_scenes: true,
+        legacy_preflight_validates_avatar: matches!(
+            element,
+            PathingElementalCollectElement::Hydro
+                | PathingElementalCollectElement::Electro
+                | PathingElementalCollectElement::Anemo
+        ),
+        scans_team_order: true,
+        switch_avatar_before_collect: true,
+        normal_attack_preferred_over_skill: true,
+        normal_attack_duration_ms: ELEMENTAL_COLLECT_NORMAL_ATTACK_DURATION_MS,
+        wait_skill_cooldown_before_skill: true,
+        path_executor_after_action_delay_ms: ELEMENTAL_COLLECT_PATH_EXECUTOR_AFTER_ACTION_DELAY_MS,
+        candidates: elemental_collect_candidates(element)
+            .iter()
+            .map(|candidate| PathingElementalCollectAvatarPlan {
+                avatar_name: candidate.name.to_string(),
+                normal_attack: candidate.normal_attack,
+                elemental_skill: candidate.elemental_skill,
+                selected_action: if candidate.normal_attack {
+                    PathingElementalCollectAvatarAction::NormalAttack
+                } else {
+                    PathingElementalCollectAvatarAction::ElementalSkill
+                },
+                normal_attack_duration_ms: candidate
+                    .normal_attack
+                    .then_some(ELEMENTAL_COLLECT_NORMAL_ATTACK_DURATION_MS),
+                waits_skill_cooldown: !candidate.normal_attack && candidate.elemental_skill,
+            })
+            .collect(),
+        executor_ready: false,
+        notes:
+            "Pathing elemental collect action is modeled with the legacy element-specific avatar table and team-order selection rule; live combat-scene avatar selection, skill-cooldown tracking, and input dispatch remain pending."
+                .to_string(),
+    }
+}
+
+fn elemental_collect_element_chinese(element: PathingElementalCollectElement) -> &'static str {
+    match element {
+        PathingElementalCollectElement::Hydro => "水",
+        PathingElementalCollectElement::Electro => "雷",
+        PathingElementalCollectElement::Anemo => "风",
+        PathingElementalCollectElement::Pyro => "火",
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ElementalCollectCandidate {
+    name: &'static str,
+    normal_attack: bool,
+    elemental_skill: bool,
+}
+
+const fn elemental_collect_candidate(
+    name: &'static str,
+    normal_attack: bool,
+    elemental_skill: bool,
+) -> ElementalCollectCandidate {
+    ElementalCollectCandidate {
+        name,
+        normal_attack,
+        elemental_skill,
+    }
+}
+
+fn elemental_collect_candidates(
+    element: PathingElementalCollectElement,
+) -> &'static [ElementalCollectCandidate] {
+    const HYDRO_CANDIDATES: [ElementalCollectCandidate; 10] = [
+        elemental_collect_candidate("芭芭拉", true, true),
+        elemental_collect_candidate("莫娜", true, false),
+        elemental_collect_candidate("珊瑚宫心海", true, true),
+        elemental_collect_candidate("玛拉妮", true, false),
+        elemental_collect_candidate("那维莱特", true, true),
+        elemental_collect_candidate("芙宁娜", true, false),
+        elemental_collect_candidate("妮露", false, true),
+        elemental_collect_candidate("坎蒂斯", false, true),
+        elemental_collect_candidate("行秋", false, true),
+        elemental_collect_candidate("神里绫人", false, true),
+    ];
+    const ELECTRO_CANDIDATES: [ElementalCollectCandidate; 8] = [
+        elemental_collect_candidate("丽莎", true, true),
+        elemental_collect_candidate("八重神子", true, false),
+        elemental_collect_candidate("瓦雷莎", true, false),
+        elemental_collect_candidate("雷电将军", false, true),
+        elemental_collect_candidate("久岐忍", false, true),
+        elemental_collect_candidate("北斗", false, true),
+        elemental_collect_candidate("菲谢尔", false, true),
+        elemental_collect_candidate("雷泽", false, true),
+    ];
+    const ANEMO_CANDIDATES: [ElementalCollectCandidate; 11] = [
+        elemental_collect_candidate("砂糖", true, true),
+        elemental_collect_candidate("鹿野院平藏", true, true),
+        elemental_collect_candidate("流浪者", true, false),
+        elemental_collect_candidate("闲云", true, false),
+        elemental_collect_candidate("蓝砚", true, false),
+        elemental_collect_candidate("枫原万叶", false, true),
+        elemental_collect_candidate("珐露珊", false, true),
+        elemental_collect_candidate("琳妮特", false, true),
+        elemental_collect_candidate("温迪", false, true),
+        elemental_collect_candidate("琴", false, true),
+        elemental_collect_candidate("早柚", false, true),
+    ];
+    const PYRO_CANDIDATES: [ElementalCollectCandidate; 12] = [
+        elemental_collect_candidate("烟绯", true, true),
+        elemental_collect_candidate("迪卢克", false, true),
+        elemental_collect_candidate("可莉", true, true),
+        elemental_collect_candidate("班尼特", false, true),
+        elemental_collect_candidate("香菱", false, true),
+        elemental_collect_candidate("托马", false, true),
+        elemental_collect_candidate("胡桃", false, true),
+        elemental_collect_candidate("迪希雅", false, true),
+        elemental_collect_candidate("夏沃蕾", false, true),
+        elemental_collect_candidate("辛焱", false, true),
+        elemental_collect_candidate("林尼", false, true),
+        elemental_collect_candidate("宵宫", false, true),
+    ];
+
+    match element {
+        PathingElementalCollectElement::Hydro => &HYDRO_CANDIDATES,
+        PathingElementalCollectElement::Electro => &ELECTRO_CANDIDATES,
+        PathingElementalCollectElement::Anemo => &ANEMO_CANDIDATES,
+        PathingElementalCollectElement::Pyro => &PYRO_CANDIDATES,
+    }
 }
 
 fn plan_set_time_action(action_params: Option<&str>) -> PathingSetTimeActionPlan {

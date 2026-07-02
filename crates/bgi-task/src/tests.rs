@@ -21867,6 +21867,75 @@ fn auto_pathing_action_boundary_reports_nahida_collect_modeled_but_pending() {
 }
 
 #[test]
+fn auto_pathing_action_boundary_reports_elemental_collect_tables_pending() {
+    let root = unique_test_root("auto-pathing-elemental-collect");
+    let route_dir = root.join("User").join("AutoPathing").join("liyue");
+    fs::create_dir_all(&route_dir).unwrap();
+    fs::write(
+        route_dir.join("elemental_collect_route.json"),
+        r#"{
+                "info": { "name": "elemental collect route", "type": "collect", "map_name": "Teyvat" },
+                "positions": [
+                    { "x": 3.0, "y": 4.0, "type": "target", "move_mode": "walk", "action": "hydro_collect" },
+                    { "x": 5.0, "y": 6.0, "type": "target", "move_mode": "walk", "action": "pyro_collect" }
+                ]
+            }"#,
+    )
+    .unwrap();
+    let plan = plan_auto_pathing(&root, "liyue/elemental_collect_route.json").unwrap();
+
+    let report = execute_auto_pathing_action_boundary_with_live_executor(
+        &plan,
+        Size::new(1920, 1080),
+        &mut |_common_job_plan: &CommonJobExecutionPlan| {
+            panic!("elemental collect must not call common-job live executor");
+        },
+    )
+    .unwrap();
+
+    assert!(report.boundary_completed);
+    assert!(!report.native_pathing_completed);
+    assert_eq!(report.executed_actions, 0);
+    assert_eq!(report.unsupported_actions, 2);
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::InputDispatch));
+    assert!(report
+        .movement_pending_dependencies
+        .contains(&bgi_core::PathingMovementDependency::ActionHandlers));
+
+    let action_reports = report
+        .waypoint_reports
+        .iter()
+        .filter_map(|waypoint| waypoint.action_report.as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(action_reports.len(), 2);
+    assert_eq!(action_reports[0].action_code, "hydro_collect");
+    assert_eq!(action_reports[0].status, PathingBoundaryStatus::Unsupported);
+    assert!(action_reports[0].message.contains("水 element collect"));
+    assert!(action_reports[0].message.contains("10 candidate avatar"));
+    assert!(action_reports[0]
+        .message
+        .contains("normal-attack duration 100ms"));
+    assert!(action_reports[0]
+        .message
+        .contains("after-action delay 1000ms"));
+    assert!(action_reports[0]
+        .message
+        .contains("combat-scene avatar selection"));
+    assert!(action_reports[0]
+        .message
+        .contains("skill cooldown tracking"));
+    assert!(action_reports[0].common_job_plan.is_none());
+    assert!(action_reports[0].common_job_live_execution.is_none());
+    assert_eq!(action_reports[1].action_code, "pyro_collect");
+    assert!(action_reports[1].message.contains("火 element collect"));
+    assert!(action_reports[1].message.contains("12 candidate avatar"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn auto_pathing_action_boundary_reports_log_output_and_runs_common_jobs() {
     let root = unique_test_root("auto-pathing-log-common-jobs");
     let route_dir = root.join("User").join("AutoPathing").join("liyue");

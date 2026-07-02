@@ -1032,6 +1032,114 @@ fn pathing_execution_plan_models_nahida_collect_scan_sequence() {
 }
 
 #[test]
+fn pathing_execution_plan_models_elemental_collect_avatar_tables() {
+    let task = PathingTask::from_json(
+        r#"{
+            "info": { "name": "elemental route", "type": "collect", "map_name": "Teyvat" },
+            "positions": [
+                { "x": 10.0, "y": 20.0, "type": "target", "action": "hydro_collect", "action_params": "ignored" },
+                { "x": 11.0, "y": 21.0, "type": "target", "action": "electro_collect" },
+                { "x": 12.0, "y": 22.0, "type": "target", "action": "anemo_collect" },
+                { "x": 13.0, "y": 23.0, "type": "target", "action": "pyro_collect" }
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    let plan = task.execution_plan();
+
+    let Some(PathingActionPlan::ElementalCollect(hydro)) =
+        &plan.segments[0].waypoints[0].action_plan
+    else {
+        panic!("expected hydro elemental collect plan");
+    };
+    assert_eq!(hydro.action_code, "hydro_collect");
+    assert_eq!(hydro.raw_params.as_deref(), Some("ignored"));
+    assert_eq!(hydro.element, PathingElementalCollectElement::Hydro);
+    assert_eq!(hydro.element_chinese, "水");
+    assert!(hydro.requires_combat_scenes);
+    assert!(hydro.legacy_preflight_validates_avatar);
+    assert!(hydro.scans_team_order);
+    assert!(hydro.switch_avatar_before_collect);
+    assert!(hydro.normal_attack_preferred_over_skill);
+    assert_eq!(hydro.normal_attack_duration_ms, 100);
+    assert!(hydro.wait_skill_cooldown_before_skill);
+    assert_eq!(hydro.path_executor_after_action_delay_ms, 1_000);
+    assert!(!hydro.executor_ready);
+    assert_eq!(hydro.candidates.len(), 10);
+    assert_eq!(hydro.candidates[0].avatar_name, "芭芭拉");
+    assert!(hydro.candidates[0].normal_attack);
+    assert!(hydro.candidates[0].elemental_skill);
+    assert_eq!(
+        hydro.candidates[0].selected_action,
+        PathingElementalCollectAvatarAction::NormalAttack
+    );
+    assert_eq!(hydro.candidates[0].normal_attack_duration_ms, Some(100));
+    assert!(!hydro.candidates[0].waits_skill_cooldown);
+    let nilou = hydro
+        .candidates
+        .iter()
+        .find(|candidate| candidate.avatar_name == "妮露")
+        .expect("expected Nilou hydro candidate");
+    assert_eq!(
+        nilou.selected_action,
+        PathingElementalCollectAvatarAction::ElementalSkill
+    );
+    assert_eq!(nilou.normal_attack_duration_ms, None);
+    assert!(nilou.waits_skill_cooldown);
+
+    let Some(PathingActionPlan::ElementalCollect(electro)) =
+        &plan.segments[0].waypoints[1].action_plan
+    else {
+        panic!("expected electro elemental collect plan");
+    };
+    assert_eq!(electro.element, PathingElementalCollectElement::Electro);
+    assert_eq!(electro.element_chinese, "雷");
+    assert_eq!(electro.candidates.len(), 8);
+    assert!(electro.legacy_preflight_validates_avatar);
+
+    let Some(PathingActionPlan::ElementalCollect(anemo)) =
+        &plan.segments[0].waypoints[2].action_plan
+    else {
+        panic!("expected anemo elemental collect plan");
+    };
+    assert_eq!(anemo.element, PathingElementalCollectElement::Anemo);
+    assert_eq!(anemo.element_chinese, "风");
+    assert_eq!(anemo.candidates.len(), 11);
+    assert!(anemo.legacy_preflight_validates_avatar);
+
+    let Some(PathingActionPlan::ElementalCollect(pyro)) =
+        &plan.segments[0].waypoints[3].action_plan
+    else {
+        panic!("expected pyro elemental collect plan");
+    };
+    assert_eq!(pyro.element, PathingElementalCollectElement::Pyro);
+    assert_eq!(pyro.element_chinese, "火");
+    assert_eq!(pyro.candidates.len(), 12);
+    assert!(!pyro.legacy_preflight_validates_avatar);
+
+    for (waypoint_index, waypoint) in plan.segments[0].waypoints.iter().enumerate() {
+        assert_eq!(
+            waypoint.declared_action_use,
+            Some(PathingActionUseWaypointType::Target)
+        );
+        assert!(waypoint.phases.contains(&PathingWaypointPhase::RunAction));
+        let run_action_contract = plan.movement_contract.segments[0].waypoints[waypoint_index]
+            .phase_contracts
+            .iter()
+            .find(|contract| contract.phase == PathingWaypointPhase::RunAction)
+            .expect("expected RunAction contract");
+        assert_eq!(
+            run_action_contract.pending_dependencies,
+            vec![
+                PathingMovementDependency::InputDispatch,
+                PathingMovementDependency::ActionHandlers
+            ]
+        );
+    }
+}
+
+#[test]
 fn pathing_execution_plan_models_pick_around_action_sequence() {
     let task = PathingTask::from_json(
         r#"{

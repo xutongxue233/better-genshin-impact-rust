@@ -4,9 +4,9 @@ use crate::{
 };
 use bgi_core::{
     legacy_track_map_point_for_pathing, read_pathing_task, PathingActionPlan,
-    PathingCommonJobActionPlan, PathingCoordinateSpace, PathingExecutionPlan,
-    PathingLogOutputActionPlan, PathingMovementDependency, PathingMovementPhaseContract,
-    PathingMovementSegmentContract, PathingMovementWaypointContract,
+    PathingCommonJobActionPlan, PathingCoordinateSpace, PathingElementalCollectActionPlan,
+    PathingExecutionPlan, PathingLogOutputActionPlan, PathingMovementDependency,
+    PathingMovementPhaseContract, PathingMovementSegmentContract, PathingMovementWaypointContract,
     PathingNahidaCollectActionPlan, PathingPickAroundActionPlan, PathingPoint,
     PathingPreflightPlan, PathingSetTimeActionPlan, PathingSummary, PathingTask,
     PathingTrackConversionContext, PathingUseGadgetActionPlan, PathingWaypointPhase,
@@ -516,7 +516,7 @@ where
         dispatched: false,
         completed: false,
         notes:
-            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence, pick_around circular middle-click pickup input sequence, and nahida_collect long-hold ElementalSkill scan sequence, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
+            "Route JSON is parsed and converted into the migrated PathExecutor preparation plan; Teyvat routes are mapped into legacy TrackMap coordinates before movement-contract reporting, and the desktop action boundary can consume healthy RecoverWhenLowHp probes, run the AutoEat QuickUseGadget low-HP recovery slice with a follow-up HP probe when a desktop dispatcher is injected, model the PathExecutor use_gadget not_wait QuickUseGadget action sequence, pick_around circular middle-click pickup input sequence, nahida_collect long-hold ElementalSkill scan sequence, and elemental collect avatar-selection tables, execute HandleTeleport through the Teleport common-job live bridge, execute cancellable injected legacy pre-teleport segment delays once earlier movement phases advance, and honor the only-in-teleport recovery gate; sequence-safe action input dispatch, native movement dispatch, and full PathExecutor recovery side effects remain pending."
                 .to_string(),
     })
 }
@@ -1504,6 +1504,9 @@ where
         Some(PathingActionPlan::NahidaCollect(nahida_collect)) => {
             execute_nahida_collect_pathing_action(nahida_collect)
         }
+        Some(PathingActionPlan::ElementalCollect(elemental_collect)) => {
+            execute_elemental_collect_pathing_action(elemental_collect)
+        }
         Some(PathingActionPlan::UseGadget(use_gadget)) => {
             execute_use_gadget_pathing_action(use_gadget)
         }
@@ -1588,6 +1591,26 @@ fn execute_nahida_collect_pathing_action(
             nahida_collect.ground_scan_iterations,
             nahida_collect.raised_scan_iterations,
             nahida_collect.path_executor_after_action_delay_ms
+        ),
+        common_job_task_key: None,
+        common_job_plan: None,
+        common_job_live_execution: None,
+    })
+}
+
+fn execute_elemental_collect_pathing_action(
+    elemental_collect: &PathingElementalCollectActionPlan,
+) -> Result<PathingActionBoundaryReport> {
+    Ok(PathingActionBoundaryReport {
+        action_code: elemental_collect.action_code.clone(),
+        status: PathingBoundaryStatus::Unsupported,
+        message: format!(
+            "pathing {} action is modeled for {} element collect with {} candidate avatar(s), normal-attack duration {}ms, and PathExecutor after-action delay {}ms, but combat-scene avatar selection, skill cooldown tracking, and sequence-safe desktop input dispatch remain pending",
+            elemental_collect.action_code,
+            elemental_collect.element_chinese,
+            elemental_collect.candidates.len(),
+            elemental_collect.normal_attack_duration_ms,
+            elemental_collect.path_executor_after_action_delay_ms
         ),
         common_job_task_key: None,
         common_job_plan: None,
